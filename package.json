@@ -1,0 +1,21 @@
+{
+  "name": "mkui",
+  "version": "0.1.0",
+  "description": "Config-driven web GUI framework with dockable windows. Pairs with mkio.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./css": "./styles/mkui.css"
+  },
+  "files": ["src", "styles", "dist"],
+  "scripts": {
+    "serve": "python3 -m http.server 8000",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "vitest": "^1.0.0",
+    "@playwright/test": "^1.40.0"
+  }
+}

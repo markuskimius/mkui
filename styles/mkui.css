@@ -1,0 +1,282 @@
+:root {
+  --mkui-bg:        #1e1e1e;
+  --mkui-bg-alt:    #252526;
+  --mkui-bg-hover:  #2a2d2e;
+  --mkui-fg:        #d4d4d4;
+  --mkui-fg-mute:   #858585;
+  --mkui-border:    #3c3c3c;
+  --mkui-accent:    #0e639c;
+  --mkui-accent-fg: #ffffff;
+  --mkui-menubar-h:   28px;
+  --mkui-statusbar-h: 22px;
+  --mkui-titlebar-h:  26px;
+  --mkui-tabbar-h:    28px;
+  --mkui-splitter:    4px;
+  --mkui-frame-shadow: 0 10px 30px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.2);
+  --mkui-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mkui-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+mkui-app[theme="light"] {
+  --mkui-bg:        #ffffff;
+  --mkui-bg-alt:    #f3f3f3;
+  --mkui-bg-hover:  #e8e8e8;
+  --mkui-fg:        #1f1f1f;
+  --mkui-fg-mute:   #6b6b6b;
+  --mkui-border:    #d0d0d0;
+  --mkui-accent:    #0066b8;
+  --mkui-accent-fg: #ffffff;
+  --mkui-frame-shadow: 0 10px 30px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.08);
+}
+
+/* ─── Shell ──────────────────────────────────────────────────────────── */
+
+mkui-app {
+  display: block;
+  position: fixed;
+  inset: 0;
+  font-family: var(--mkui-font);
+  font-size: 13px;
+  color: var(--mkui-fg);
+  background:
+    radial-gradient(circle at 20% 0%, rgba(255,255,255,0.02), transparent 40%),
+    var(--mkui-bg);
+  overflow: hidden;
+  user-select: none;
+}
+
+mkui-menubar {
+  display: flex;
+  align-items: center;
+  height: var(--mkui-menubar-h);
+  background: var(--mkui-bg-alt);
+  border-bottom: 1px solid var(--mkui-border);
+  padding: 0 4px;
+  position: relative;
+  z-index: 100;
+}
+.mkui-menu {
+  padding: 4px 10px;
+  cursor: default;
+  border-radius: 3px;
+}
+.mkui-menu:hover, .mkui-menu.open { background: var(--mkui-bg-hover); }
+.mkui-menu-popup {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 160px;
+  background: var(--mkui-bg-alt);
+  border: 1px solid var(--mkui-border);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  padding: 4px 0;
+  z-index: 200;
+}
+.mkui-menu-item { padding: 5px 16px; cursor: default; }
+.mkui-menu-item:hover { background: var(--mkui-accent); color: var(--mkui-accent-fg); }
+.mkui-menu-sep { height: 1px; background: var(--mkui-border); margin: 4px 0; }
+
+mkui-statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--mkui-statusbar-h);
+  background: var(--mkui-accent);
+  color: var(--mkui-accent-fg);
+  border-top: 1px solid var(--mkui-border);
+  padding: 0 8px;
+  font-size: 12px;
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  z-index: 100;
+}
+.mkui-status-side { display: flex; gap: 12px; align-items: center; }
+
+/* ─── Workspace + frames ─────────────────────────────────────────────── */
+
+mkui-workspace {
+  display: block;
+  position: absolute;
+  left: 0; right: 0;
+  top: var(--mkui-menubar-h);
+  bottom: var(--mkui-statusbar-h);
+  overflow: hidden;
+}
+
+mkui-frame {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: var(--mkui-bg);
+  border: 1px solid var(--mkui-border);
+  border-radius: 4px;
+  box-shadow: var(--mkui-frame-shadow);
+  min-width: 160px;
+  min-height: 80px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.mkui-frame-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--mkui-titlebar-h);
+  background: linear-gradient(180deg, var(--mkui-bg-alt), var(--mkui-bg));
+  border-bottom: 1px solid var(--mkui-border);
+  padding: 0 8px;
+  cursor: move;
+  flex-shrink: 0;
+  user-select: none;
+}
+.mkui-frame-title {
+  font-size: 12px;
+  color: var(--mkui-fg);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mkui-frame-actions {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+.mkui-frame-btn {
+  width: 18px; height: 18px;
+  display: grid; place-items: center;
+  cursor: pointer;
+  color: var(--mkui-fg-mute);
+  border-radius: 3px;
+  font-size: 14px;
+  line-height: 1;
+}
+.mkui-frame-btn:hover { background: var(--mkui-bg-hover); color: var(--mkui-fg); }
+.mkui-frame-close:hover { background: #c0392b; color: #fff; }
+.mkui-frame-maximize { font-size: 11px; }
+
+/* Animated frame transitions for arrangement commands */
+mkui-frame.mkui-arranging {
+  transition: left 250ms ease, top 250ms ease, width 250ms ease, height 250ms ease;
+}
+
+/* Maximized frame: hide resize handles, fill workspace with no border-radius */
+mkui-frame[maximized] {
+  border-radius: 0;
+  box-shadow: none;
+}
+mkui-frame[maximized] .mkui-frame-resize { display: none; }
+
+.mkui-frame-body {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: var(--mkui-bg);
+}
+
+/* Resize handles (8-way). Sit slightly outside the border for easy grabs. */
+.mkui-frame-resize { position: absolute; z-index: 10; }
+.mkui-frame-resize-n  { top: -3px;    left: 8px;    right: 8px;  height: 6px;  cursor: ns-resize; }
+.mkui-frame-resize-s  { bottom: -3px; left: 8px;    right: 8px;  height: 6px;  cursor: ns-resize; }
+.mkui-frame-resize-e  { right: -3px;  top: 8px;     bottom: 8px; width: 6px;   cursor: ew-resize; }
+.mkui-frame-resize-w  { left: -3px;   top: 8px;     bottom: 8px; width: 6px;   cursor: ew-resize; }
+.mkui-frame-resize-ne { top: -4px;    right: -4px;  width: 12px; height: 12px; cursor: nesw-resize; }
+.mkui-frame-resize-nw { top: -4px;    left:  -4px;  width: 12px; height: 12px; cursor: nwse-resize; }
+.mkui-frame-resize-se { bottom: -4px; right: -4px;  width: 12px; height: 12px; cursor: nwse-resize; }
+.mkui-frame-resize-sw { bottom: -4px; left:  -4px;  width: 12px; height: 12px; cursor: nesw-resize; }
+
+/* ─── Panes + chrome inside a frame ──────────────────────────────────── */
+
+mkui-pane {
+  position: absolute;
+  display: block;
+  box-sizing: border-box;
+  background: var(--mkui-bg);
+}
+.mkui-pane-content {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  line-height: 1.45;
+}
+
+.mkui-tabbar {
+  display: flex;
+  background: var(--mkui-bg-alt);
+  border-bottom: 1px solid var(--mkui-border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  box-sizing: border-box;
+}
+.mkui-tab {
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-right: 1px solid var(--mkui-border);
+  cursor: default;
+  color: var(--mkui-fg-mute);
+  font-size: 12px;
+  white-space: nowrap;
+  transition: background 80ms ease, color 80ms ease;
+}
+.mkui-tab:hover { background: var(--mkui-bg-hover); color: var(--mkui-fg); }
+.mkui-tab.active {
+  background: var(--mkui-bg);
+  color: var(--mkui-fg);
+  box-shadow: inset 0 -2px 0 0 var(--mkui-accent);
+}
+
+.mkui-splitter {
+  position: absolute;
+  background: var(--mkui-border);
+  z-index: 5;
+  transition: background 80ms ease;
+}
+.mkui-splitter:hover, .mkui-splitter.dragging { background: var(--mkui-accent); }
+.mkui-splitter-h { cursor: col-resize; }
+.mkui-splitter-v { cursor: row-resize; }
+
+.mkui-dropzone {
+  position: absolute;
+  background: rgba(14, 99, 156, 0.35);
+  border: 2px solid var(--mkui-accent);
+  border-radius: 3px;
+  pointer-events: none;
+  z-index: 10000;
+  transition: all 80ms ease;
+}
+
+/* ─── Widgets ────────────────────────────────────────────────────────── */
+
+.mkui-btn {
+  display: inline-block;
+  padding: 4px 12px;
+  background: var(--mkui-bg-alt);
+  border: 1px solid var(--mkui-border);
+  color: var(--mkui-fg);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.mkui-btn:hover  { background: var(--mkui-bg-hover); }
+.mkui-btn:active { background: var(--mkui-accent); color: var(--mkui-accent-fg); }
+
+.mkui-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mkui-font-mono);
+  font-size: 12px;
+}
+.mkui-table th, .mkui-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--mkui-border);
+}
+.mkui-table th {
+  background: var(--mkui-bg-alt);
+  color: var(--mkui-fg-mute);
+  font-weight: normal;
+  position: sticky; top: 0;
+}

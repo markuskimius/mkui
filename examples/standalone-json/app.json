@@ -1,0 +1,93 @@
+{
+  "app": {
+    "title": "mkui demo",
+    "theme": "dark"
+  },
+  "state": {
+    "status": { "message": "Ready" }
+  },
+  "menubar": [
+    {
+      "label": "File",
+      "items": [
+        { "label": "New Frame", "action": "demo.newFrame" },
+        { "sep": true },
+        { "label": "Quit", "action": "app.quit" }
+      ]
+    },
+    {
+      "label": "Window",
+      "items": [
+        { "label": "Tile Horizontal",  "action": "window.tileH" },
+        { "label": "Tile Vertical",    "action": "window.tileV" },
+        { "label": "Tile Grid",        "action": "window.grid" },
+        { "label": "Cascade",          "action": "window.cascade" }
+      ]
+    },
+    {
+      "label": "Help",
+      "items": [
+        { "label": "About mkui", "action": "demo.about" }
+      ]
+    }
+  ],
+  "statusbar": {
+    "left":  [{ "type": "text", "bind": "status.message" }],
+    "right": [{ "type": "text", "text": "mkui v0.2" }]
+  },
+  "panes": {
+    "explorer": {
+      "title": "Explorer",
+      "widgets": [
+        { "type": "text", "text": "Project files would go here. Drag the Explorer tab out of this frame to tear it off, drop it on another frame's edge to re-dock." }
+      ]
+    },
+    "editor": {
+      "title": "Editor",
+      "widgets": [
+        { "type": "text", "text": "Editor content. This frame holds two tabs — Editor and Preview. Try dragging the Preview tab out." }
+      ]
+    },
+    "preview": {
+      "title": "Preview",
+      "widgets": [
+        { "type": "text", "text": "Preview pane." }
+      ]
+    },
+    "console": {
+      "title": "Console",
+      "widgets": [
+        { "type": "text", "text": "Console log stream would go here." },
+        { "type": "button", "label": "Clear", "action": "demo.clearConsole" }
+      ]
+    },
+    "inspector": {
+      "title": "Inspector",
+      "widgets": [
+        { "type": "text", "text": "Inspector panel — a fourth floating frame to demonstrate multiple top-level frames." }
+      ]
+    }
+  },
+  "frames": [
+    {
+      "id": "left",
+      "x": 0.02, "y": 0.03, "w": 0.22, "h": 0.94,
+      "layout": { "type": "tabs", "active": 0, "children": ["explorer"] }
+    },
+    {
+      "id": "main",
+      "x": 0.26, "y": 0.03, "w": 0.48, "h": 0.60,
+      "layout": { "type": "tabs", "active": 0, "children": ["editor", "preview"] }
+    },
+    {
+      "id": "bottom",
+      "x": 0.26, "y": 0.65, "w": 0.48, "h": 0.32,
+      "layout": { "type": "tabs", "active": 0, "children": ["console"] }
+    },
+    {
+      "id": "right",
+      "x": 0.76, "y": 0.03, "w": 0.22, "h": 0.55,
+      "layout": { "type": "tabs", "active": 0, "children": ["inspector"] }
+    }
+  ]
+}
