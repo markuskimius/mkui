@@ -15,19 +15,21 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 
 ## Key files
 
-- `src/layout/tree.js` — normalized tree math (normalize, find, insert, remove, layout), no DOM
-- `src/layout/drag.js` — clamp, snap, drop-zone, frac↔rect helpers, no DOM
-- `src/components/workspace.js` — frame lifecycle, z-order, arrangement commands, inter-frame drag routing, snap
-- `src/components/frame.js` — frame chrome, internal tree rendering, splitter drag; also defines `<mkui-pane>`
-- `src/components/app.js` — shell: menubar + workspace + statusbar
-- `src/core.js` — `App`, `State` (reactive store), widget/pane-type registries
-- `styles/mkui.css` — default theme via CSS custom properties
+- `mkui/__init__.py` — Python package; exposes `static_dir` for serving assets
+- `mkui/static/src/layout/tree.js` — normalized tree math (normalize, find, insert, remove, layout), no DOM
+- `mkui/static/src/layout/drag.js` — clamp, snap, drop-zone, frac↔rect helpers, no DOM
+- `mkui/static/src/components/workspace.js` — frame lifecycle, z-order, arrangement commands, inter-frame drag routing, snap
+- `mkui/static/src/components/frame.js` — frame chrome, internal tree rendering, splitter drag; also defines `<mkui-pane>`
+- `mkui/static/src/components/app.js` — shell: menubar + workspace + statusbar
+- `mkui/static/src/core.js` — `App`, `State` (reactive store), widget/pane-type registries
+- `mkui/static/styles/mkui.css` — default theme via CSS custom properties
 
 ## Commands
 
-- `python3 -m http.server 8000` — serve examples locally
+- `cd mkui/static && python3 -m http.server 8000` — serve examples locally
 - `node --test tests/layout.test.js` — run unit tests (node:test, no deps needed)
-- Examples at `examples/standalone-json/` and `examples/library-js/`
+- `python -m build && twine upload dist/*` — build and publish to PyPI
+- Examples at `mkui/static/examples/standalone-json/` and `mkui/static/examples/library-js/`
 
 ## Config format
 

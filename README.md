@@ -145,10 +145,30 @@ root.workspace.addFrame({ x: 0.5, y: 0.1, w: 0.4, h: 0.4,
 - Custom pane types are the primary extensibility surface. Register with
   `registerPaneType(name, factory)`; reference from config as `type = "<name>"`.
 
+## Installation
+
+```
+pip install mkui
+```
+
+Then serve the static assets from your Python backend:
+
+```python
+import mkui
+
+# With mkio (toml config):
+#   [static]
+#   "/mkui" = "<result of mkui.static_dir>"
+
+# With FastAPI / Starlette:
+from starlette.staticfiles import StaticFiles
+app.mount("/mkui", StaticFiles(directory=mkui.static_dir))
+```
+
 ## Running the examples
 
 ```
-cd /Users/mark/src/mkui
+cd mkui/static
 python3 -m http.server 8000
 # http://localhost:8000/examples/standalone-json/
 # http://localhost:8000/examples/library-js/
@@ -157,24 +177,29 @@ python3 -m http.server 8000
 ## Project layout
 
 ```
-src/
-  core.js              State store, registries, App class
-  index.js             Side-effect entry point
-  layout/
-    tree.js            Normalized tree math: normalize / find / insert / remove / layout
-    drag.js            clampToDock, dropZoneFor, frac↔rect helpers
-  components/
-    app.js             <mkui-app> — the shell
-    menubar.js         <mkui-menubar>
-    statusbar.js       <mkui-statusbar>
-    workspace.js       <mkui-workspace> — frame list, pool, inter-frame drag routing
-    frame.js           <mkui-frame> + <mkui-pane>, frame-internal rendering
-  widgets/
-    text.js  button.js  mkio-table.js
-  mkio-bridge.js       Lazy-loads mkio's /mkio.js client
-styles/mkui.css        Default theme (CSS custom properties for re-theming)
-examples/
-  standalone-json/     Loaded from a static config
-  library-js/          Built imperatively from JS, custom pane type
-tests/layout.test.js   26 tests covering tree math + clamping + tear-out flow
+mkui/                    Python package (pip install mkui)
+  __init__.py            Exposes static_dir path
+  static/
+    src/
+      core.js            State store, registries, App class
+      index.js           Side-effect entry point
+      layout/
+        tree.js          Normalized tree math
+        drag.js          clampToDock, snap, dropZoneFor, frac↔rect
+      components/
+        app.js           <mkui-app> — the shell
+        menubar.js       <mkui-menubar>
+        statusbar.js     <mkui-statusbar>
+        workspace.js     <mkui-workspace> — frame list, arrangement, snap
+        frame.js         <mkui-frame> + <mkui-pane>
+      widgets/
+        text.js  button.js  mkio-table.js
+      mkio-bridge.js     Lazy-loads mkio's /mkio.js client
+    styles/mkui.css      Default theme (CSS custom properties)
+    examples/
+      standalone-json/   Loaded from a static config
+      library-js/        Built imperatively from JS
+pyproject.toml           Python build config
+package.json             JS dev tooling
+tests/layout.test.js     33 unit tests
 ```

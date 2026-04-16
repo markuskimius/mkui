@@ -4,11 +4,11 @@ import assert from "node:assert/strict";
 import {
   normalize, findPane, listPanes, removePane, insertPane,
   setSplitRatio, layout, TABBAR_H,
-} from "../src/layout/tree.js";
+} from "../mkui/static/src/layout/tree.js";
 import {
   clampToDock, rectToFrac, fracToRect, dropZoneFor,
   snapMove, snapResize, SNAP_THRESHOLD,
-} from "../src/layout/drag.js";
+} from "../mkui/static/src/layout/drag.js";
 
 // ── normalize ────────────────────────────────────────────────────────────
 

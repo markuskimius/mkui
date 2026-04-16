@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mkui"
+version = "0.1.0"
+description = "Config-driven, zero-dependency web GUI framework with dockable panes"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.9"
+authors = [{ name = "Mark Kim" }]
+keywords = ["gui", "web", "framework", "dockable", "config-driven"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: JavaScript",
+    "Programming Language :: Python :: 3",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: User Interfaces",
+]
+
+[project.urls]
+Homepage = "https://github.com/markuskimius/mkui"
+Repository = "https://github.com/markuskimius/mkui"
+
+[tool.setuptools.packages.find]
+include = ["mkui*"]
+
+[tool.setuptools.package-data]
+mkui = [
+    "static/src/**/*.js",
+    "static/styles/**/*.css",
+    "static/examples/**/*.html",
+    "static/examples/**/*.json",
+]
