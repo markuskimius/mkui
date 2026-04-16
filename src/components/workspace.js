@@ -14,7 +14,7 @@
 
 import "./frame.js";
 import { getPaneType, getWidget } from "../core.js";
-import { clampToDock, rectToFrac, fracToRect, dropZoneFor, previewRect } from "../layout/drag.js";
+import { clampToDock, rectToFrac, fracToRect, dropZoneFor, previewRect, snapMove, snapResize } from "../layout/drag.js";
 import { layout, insertPane, removePane } from "../layout/tree.js";
 
 class MkuiWorkspace extends HTMLElement {
@@ -216,9 +216,8 @@ class MkuiWorkspace extends HTMLElement {
   // Window arrangement ─────────────────────────────────────────────────────
 
   _animated(fn) {
-    const gap = 0.01;
     for (const el of this._frameEls.values()) el.classList.add("mkui-arranging");
-    fn(gap);
+    fn();
     this._layoutFrames();
     setTimeout(() => {
       for (const el of this._frameEls.values()) el.classList.remove("mkui-arranging");
@@ -227,31 +226,31 @@ class MkuiWorkspace extends HTMLElement {
 
   arrangeHorizontal() {
     this._clearMaximize();
-    this._animated((gap) => {
+    this._animated(() => {
       const n = this._frames.length;
       if (n === 0) return;
-      const slotW = (1 - gap * (n + 1)) / n;
+      const slotW = 1 / n;
       for (let i = 0; i < n; i++) {
         const s = this._frames[i];
-        s.x = gap + i * (slotW + gap);
-        s.y = gap;
+        s.x = i * slotW;
+        s.y = 0;
         s.w = slotW;
-        s.h = 1 - gap * 2;
+        s.h = 1;
       }
     });
   }
 
   arrangeVertical() {
     this._clearMaximize();
-    this._animated((gap) => {
+    this._animated(() => {
       const n = this._frames.length;
       if (n === 0) return;
-      const slotH = (1 - gap * (n + 1)) / n;
+      const slotH = 1 / n;
       for (let i = 0; i < n; i++) {
         const s = this._frames[i];
-        s.x = gap;
-        s.y = gap + i * (slotH + gap);
-        s.w = 1 - gap * 2;
+        s.x = 0;
+        s.y = i * slotH;
+        s.w = 1;
         s.h = slotH;
       }
     });
@@ -259,19 +258,19 @@ class MkuiWorkspace extends HTMLElement {
 
   arrangeGrid() {
     this._clearMaximize();
-    this._animated((gap) => {
+    this._animated(() => {
       const n = this._frames.length;
       if (n === 0) return;
       const cols = Math.ceil(Math.sqrt(n));
       const rows = Math.ceil(n / cols);
-      const slotW = (1 - gap * (cols + 1)) / cols;
-      const slotH = (1 - gap * (rows + 1)) / rows;
+      const slotW = 1 / cols;
+      const slotH = 1 / rows;
       for (let i = 0; i < n; i++) {
         const col = i % cols;
         const row = Math.floor(i / cols);
         const s = this._frames[i];
-        s.x = gap + col * (slotW + gap);
-        s.y = gap + row * (slotH + gap);
+        s.x = col * slotW;
+        s.y = row * slotH;
         s.w = slotW;
         s.h = slotH;
       }
@@ -280,7 +279,7 @@ class MkuiWorkspace extends HTMLElement {
 
   arrangeCascade() {
     this._clearMaximize();
-    this._animated((gap) => {
+    this._animated(() => {
       const n = this._frames.length;
       if (n === 0) return;
       const step = 0.03;
@@ -288,8 +287,8 @@ class MkuiWorkspace extends HTMLElement {
       const h = Math.max(0.25, 0.55 - n * 0.01);
       for (let i = 0; i < n; i++) {
         const s = this._frames[i];
-        s.x = gap + i * step;
-        s.y = gap + i * step;
+        s.x = i * step;
+        s.y = i * step;
         s.w = w;
         s.h = h;
       }
@@ -357,6 +356,21 @@ class MkuiWorkspace extends HTMLElement {
     return this._frames.find(f => f.id === id) ?? null;
   }
 
+  // Collect vertical (x) and horizontal (y) snap guide lines from the
+  // workspace boundaries and every other frame's edges.
+  _getSnapLines(exceptId) {
+    const ws = { w: this.clientWidth, h: this.clientHeight };
+    const vLines = [0, ws.w];
+    const hLines = [0, ws.h];
+    for (const s of this._frames) {
+      if (s.id === exceptId) continue;
+      const r = fracToRect({ xFrac: s.x, yFrac: s.y, wFrac: s.w, hFrac: s.h }, { x: 0, y: 0, ...ws });
+      vLines.push(r.x, r.x + r.w);
+      hLines.push(r.y, r.y + r.h);
+    }
+    return { vLines, hLines };
+  }
+
   _beginFrameMove(ev, frameEl) {
     ev.preventDefault();
     const spec = this._frameSpecFor(frameEl);
@@ -366,12 +380,12 @@ class MkuiWorkspace extends HTMLElement {
     const wsRect = this.getBoundingClientRect();
     const offX = ev.clientX - wsRect.left - start.x;
     const offY = ev.clientY - wsRect.top - start.y;
+    const { vLines, hLines } = this._getSnapLines(spec.id);
     const move = (e) => {
       const wr = this.getBoundingClientRect();
-      const clamped = clampToDock(
-        { x: e.clientX - wr.left - offX, y: e.clientY - wr.top - offY, w: start.w, h: start.h },
-        ws,
-      );
+      const raw = { x: e.clientX - wr.left - offX, y: e.clientY - wr.top - offY, w: start.w, h: start.h };
+      const snapped = snapMove(raw, vLines, hLines);
+      const clamped = clampToDock(snapped, ws);
       const frac = rectToFrac(clamped, ws);
       spec.x = frac.xFrac; spec.y = frac.yFrac;
       spec.w = frac.wFrac; spec.h = frac.hFrac;
@@ -399,6 +413,7 @@ class MkuiWorkspace extends HTMLElement {
     const hasN = dir.includes("n"), hasS = dir.includes("s");
     const hasE = dir.includes("e"), hasW = dir.includes("w");
     const minW = 160, minH = 80;
+    const { vLines, hLines } = this._getSnapLines(spec.id);
     const move = (e) => {
       let x = start.x, y = start.y, w = start.w, h = start.h;
       const dx = e.clientX - sx, dy = e.clientY - sy;
@@ -414,7 +429,8 @@ class MkuiWorkspace extends HTMLElement {
         y = start.y + (start.h - newH);
         h = newH;
       }
-      const clamped = clampToDock({ x, y, w, h }, ws);
+      const snapped = snapResize({ x, y, w, h }, dir, vLines, hLines);
+      const clamped = clampToDock(snapped, ws);
       const frac = rectToFrac(clamped, ws);
       spec.x = frac.xFrac; spec.y = frac.yFrac;
       spec.w = frac.wFrac; spec.h = frac.hFrac;

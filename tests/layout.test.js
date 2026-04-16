@@ -7,6 +7,7 @@ import {
 } from "../src/layout/tree.js";
 import {
   clampToDock, rectToFrac, fracToRect, dropZoneFor,
+  snapMove, snapResize, SNAP_THRESHOLD,
 } from "../src/layout/drag.js";
 
 // ── normalize ────────────────────────────────────────────────────────────
@@ -239,6 +240,61 @@ test("setSplitRatio respects minimum and adjusts neighbor", () => {
   setSplitRatio(t, 0, 0.001);
   assert.ok(Math.abs(t.ratios[0] - 0.05) < 1e-9);
   assert.ok(Math.abs(t.ratios[1] - 0.95) < 1e-9);
+});
+
+// ── snap ─────────────────────────────────────────────────────────────────
+
+test("snapMove snaps left edge to a nearby vertical guide", () => {
+  const rect = { x: 102, y: 50, w: 200, h: 150 };
+  const snapped = snapMove(rect, [100, 500], [0, 400]);
+  assert.equal(snapped.x, 100);
+  assert.equal(snapped.y, 50);
+});
+
+test("snapMove snaps right edge to a guide", () => {
+  const rect = { x: 95, y: 50, w: 200, h: 150 };
+  // right edge = 295, guide at 300 → delta = +5
+  const snapped = snapMove(rect, [0, 300], [0, 400]);
+  assert.equal(snapped.x, 100);
+  assert.equal(snapped.w, 200);
+});
+
+test("snapMove ignores guides beyond threshold", () => {
+  const rect = { x: 100, y: 50, w: 200, h: 150 };
+  const snapped = snapMove(rect, [200], [200], SNAP_THRESHOLD);
+  assert.equal(snapped.x, 100);
+  assert.equal(snapped.y, 50);
+});
+
+test("snapMove snaps both axes independently", () => {
+  // left edge near 0, top edge near 0
+  const rect = { x: 3, y: 7, w: 200, h: 100 };
+  const snapped = snapMove(rect, [0], [0]);
+  assert.equal(snapped.x, 0);
+  assert.equal(snapped.y, 0);
+});
+
+test("snapResize snaps only the east edge", () => {
+  const rect = { x: 100, y: 100, w: 197, h: 150 };
+  // right edge = 297, guide at 300 → snap right edge to 300 → w becomes 200
+  const snapped = snapResize(rect, "e", [300], []);
+  assert.equal(snapped.x, 100);
+  assert.equal(snapped.w, 200);
+  assert.equal(snapped.h, 150);
+});
+
+test("snapResize snaps the west edge without moving east edge", () => {
+  const rect = { x: 103, y: 100, w: 197, h: 150 };
+  // left edge near 100 → snap to 100 → x=100, w=200
+  const snapped = snapResize(rect, "w", [100], []);
+  assert.equal(snapped.x, 100);
+  assert.equal(snapped.w, 200);
+});
+
+test("snapResize snaps south edge", () => {
+  const rect = { x: 0, y: 0, w: 200, h: 293 };
+  const snapped = snapResize(rect, "s", [], [300]);
+  assert.equal(snapped.h, 300);
 });
 
 // ── end-to-end docking flow ──────────────────────────────────────────────

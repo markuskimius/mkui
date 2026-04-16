@@ -53,6 +53,77 @@ export function dropZoneFor(rect, px, py) {
   return "bottom";
 }
 
+// ─── Snap ───────────────────────────────────────────────────────────────
+// Snap a frame's edges to nearby vertical/horizontal guide lines (other
+// frame edges and workspace boundaries). Each axis is independent — x can
+// snap while y floats freely.
+
+export const SNAP_THRESHOLD = 10; // pixels
+
+// Snap a rect being *moved* (position changes, size stays fixed).
+// vLines: x-coordinates to snap against.  hLines: y-coordinates.
+// Returns a new rect with snapped position.
+export function snapMove(rect, vLines, hLines, threshold = SNAP_THRESHOLD) {
+  return {
+    x: rect.x + bestSnap(rect.x, rect.x + rect.w, vLines, threshold),
+    y: rect.y + bestSnap(rect.y, rect.y + rect.h, hLines, threshold),
+    w: rect.w,
+    h: rect.h,
+  };
+}
+
+// Snap a rect being *resized*. Only the edges that are moving snap.
+// `dir` is the resize handle string (e.g. "se", "n", "w").
+export function snapResize(rect, dir, vLines, hLines, threshold = SNAP_THRESHOLD) {
+  let { x, y, w, h } = rect;
+  if (dir.includes("e")) {
+    const right = x + w;
+    const d = nearest(right, vLines, threshold);
+    if (d !== 0) w += d;
+  }
+  if (dir.includes("w")) {
+    const d = nearest(x, vLines, threshold);
+    if (d !== 0) { x += d; w -= d; }
+  }
+  if (dir.includes("s")) {
+    const bottom = y + h;
+    const d = nearest(bottom, hLines, threshold);
+    if (d !== 0) h += d;
+  }
+  if (dir.includes("n")) {
+    const d = nearest(y, hLines, threshold);
+    if (d !== 0) { y += d; h -= d; }
+  }
+  return { x, y, w, h };
+}
+
+// Find the best snap delta for a pair of edges (lo, hi) against a set of
+// guide lines. Returns the delta to apply, or 0 if nothing is close enough.
+function bestSnap(lo, hi, lines, threshold) {
+  let best = 0;
+  let bestDist = threshold + 1;
+  for (const line of lines) {
+    const dLo = line - lo;
+    const dHi = line - hi;
+    if (Math.abs(dLo) < bestDist) { best = dLo; bestDist = Math.abs(dLo); }
+    if (Math.abs(dHi) < bestDist) { best = dHi; bestDist = Math.abs(dHi); }
+  }
+  return bestDist <= threshold ? best : 0;
+}
+
+// Find the nearest line to a single edge value.
+function nearest(edge, lines, threshold) {
+  let best = 0;
+  let bestDist = threshold + 1;
+  for (const line of lines) {
+    const d = line - edge;
+    if (Math.abs(d) < bestDist) { best = d; bestDist = Math.abs(d); }
+  }
+  return bestDist <= threshold ? best : 0;
+}
+
+// ─── Drop preview ───────────────────────────────────────────────────────
+
 // Return the on-screen overlay rect that previews where the window will land
 // if dropped on `side` of `targetRect`.
 export function previewRect(targetRect, side) {
