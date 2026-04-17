@@ -232,6 +232,7 @@ class MkuiWorkspace extends HTMLElement {
       const slotW = 1 / n;
       for (let i = 0; i < n; i++) {
         const s = this._frames[i];
+        this._capturePreTile(s);
         s.x = i * slotW;
         s.y = 0;
         s.w = slotW;
@@ -248,6 +249,7 @@ class MkuiWorkspace extends HTMLElement {
       const slotH = 1 / n;
       for (let i = 0; i < n; i++) {
         const s = this._frames[i];
+        this._capturePreTile(s);
         s.x = 0;
         s.y = i * slotH;
         s.w = 1;
@@ -269,6 +271,7 @@ class MkuiWorkspace extends HTMLElement {
         const col = i % cols;
         const row = Math.floor(i / cols);
         const s = this._frames[i];
+        this._capturePreTile(s);
         s.x = col * slotW;
         s.y = row * slotH;
         s.w = slotW;
@@ -309,10 +312,8 @@ class MkuiWorkspace extends HTMLElement {
     if (this._maximized) this._restoreMaximize(false);
     const spec = this._frames.find(f => f.id === frameId);
     if (!spec) return;
-    this._maximized = {
-      frameId,
-      original: { x: spec.x, y: spec.y, w: spec.w, h: spec.h },
-    };
+    this._capturePreTile(spec);
+    this._maximized = { frameId };
     const el = this._frameEls.get(frameId);
     if (el) el.classList.add("mkui-arranging");
     spec.x = 0; spec.y = 0; spec.w = 1; spec.h = 1;
@@ -324,12 +325,13 @@ class MkuiWorkspace extends HTMLElement {
 
   _restoreMaximize(animate = true) {
     if (!this._maximized) return;
-    const { frameId, original } = this._maximized;
+    const { frameId } = this._maximized;
     const spec = this._frames.find(f => f.id === frameId);
     const el = this._frameEls.get(frameId);
-    if (spec) {
+    if (spec && spec.preTileRect) {
       if (animate && el) el.classList.add("mkui-arranging");
-      Object.assign(spec, original);
+      Object.assign(spec, spec.preTileRect);
+      delete spec.preTileRect;
       this._layoutFrames();
       if (animate) setTimeout(() => el?.classList.remove("mkui-arranging"), 300);
     }
@@ -347,6 +349,27 @@ class MkuiWorkspace extends HTMLElement {
 
   isMaximized(frameId) {
     return this._maximized?.frameId === frameId;
+  }
+
+  // Per-frame pre-tile restore ────────────────────────────────────────────
+  //
+  // When a frame is tiled or maximized, capture its pre-tile rect so that a
+  // subsequent manual drag can snap it back to that size. Only the oldest
+  // pre-tile state is kept — tiling a tiled frame doesn't overwrite it, so
+  // the original user-sized rect survives through multiple arrangements.
+
+  _capturePreTile(spec) {
+    if (!spec.preTileRect) {
+      spec.preTileRect = { x: spec.x, y: spec.y, w: spec.w, h: spec.h };
+    }
+  }
+
+  _clearTileState(spec, frameEl) {
+    delete spec.preTileRect;
+    if (this._maximized?.frameId === spec.id) {
+      frameEl?.removeAttribute("maximized");
+      this._maximized = null;
+    }
   }
 
   // Frame drag / resize ───────────────────────────────────────────────────
@@ -376,15 +399,33 @@ class MkuiWorkspace extends HTMLElement {
     const spec = this._frameSpecFor(frameEl);
     if (!spec) return;
     const ws = { x: 0, y: 0, w: this.clientWidth, h: this.clientHeight };
-    const start = fracToRect({ xFrac: spec.x, yFrac: spec.y, wFrac: spec.w, hFrac: spec.h }, ws);
+    let start = fracToRect({ xFrac: spec.x, yFrac: spec.y, wFrac: spec.w, hFrac: spec.h }, ws);
     const wsRect = this.getBoundingClientRect();
-    const offX = ev.clientX - wsRect.left - start.x;
-    const offY = ev.clientY - wsRect.top - start.y;
-    const { vLines, hLines } = this._getSnapLines(spec.id);
+    let offX = ev.clientX - wsRect.left - start.x;
+    let offY = ev.clientY - wsRect.top - start.y;
+    let snap = this._getSnapLines(spec.id);
+    const startX = ev.clientX, startY = ev.clientY;
+    let restored = false;
     const move = (e) => {
+      // On first significant motion of a tiled/maximized frame, restore its
+      // pre-tile size under the cursor and refresh the movement baselines.
+      if (!restored && spec.preTileRect) {
+        if (Math.hypot(e.clientX - startX, e.clientY - startY) < 4) return;
+        const pre = spec.preTileRect;
+        const newW = pre.w * ws.w;
+        const newH = pre.h * ws.h;
+        offX = offX / start.w * newW;
+        offY = offY / start.h * newH;
+        start = { x: 0, y: 0, w: newW, h: newH };
+        spec.w = pre.w; spec.h = pre.h;
+        this._clearTileState(spec, frameEl);
+        snap = this._getSnapLines(spec.id);
+        Object.assign(frameEl.style, { width: newW + "px", height: newH + "px" });
+        restored = true;
+      }
       const wr = this.getBoundingClientRect();
       const raw = { x: e.clientX - wr.left - offX, y: e.clientY - wr.top - offY, w: start.w, h: start.h };
-      const snapped = snapMove(raw, vLines, hLines);
+      const snapped = snapMove(raw, snap.vLines, snap.hLines);
       const clamped = clampToDock(snapped, ws);
       const frac = rectToFrac(clamped, ws);
       spec.x = frac.xFrac; spec.y = frac.yFrac;
@@ -407,6 +448,7 @@ class MkuiWorkspace extends HTMLElement {
     ev.stopPropagation();
     const spec = this._frameSpecFor(frameEl);
     if (!spec) return;
+    this._clearTileState(spec, frameEl);
     const ws = { x: 0, y: 0, w: this.clientWidth, h: this.clientHeight };
     const start = fracToRect({ xFrac: spec.x, yFrac: spec.y, wFrac: spec.w, hFrac: spec.h }, ws);
     const sx = ev.clientX, sy = ev.clientY;
