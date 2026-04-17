@@ -21,6 +21,8 @@ class MkuiMenubar extends HTMLElement {
     this._rootAnchor = null;           // currently-open top-level <div class="mkui-menu">
     this._openStack = [];              // [{ popup, parentAnchor, depth }], depth 0 = root popup
     this._docHandler = null;
+    this._docUpHandler = null;
+    this._pressActive = false;         // true between opening mousedown and its matching mouseup
   }
 
   setApp(app) {
@@ -38,7 +40,7 @@ class MkuiMenubar extends HTMLElement {
       el.addEventListener("mousedown", (ev) => {
         ev.stopPropagation();
         if (this._rootAnchor === el) this._closeAll();
-        else { this._closeAll(); this._openRoot(el, menu); }
+        else { this._closeAll(); this._openRoot(el, menu); this._pressActive = true; }
       });
       el.addEventListener("mouseenter", () => {
         // Swap between open menus when hovering across the menubar.
@@ -56,6 +58,16 @@ class MkuiMenubar extends HTMLElement {
         this._closeAll();
       };
       document.addEventListener("mousedown", this._docHandler);
+    }
+    if (!this._docUpHandler) {
+      this._docUpHandler = (ev) => {
+        if (!this._pressActive) return;
+        this._pressActive = false;
+        if (!this._rootAnchor) return;
+        if (this.contains(ev.target)) return;
+        this._closeAll();
+      };
+      document.addEventListener("mouseup", this._docUpHandler);
     }
   }
 
@@ -100,6 +112,11 @@ class MkuiMenubar extends HTMLElement {
       });
       it.addEventListener("mousedown", (ev) => {
         ev.stopPropagation();
+        this._pressActive = true;
+      });
+      it.addEventListener("mouseup", (ev) => {
+        ev.stopPropagation();
+        this._pressActive = false;
         if (hasSubmenu) return; // hover already opened it
         this._closeAll();
         if (item.action) this._app.fireAction(item.action, item.args);
