@@ -114,7 +114,6 @@ mkui-frame {
   min-width: 160px;
   min-height: 80px;
   box-sizing: border-box;
-  overflow: hidden;
 }
 
 .mkui-frame-titlebar {
@@ -124,6 +123,7 @@ mkui-frame {
   height: var(--mkui-titlebar-h);
   background: linear-gradient(180deg, var(--mkui-bg-alt), var(--mkui-bg));
   border-bottom: 1px solid var(--mkui-border);
+  border-radius: 3px 3px 0 0;
   padding: 0 8px;
   cursor: move;
   flex-shrink: 0;
@@ -165,6 +165,7 @@ mkui-frame[maximized] {
   border-radius: 0;
   box-shadow: none;
 }
+mkui-frame[maximized] .mkui-frame-titlebar { border-radius: 0; }
 mkui-frame[maximized] .mkui-frame-resize { display: none; }
 
 .mkui-frame-body {
