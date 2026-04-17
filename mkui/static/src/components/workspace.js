@@ -530,6 +530,7 @@ class MkuiWorkspace extends HTMLElement {
         const newTree = insertPane(targetFrame.getTree(), drop.targetPaneId, drop.side, paneId);
         targetFrame.setTree(newTree);
         this.closeFrame(tornFrame.id);
+        this._raiseFrame(targetFrame);
       }
     };
 

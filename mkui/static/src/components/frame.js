@@ -48,6 +48,14 @@ class MkuiFrame extends HTMLElement {
 
   connectedCallback() { if (!this._built) this._build(); }
 
+  disconnectedCallback() {
+    // Stop the body ResizeObserver so it doesn't fire a stale
+    // _renderInternal after the frame has been closed — that would
+    // re-appendChild our panes back into a detached body, orphaning them.
+    this._bodyRO?.disconnect();
+    this._bodyRO = null;
+  }
+
   _build() {
     this._built = true;
 
