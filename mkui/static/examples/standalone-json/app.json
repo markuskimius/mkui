@@ -33,7 +33,7 @@
   ],
   "statusbar": {
     "left":  [{ "type": "text", "bind": "status.message" }],
-    "right": [{ "type": "text", "text": "mkui v0.2" }]
+    "right": [{ "type": "text", "text": "mkui v0.1" }]
   },
   "panes": {
     "explorer": {
