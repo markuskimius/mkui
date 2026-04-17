@@ -18,10 +18,16 @@
     {
       "label": "Window",
       "items": [
-        { "label": "Tile Horizontal",  "action": "window.tileH" },
-        { "label": "Tile Vertical",    "action": "window.tileV" },
-        { "label": "Tile Grid",        "action": "window.grid" },
-        { "label": "Cascade",          "action": "window.cascade" }
+        { "label": "Cascade", "action": "window.cascade" },
+        { "sep": true },
+        {
+          "label": "Tile",
+          "items": [
+            { "label": "Horizontal", "action": "window.tileH" },
+            { "label": "Vertical",   "action": "window.tileV" },
+            { "label": "Grid",       "action": "window.grid" }
+          ]
+        }
       ]
     },
     {

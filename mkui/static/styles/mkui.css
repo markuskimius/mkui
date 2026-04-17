@@ -71,8 +71,20 @@ mkui-menubar {
   padding: 4px 0;
   z-index: 200;
 }
-.mkui-menu-item { padding: 5px 16px; cursor: default; }
+.mkui-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 16px;
+  cursor: default;
+}
 .mkui-menu-item:hover { background: var(--mkui-accent); color: var(--mkui-accent-fg); }
+.mkui-menu-item-arrow {
+  margin-left: 16px;
+  font-size: 10px;
+  color: var(--mkui-fg-mute);
+}
+.mkui-menu-item:hover .mkui-menu-item-arrow { color: var(--mkui-accent-fg); }
 .mkui-menu-sep { height: 1px; background: var(--mkui-border); margin: 4px 0; }
 
 mkui-statusbar {
