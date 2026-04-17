@@ -1,7 +1,13 @@
 // <mkui-frame> + <mkui-pane>
 //
-// A frame is a floating top-level chrome (titlebar, resize handles, body).
-// Its body hosts a normalized layout tree of panes, tab bars, and splitters.
+// A frame is a floating top-level chrome (resize handles + body). The body
+// hosts a normalized layout tree of panes, tab bars, and splitters. There
+// is no dedicated titlebar — every tab bar at y=0 carries a flexible
+// whitespace region that drags the frame, and the right-most of those
+// additionally holds the window controls (maximize, close). So the
+// frame's top edge is always just tab row(s), even when the top-level
+// layout is a split.
+//
 // Frames never dock into each other directly — only panes do, via tab
 // drag-out / inter-frame drop zones routed by <mkui-workspace>.
 //
@@ -10,7 +16,7 @@
 // subscriptions survive the re-dock.
 
 import {
-  normalize, listPanes, layout, setSplitRatio, TABBAR_H,
+  normalize, listPanes, layout, setSplitRatio,
 } from "../layout/tree.js";
 
 class MkuiPane extends HTMLElement {
@@ -37,7 +43,6 @@ class MkuiFrame extends HTMLElement {
     this._workspace = null;
     this._app = null;
     this._id = null;
-    this._explicitTitle = null;
     this._chromeEls = [];
   }
 
@@ -46,42 +51,8 @@ class MkuiFrame extends HTMLElement {
   _build() {
     this._built = true;
 
-    const titlebar = document.createElement("div");
-    titlebar.className = "mkui-frame-titlebar";
-    const titleSpan = document.createElement("span");
-    titleSpan.className = "mkui-frame-title";
-    titlebar.appendChild(titleSpan);
-    const actions = document.createElement("div");
-    actions.className = "mkui-frame-actions";
-
-    const maxBtn = document.createElement("div");
-    maxBtn.className = "mkui-frame-btn mkui-frame-maximize";
-    maxBtn.innerHTML = "&#9723;";
-    maxBtn.title = "Maximize";
-    maxBtn.addEventListener("mousedown", (ev) => ev.stopPropagation());
-    maxBtn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      this._workspace?.toggleMaximize(this._id);
-    });
-    actions.appendChild(maxBtn);
-
-    const closeBtn = document.createElement("div");
-    closeBtn.className = "mkui-frame-btn mkui-frame-close";
-    closeBtn.textContent = "\u00d7";
-    closeBtn.title = "Close";
-    closeBtn.addEventListener("mousedown", (ev) => ev.stopPropagation());
-    closeBtn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      this._workspace?.closeFrame(this._id);
-    });
-    actions.appendChild(closeBtn);
-
-    titlebar.appendChild(actions);
-
     const body = document.createElement("div");
     body.className = "mkui-frame-body";
-
-    this.appendChild(titlebar);
     this.appendChild(body);
 
     for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
@@ -93,12 +64,6 @@ class MkuiFrame extends HTMLElement {
       this.appendChild(h);
     }
 
-    titlebar.addEventListener("mousedown", (ev) => {
-      if (ev.button !== 0) return;
-      if (ev.target.closest(".mkui-frame-actions")) return;
-      this._workspace?._beginFrameMove(ev, this);
-    });
-
     // Raise to the top of z-order on any interaction inside the frame.
     this.addEventListener("mousedown", () => this._workspace?._raiseFrame(this), true);
 
@@ -107,8 +72,6 @@ class MkuiFrame extends HTMLElement {
     this._bodyRO = new ResizeObserver(() => this._renderInternal());
     this._bodyRO.observe(body);
 
-    this._titlebarEl = titlebar;
-    this._titleSpan = titleSpan;
     this._bodyEl = body;
   }
 
@@ -116,7 +79,6 @@ class MkuiFrame extends HTMLElement {
     this._workspace = workspace;
     this._app = app;
     this._id = spec.id;
-    this._explicitTitle = spec.title ?? null;
     this._tree = normalize(spec.layout);
     this._renderInternal();
   }
@@ -151,15 +113,25 @@ class MkuiFrame extends HTMLElement {
       }
     }
 
-    if (this._tree == null) {
-      this._titleSpan.textContent = this._explicitTitle ?? "";
-      return;
-    }
+    if (this._tree == null) return;
 
     const bw = this._bodyEl.clientWidth;
     const bh = this._bodyEl.clientHeight;
-    const bodyRect = { x: 0, y: 0, w: bw, h: bh };
-    const { panes, tabBars, splitters } = layout(this._tree, bodyRect);
+    const layoutRect = { x: 0, y: 0, w: bw, h: bh };
+    const { panes, tabBars, splitters } = layout(this._tree, layoutRect);
+
+    // The right-most tab bar at y=0 carries the window controls; every
+    // tab bar at y=0 gets a trailing drag region that moves the frame.
+    let controlBarIdx = -1;
+    let controlBarRight = -Infinity;
+    for (let i = 0; i < tabBars.length; i++) {
+      if (tabBars[i].rect.y !== 0) continue;
+      const right = tabBars[i].rect.x + tabBars[i].rect.w;
+      if (right > controlBarRight) {
+        controlBarRight = right;
+        controlBarIdx = i;
+      }
+    }
 
     // Attach + position each pane that should live in this frame.
     for (const [id, info] of panes) {
@@ -174,9 +146,13 @@ class MkuiFrame extends HTMLElement {
       });
     }
 
-    // Tab bars.
-    for (const { tabGroup, rect } of tabBars) {
-      const bar = this._renderTabBar(tabGroup, rect);
+    for (let i = 0; i < tabBars.length; i++) {
+      const { tabGroup, rect } = tabBars[i];
+      const atTop = rect.y === 0;
+      const bar = this._renderTabBar(tabGroup, rect, {
+        withDrag: atTop,
+        withControls: i === controlBarIdx,
+      });
       this._bodyEl.appendChild(bar);
       this._chromeEls.push(bar);
     }
@@ -195,44 +171,87 @@ class MkuiFrame extends HTMLElement {
       this._bodyEl.appendChild(h);
       this._chromeEls.push(h);
     }
-
-    this._updateTitle();
   }
 
-  _updateTitle() {
-    if (this._explicitTitle) {
-      this._titleSpan.textContent = this._explicitTitle;
-      return;
-    }
-    // Fall back to the title of the first pane in traversal order.
-    const ids = this._tree ? listPanes(this._tree) : [];
-    if (ids.length === 0) { this._titleSpan.textContent = ""; return; }
-    const spec = this._workspace?.getPaneSpec(ids[0]);
-    this._titleSpan.textContent = spec?.title ?? ids[0];
-  }
-
-  _renderTabBar(tabGroup, rect) {
+  _renderTabBar(tabGroup, rect, opts = {}) {
+    const { withDrag = false, withControls = false } = opts;
     const bar = document.createElement("div");
-    bar.className = "mkui-tabbar";
+    bar.className = "mkui-tabbar" + ((withDrag || withControls) ? " mkui-tabbar-top" : "");
     Object.assign(bar.style, {
       position: "absolute",
       left: rect.x + "px", top: rect.y + "px",
       width: rect.w + "px", height: rect.h + "px",
     });
+
+    const tabs = document.createElement("div");
+    tabs.className = "mkui-tabs";
     for (let i = 0; i < tabGroup.children.length; i++) {
       const id = tabGroup.children[i];
       const spec = this._workspace?.getPaneSpec(id);
+      const label = spec?.title ?? id;
       const tab = document.createElement("div");
       tab.className = "mkui-tab" + (i === tabGroup.active ? " active" : "");
-      tab.textContent = spec?.title ?? id;
+      tab.title = label; // tooltip so truncated tabs stay legible
+      const labelEl = document.createElement("span");
+      labelEl.className = "mkui-tab-label";
+      labelEl.textContent = label;
+      tab.appendChild(labelEl);
       tab.addEventListener("mousedown", (ev) => {
         if (ev.button !== 0) return;
         ev.stopPropagation();
         this._workspace?._beginPaneDrag(ev, this, id, tabGroup, bar);
       });
-      bar.appendChild(tab);
+      tabs.appendChild(tab);
     }
+    bar.appendChild(tabs);
+
+    if (withDrag || withControls) bar.appendChild(this._makeDragRegion());
+    if (withControls) bar.appendChild(this._makeControls());
+
     return bar;
+  }
+
+  _makeDragRegion() {
+    const drag = document.createElement("div");
+    drag.className = "mkui-frame-drag";
+    drag.addEventListener("mousedown", (ev) => {
+      if (ev.button !== 0) return;
+      this._workspace?._beginFrameMove(ev, this);
+    });
+    drag.addEventListener("dblclick", (ev) => {
+      ev.stopPropagation();
+      this._workspace?.toggleMaximize(this._id);
+    });
+    return drag;
+  }
+
+  _makeControls() {
+    const actions = document.createElement("div");
+    actions.className = "mkui-frame-actions";
+
+    const maxBtn = document.createElement("div");
+    maxBtn.className = "mkui-frame-btn mkui-frame-maximize";
+    maxBtn.innerHTML = "&#9723;";
+    maxBtn.title = "Maximize";
+    maxBtn.addEventListener("mousedown", (ev) => ev.stopPropagation());
+    maxBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      this._workspace?.toggleMaximize(this._id);
+    });
+    actions.appendChild(maxBtn);
+
+    const closeBtn = document.createElement("div");
+    closeBtn.className = "mkui-frame-btn mkui-frame-close";
+    closeBtn.textContent = "\u00d7";
+    closeBtn.title = "Close";
+    closeBtn.addEventListener("mousedown", (ev) => ev.stopPropagation());
+    closeBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      this._workspace?.closeFrame(this._id);
+    });
+    actions.appendChild(closeBtn);
+
+    return actions;
   }
 
   _beginSplitterDrag(ev, sp) {

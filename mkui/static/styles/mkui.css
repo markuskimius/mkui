@@ -9,7 +9,6 @@
   --mkui-accent-fg: #ffffff;
   --mkui-menubar-h:   28px;
   --mkui-statusbar-h: 22px;
-  --mkui-titlebar-h:  26px;
   --mkui-tabbar-h:    28px;
   --mkui-splitter:    4px;
   --mkui-frame-shadow: 0 10px 30px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.2);
@@ -116,34 +115,24 @@ mkui-frame {
   box-sizing: border-box;
 }
 
-.mkui-frame-titlebar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: var(--mkui-titlebar-h);
-  background: linear-gradient(180deg, var(--mkui-bg-alt), var(--mkui-bg));
-  border-bottom: 1px solid var(--mkui-border);
-  border-radius: 3px 3px 0 0;
-  padding: 0 8px;
+/* Flexible drag region in the top tab bar — always some whitespace
+   between the tabs and the window controls. Dragging it moves the
+   frame; double-clicking toggles maximize. */
+.mkui-frame-drag {
+  flex: 1 1 0;
+  min-width: 40px;
   cursor: move;
-  flex-shrink: 0;
-  user-select: none;
 }
-.mkui-frame-title {
-  font-size: 12px;
-  color: var(--mkui-fg);
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+
 .mkui-frame-actions {
   display: flex;
   gap: 2px;
   align-items: center;
+  flex: 0 0 auto;
+  padding: 0 6px;
 }
 .mkui-frame-btn {
-  width: 18px; height: 18px;
+  width: 22px; height: 22px;
   display: grid; place-items: center;
   cursor: pointer;
   color: var(--mkui-fg-mute);
@@ -165,7 +154,7 @@ mkui-frame[maximized] {
   border-radius: 0;
   box-shadow: none;
 }
-mkui-frame[maximized] .mkui-frame-titlebar { border-radius: 0; }
+mkui-frame[maximized] .mkui-frame-body { border-radius: 0; }
 mkui-frame[maximized] .mkui-frame-resize { display: none; }
 
 .mkui-frame-body {
@@ -173,6 +162,7 @@ mkui-frame[maximized] .mkui-frame-resize { display: none; }
   position: relative;
   overflow: hidden;
   background: var(--mkui-bg);
+  border-radius: 3px;
 }
 
 /* Resize handles (8-way). Sit slightly outside the border for easy grabs. */
@@ -204,12 +194,31 @@ mkui-pane {
 
 .mkui-tabbar {
   display: flex;
+  align-items: stretch;
   background: var(--mkui-bg-alt);
   border-bottom: 1px solid var(--mkui-border);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+/* Top tab bars (at y=0) share their row with a drag region and, for the
+   right-most bar, the window controls. The tabs container must be free
+   to shrink so the drag/controls stay visible when there are many tabs. */
+
+/* Scrollable tabs container. In the top bar it shares the row with a
+   drag region + window controls; elsewhere it fills the whole bar. */
+.mkui-tabs {
+  display: flex;
+  align-items: stretch;
   overflow-x: auto;
   overflow-y: hidden;
-  box-sizing: border-box;
+  flex: 1 1 auto;
+  min-width: 0;
+  scrollbar-width: thin;
 }
+.mkui-tabbar-top > .mkui-tabs { flex: 0 1 auto; }
+.mkui-tabs::-webkit-scrollbar { height: 4px; }
+.mkui-tabs::-webkit-scrollbar-thumb { background: var(--mkui-border); }
+
 .mkui-tab {
   display: flex;
   align-items: center;
@@ -218,8 +227,14 @@ mkui-pane {
   cursor: default;
   color: var(--mkui-fg-mute);
   font-size: 12px;
-  white-space: nowrap;
+  max-width: 220px;
+  flex-shrink: 0;
   transition: background 80ms ease, color 80ms ease;
+}
+.mkui-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .mkui-tab:hover { background: var(--mkui-bg-hover); color: var(--mkui-fg); }
 .mkui-tab.active {
