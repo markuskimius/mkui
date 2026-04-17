@@ -24,11 +24,13 @@ mkui-app
 └── mkui-statusbar
 ```
 
-Top-level windows are **frames** — floating chrome with titlebar and 8-way
-resize. Frames don't dock into each other. Inside each frame lives an
-independent, normalized layout tree of **splits**, **tab groups**, and
-**panes**. Docking — splitting, tabbing, tearing out — happens entirely
-inside frames.
+Top-level windows are **frames** — floating chrome with 8-way resize.
+There is no dedicated titlebar: every tab bar at the top edge doubles
+as a drag region, and the right-most one also carries the window
+controls. Frames don't dock into each other. Inside each frame lives
+an independent, normalized layout tree of **splits**, **tab groups**,
+and **panes**. Docking — splitting, tabbing, tearing out — happens
+entirely inside frames.
 
 **Design commitments** (things meant to hold up indefinitely):
 
@@ -49,8 +51,12 @@ inside frames.
 
 ## Interactions
 
-- **Frame titlebar** → drag to move (clamped). **Frame edges/corners** →
-  8-way resize (clamped, min 160×80).
+- **Top tab row** → drag the whitespace next to the tabs to move the
+  frame (clamped). **Double-click** the same region to toggle maximize.
+  **Frame edges/corners** → 8-way resize (clamped, min 160×80).
+- **Dragging a tiled or maximized frame** restores it to its pre-tile
+  size under the cursor on first motion. Resize handles or explicit
+  maximize-toggle also clear the restore state.
 - **Frame close button** → closes the frame; panes inside are parked in
   the pool (state preserved) and can be brought back by code.
 - **Tab click** → switch active pane in that tab group.

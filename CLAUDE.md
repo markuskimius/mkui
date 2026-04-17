@@ -7,7 +7,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 ## Architecture
 
 - **Workspace** (`<mkui-workspace>`) holds a z-ordered list of floating **frames**
-- **Frames** (`<mkui-frame>`) are top-level chrome with titlebar + resize handles; each owns an internal normalized layout tree
+- **Frames** (`<mkui-frame>`) are top-level chrome with 8-way resize handles; each owns an internal normalized layout tree. There is no dedicated titlebar — every top-edge tab bar doubles as a drag region, and the right-most one carries the window controls
 - **Panes** (`<mkui-pane>`) are leaf content hosts inside frames; always wrapped in a TabGroup (structural invariant)
 - Pane elements are pooled at the workspace level with stable identity — `appendChild` moves them between frames preserving state
 - Frame positions stored as fractions of the workspace; split ratios sum to 1 — proportional resize is automatic
