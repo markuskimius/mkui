@@ -15,7 +15,7 @@
 import "./frame.js";
 import { getPaneType, getWidget } from "../core.js";
 import { clampToDock, rectToFrac, fracToRect, dropZoneFor, previewRect, snapMove, snapResize } from "../layout/drag.js";
-import { layout, insertPane, removePane } from "../layout/tree.js";
+import { layout, insertPane, removePane, firstTabGroup } from "../layout/tree.js";
 
 class MkuiWorkspace extends HTMLElement {
   constructor() {
@@ -42,12 +42,39 @@ class MkuiWorkspace extends HTMLElement {
     this._ro = new ResizeObserver(() => this._layoutFrames());
     this._ro.observe(this);
     window.addEventListener("resize", this._onWindowResize);
+    window.addEventListener("keydown", this._onKeyDown);
   }
   disconnectedCallback() {
     this._ro?.disconnect();
     window.removeEventListener("resize", this._onWindowResize);
+    window.removeEventListener("keydown", this._onKeyDown);
   }
   _onWindowResize = () => this._layoutFrames();
+
+  // Alt+Shift+Left/Right reorders the active tab within its tab group on the
+  // top-most frame. We track the "active" group on each frame via
+  // _activeTabGroup (set when the user interacts with a tab); if unset, we
+  // fall back to the first tab group in the frame's tree.
+  _onKeyDown = (e) => {
+    if (!(e.altKey && e.shiftKey)) return;
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    const topSpec = this._frames[this._frames.length - 1];
+    if (!topSpec) return;
+    const frameEl = this._frameEls.get(topSpec.id);
+    if (!frameEl) return;
+    const tg = frameEl._activeTabGroup ?? firstTabGroup(frameEl.getTree());
+    if (!tg || tg.children.length < 2) return;
+    const i = tg.active ?? 0;
+    const j = e.key === "ArrowLeft" ? i - 1 : i + 1;
+    if (j < 0 || j >= tg.children.length) return;
+    [tg.children[i], tg.children[j]] = [tg.children[j], tg.children[i]];
+    tg.active = j;
+    frameEl._activeTabGroup = tg;
+    e.preventDefault();
+    frameEl._renderInternal();
+  };
 
   setApp(app) {
     this._app = app;
@@ -160,9 +187,13 @@ class MkuiWorkspace extends HTMLElement {
   }
 
   _applyZOrder() {
+    const topIdx = this._frames.length - 1;
     for (let i = 0; i < this._frames.length; i++) {
       const el = this._frameEls.get(this._frames[i].id);
-      if (el) el.style.zIndex = 10 + i;
+      if (!el) continue;
+      el.style.zIndex = 10 + i;
+      if (i === topIdx) el.setAttribute("data-focused", "");
+      else el.removeAttribute("data-focused");
     }
   }
 
@@ -189,6 +220,8 @@ class MkuiWorkspace extends HTMLElement {
     }
     this._frameEls.delete(id);
     this._frames.splice(idx, 1);
+    // Re-apply z-order so the new top-most frame picks up data-focused.
+    this._applyZOrder();
   }
 
   // Public API: create a new frame programmatically. Useful from JS /
@@ -503,9 +536,24 @@ class MkuiWorkspace extends HTMLElement {
 
   _beginPaneDrag(ev, sourceFrame, paneId, tabGroup, tabBarEl) {
     ev.preventDefault();
+    // Mark this group as the keyboard-focus target and re-render so the
+    // focused-tab-bar cue moves immediately on click (not only after drag).
+    if (sourceFrame._activeTabGroup !== tabGroup) {
+      sourceFrame._activeTabGroup = tabGroup;
+      sourceFrame._renderInternal();
+    }
     const startX = ev.clientX, startY = ev.clientY;
     let tornFrame = null;
     let drop = null;
+    // tabBarEl gets replaced on every _renderInternal (e.g. after an in-bar
+    // reorder), so we re-find the live element by its tagged _tabGroup.
+    let liveBar = tabBarEl;
+    const findLiveBar = () => {
+      for (const child of sourceFrame.bodyEl.children) {
+        if (child.classList?.contains("mkui-tabbar") && child._tabGroup === tabGroup) return child;
+      }
+      return null;
+    };
 
     const tearOut = (e) => {
       // 1. Remove pane from source tree.
@@ -521,15 +569,35 @@ class MkuiWorkspace extends HTMLElement {
       tornFrame = this._createFrameFor(paneId, frac);
     };
 
+    const reorderAt = (clientX) => {
+      const tabs = liveBar.querySelectorAll(".mkui-tab");
+      if (tabs.length < 2) return;
+      let targetIdx = tabs.length - 1;
+      for (let i = 0; i < tabs.length; i++) {
+        const r = tabs[i].getBoundingClientRect();
+        if (clientX < r.left + r.width / 2) { targetIdx = i; break; }
+      }
+      const curIdx = tabGroup.children.indexOf(paneId);
+      if (curIdx < 0 || targetIdx === curIdx) return;
+      tabGroup.children.splice(curIdx, 1);
+      tabGroup.children.splice(targetIdx, 0, paneId);
+      tabGroup.active = targetIdx;
+      sourceFrame._renderInternal();
+      liveBar = findLiveBar() ?? liveBar;
+    };
+
     const onMove = (e) => {
       if (!tornFrame) {
         const dist = Math.hypot(e.clientX - startX, e.clientY - startY);
         if (dist < 6) return;
-        const bar = tabBarEl.getBoundingClientRect();
+        const fresh = findLiveBar();
+        if (fresh) liveBar = fresh;
+        const bar = liveBar.getBoundingClientRect();
         const outside =
           e.clientX < bar.left - 4 || e.clientX > bar.right + 4 ||
           e.clientY < bar.top - 8  || e.clientY > bar.bottom + 8;
-        if (outside) tearOut(e);
+        if (outside) { tearOut(e); return; }
+        reorderAt(e.clientX);
         return;
       }
 

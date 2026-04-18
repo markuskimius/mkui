@@ -16,7 +16,7 @@
 // subscriptions survive the re-dock.
 
 import {
-  normalize, listPanes, layout, setSplitRatio,
+  normalize, listPanes, layout, setSplitRatio, firstTabGroup, findPane,
 } from "../layout/tree.js";
 
 class MkuiPane extends HTMLElement {
@@ -72,8 +72,13 @@ class MkuiFrame extends HTMLElement {
       this.appendChild(h);
     }
 
-    // Raise to the top of z-order on any interaction inside the frame.
-    this.addEventListener("mousedown", () => this._workspace?._raiseFrame(this), true);
+    // Raise to the top of z-order on any interaction inside the frame, and
+    // mark whichever tab group sits under the click as the keyboard-focus
+    // target. Capture phase so inner stopPropagation can't hide the click.
+    this.addEventListener("mousedown", (ev) => {
+      this._workspace?._raiseFrame(this);
+      this._activateTabGroupFromEvent(ev);
+    }, true);
 
     // Re-render the internal layout whenever the body resizes (either from
     // a frame drag/resize or from viewport-driven clamping).
@@ -98,6 +103,9 @@ class MkuiFrame extends HTMLElement {
   setTree(tree) {
     const normalized = normalize(tree);
     this._tree = normalized;
+    // Any stored tabGroup reference (e.g. _activeTabGroup) is from the old
+    // tree — normalize rebuilds nodes, so it's no longer in this tree.
+    this._activeTabGroup = null;
     this._renderInternal();
     if (this._tree == null) {
       // Frame has no panes left — close it. Safe: closeFrame just unmounts.
@@ -154,12 +162,17 @@ class MkuiFrame extends HTMLElement {
       });
     }
 
+    // Whichever tab group the user last interacted with inside this frame
+    // is the "focused" one for hotkeys; default to the first if unset.
+    const focusedTg = this._activeTabGroup ?? firstTabGroup(this._tree);
+
     for (let i = 0; i < tabBars.length; i++) {
       const { tabGroup, rect } = tabBars[i];
       const atTop = rect.y === 0;
       const bar = this._renderTabBar(tabGroup, rect, {
         withDrag: atTop,
         withControls: i === controlBarIdx,
+        focused: tabGroup === focusedTg,
       });
       this._bodyEl.appendChild(bar);
       this._chromeEls.push(bar);
@@ -182,9 +195,14 @@ class MkuiFrame extends HTMLElement {
   }
 
   _renderTabBar(tabGroup, rect, opts = {}) {
-    const { withDrag = false, withControls = false } = opts;
+    const { withDrag = false, withControls = false, focused = false } = opts;
     const bar = document.createElement("div");
-    bar.className = "mkui-tabbar" + ((withDrag || withControls) ? " mkui-tabbar-top" : "");
+    bar.className = "mkui-tabbar"
+      + ((withDrag || withControls) ? " mkui-tabbar-top" : "")
+      + (focused ? " mkui-tabbar-focused" : "");
+    // Tagged so that an in-flight pane drag can re-locate its source bar
+    // after _renderInternal rebuilds the chrome.
+    bar._tabGroup = tabGroup;
     Object.assign(bar.style, {
       position: "absolute",
       left: rect.x + "px", top: rect.y + "px",
@@ -260,6 +278,29 @@ class MkuiFrame extends HTMLElement {
     actions.appendChild(closeBtn);
 
     return actions;
+  }
+
+  // Walk up from the event target until we hit a tab bar (tagged with
+  // _tabGroup) or a pane (whose id lets us look up its tab group). Splitters,
+  // resize handles, and frame chrome not inside a pane leave it unchanged.
+  _activateTabGroupFromEvent(ev) {
+    let node = ev.target;
+    while (node && node !== this && node !== this._bodyEl) {
+      if (node._tabGroup) return this._setActiveTabGroup(node._tabGroup);
+      if (node.tagName === "MKUI-PANE" && this._tree) {
+        const id = node.getAttribute("data-id");
+        const hit = findPane(this._tree, id);
+        if (hit) this._setActiveTabGroup(hit.tabGroup);
+        return;
+      }
+      node = node.parentElement;
+    }
+  }
+
+  _setActiveTabGroup(tg) {
+    if (this._activeTabGroup === tg) return;
+    this._activeTabGroup = tg;
+    this._renderInternal();
   }
 
   _beginSplitterDrag(ev, sp) {

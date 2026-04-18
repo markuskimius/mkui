@@ -60,12 +60,18 @@ entirely inside frames.
 - **Frame close button** → closes the frame; panes inside are parked in
   the pool (state preserved) and can be brought back by code.
 - **Tab click** → switch active pane in that tab group.
-- **Tab drag** → if the cursor leaves the tab bar by more than a few
-  pixels, the pane is **torn out** into a new frame at the cursor.
+- **Tab drag within the bar** → reorders the tab in its group. If the
+  cursor leaves the tab bar by more than a few pixels, the pane is
+  **torn out** into a new frame at the cursor.
+- **Alt+Shift+Left / Alt+Shift+Right** → move the active tab left or
+  right within its group (acts on the top-most frame).
 - **Dragging a torn-out (or any single-pane) frame over another frame**
   shows drop zones: edges split, center adds as a tab. Release to dock.
 - **Splitter drag** → resize the ratio between two children of a split.
 - **Any mousedown inside a frame** raises it to the top of the z-order.
+  The top frame gets an accent border; within it, the last-clicked tab
+  group's active-tab underline stays at full accent while others dim —
+  that's the bar keyboard hotkeys act on.
 
 ## Configs
 

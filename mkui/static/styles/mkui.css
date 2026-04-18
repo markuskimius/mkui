@@ -127,6 +127,11 @@ mkui-frame {
   box-sizing: border-box;
 }
 
+/* Top of z-order — keyboard hotkeys target this frame. */
+mkui-frame[data-focused] {
+  border-color: var(--mkui-accent);
+}
+
 /* Flexible drag region in the top tab bar — always some whitespace
    between the tabs and the window controls. Dragging it moves the
    frame; double-clicking toggles maximize. */
@@ -253,6 +258,13 @@ mkui-pane {
   background: var(--mkui-bg);
   color: var(--mkui-fg);
   box-shadow: inset 0 -2px 0 0 var(--mkui-accent);
+}
+/* Dim the active-tab underline outside the keyboard-focused tab group, so
+   the "loud" bar stands out as the one that'll receive hotkeys. */
+mkui-frame:not([data-focused]) .mkui-tab.active,
+mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active {
+  box-shadow: inset 0 -2px 0 0 var(--mkui-fg-mute);
+  color: var(--mkui-fg-mute);
 }
 
 .mkui-splitter {

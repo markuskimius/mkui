@@ -53,6 +53,20 @@ export function normalize(tree) {
   return null;
 }
 
+// Return the first TabGroup encountered in traversal order, or null. Useful
+// as a default "focused" tab group when nothing else has been selected.
+export function firstTabGroup(tree) {
+  if (tree == null) return null;
+  if (isTabs(tree)) return tree;
+  if (isSplit(tree)) {
+    for (const c of tree.children) {
+      const t = firstTabGroup(c);
+      if (t) return t;
+    }
+  }
+  return null;
+}
+
 // Walk the tree in traversal order, returning all pane ids.
 export function listPanes(tree) {
   const out = [];

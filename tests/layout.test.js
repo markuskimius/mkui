@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   normalize, findPane, listPanes, removePane, insertPane,
-  setSplitRatio, layout, TABBAR_H,
+  setSplitRatio, layout, firstTabGroup, TABBAR_H,
 } from "../mkui/static/src/layout/tree.js";
 import {
   clampToDock, rectToFrac, fracToRect, dropZoneFor,
@@ -57,6 +57,22 @@ test("findPane locates a pane inside a nested split", () => {
   assert.ok(hit);
   assert.equal(hit.tabIndex, 0);
   assert.deepEqual(hit.tabGroup.children, ["c"]);
+});
+
+test("firstTabGroup returns the left-most tab group in a nested split", () => {
+  const t = normalize({
+    type: "split", dir: "h", children: [
+      { type: "split", dir: "v", children: ["a", "b"] },
+      { type: "tabs", children: ["c", "d"] },
+    ],
+  });
+  const tg = firstTabGroup(t);
+  assert.ok(tg);
+  assert.deepEqual(tg.children, ["a"]);
+});
+
+test("firstTabGroup returns null for an empty tree", () => {
+  assert.equal(firstTabGroup(null), null);
 });
 
 test("listPanes returns traversal order", () => {
