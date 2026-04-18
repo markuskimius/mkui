@@ -13,6 +13,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 - Frame positions stored as fractions of the workspace; split ratios sum to 1 — proportional resize is automatic
 - Every frame move/resize passes through `clampToDock` — nothing escapes the viewport
 - Keyboard focus model: the top frame gets `[data-focused]` (set by `_applyZOrder`); each frame tracks an `_activeTabGroup` updated on any mousedown within a tab bar or pane. Hotkeys act on that frame + group.
+- Theming: `dark` and `light` are styled by `mkui.css` via `[theme=...]`. Custom themes go in `config.app.themes[name]` as `{ "--mkui-*": value }` overrides; `MkuiApp.setTheme(name)` applies them as inline styles on the host.
 
 ## Key files
 

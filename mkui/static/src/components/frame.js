@@ -149,6 +149,10 @@ class MkuiFrame extends HTMLElement {
       }
     }
 
+    // Whichever tab group the user last interacted with inside this frame
+    // is the "focused" one for hotkeys; default to the first if unset.
+    const focusedTg = this._activeTabGroup ?? firstTabGroup(this._tree);
+
     // Attach + position each pane that should live in this frame.
     for (const [id, info] of panes) {
       const el = this._workspace._ensurePaneEl(id);
@@ -161,10 +165,6 @@ class MkuiFrame extends HTMLElement {
         display: info.visible ? "" : "none",
       });
     }
-
-    // Whichever tab group the user last interacted with inside this frame
-    // is the "focused" one for hotkeys; default to the first if unset.
-    const focusedTg = this._activeTabGroup ?? firstTabGroup(this._tree);
 
     for (let i = 0; i < tabBars.length; i++) {
       const { tabGroup, rect } = tabBars[i];

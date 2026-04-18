@@ -45,10 +45,11 @@ class MkuiApp extends HTMLElement {
 
   setConfig(config) {
     if (!this._built) this._buildShell();
+    this._config = config;
     this._app = new App(config);
     this._app.mount(this);
     if (config.app?.title) document.title = config.app.title;
-    if (config.app?.theme) this.setAttribute("theme", config.app.theme);
+    this.setTheme(config.app?.theme);
     // Built-in window arrangement actions.
     const ws = this._workspace;
     this._app.registerAction("window.tileH",    () => ws.arrangeHorizontal());
@@ -59,6 +60,29 @@ class MkuiApp extends HTMLElement {
     this._menubar.setApp(this._app);
     this._workspace.setApp(this._app);
     this._statusbar.setApp(this._app);
+  }
+
+  // Apply a named theme. Built-in names ("dark", "light") are styled by
+  // mkui.css via the [theme] attribute. Custom themes come from
+  // config.app.themes[name] — a flat object of CSS custom property
+  // overrides (e.g. { "--mkui-bg": "#101820", "--mkui-accent": "#ff6b35" }),
+  // applied as inline styles so they cascade into every descendant.
+  setTheme(name) {
+    if (this._themeVars) {
+      for (const k of this._themeVars) this.style.removeProperty(k);
+      this._themeVars = null;
+    }
+    if (name) this.setAttribute("theme", name);
+    else this.removeAttribute("theme");
+    const vars = this._config?.app?.themes?.[name];
+    if (!vars) return;
+    const applied = [];
+    for (const [k, v] of Object.entries(vars)) {
+      const key = k.startsWith("--") ? k : `--${k}`;
+      this.style.setProperty(key, v);
+      applied.push(key);
+    }
+    this._themeVars = applied;
   }
 
   get app() { return this._app; }

@@ -1,6 +1,6 @@
 {
   "name": "mkui",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Config-driven web GUI framework with dockable windows. Pairs with mkio.",
   "type": "module",
   "main": "mkui/static/src/index.js",

@@ -113,6 +113,37 @@ Minimal config:
 
 Frame positions (`x`, `y`, `w`, `h`) are fractions of the workspace rect.
 
+## Themes
+
+`dark` and `light` are built-in. To ship additional themes, list them under
+`app.themes` — each entry is a flat object of CSS custom property overrides,
+applied as inline styles on `<mkui-app>` so every descendant inherits them:
+
+```json
+{
+  "app": {
+    "theme": "solarized",
+    "themes": {
+      "solarized": {
+        "--mkui-bg":        "#002b36",
+        "--mkui-bg-alt":    "#073642",
+        "--mkui-bg-hover":  "#0a4350",
+        "--mkui-fg":        "#93a1a1",
+        "--mkui-fg-mute":   "#586e75",
+        "--mkui-border":    "#0a4350",
+        "--mkui-accent":    "#268bd2",
+        "--mkui-accent-fg": "#fdf6e3",
+        "--mkui-focus":     "#eee8d5"
+      }
+    }
+  }
+}
+```
+
+Any variable from `styles/mkui.css` (`--mkui-*`) may be overridden. Missing
+keys fall back to the default (dark) values. Switch themes at runtime with
+`appEl.setTheme("solarized")`.
+
 ## Standalone mode
 
 ```html

@@ -7,6 +7,7 @@
   --mkui-border:    #3c3c3c;
   --mkui-accent:    #0e639c;
   --mkui-accent-fg: #ffffff;
+  --mkui-focus:     #ffffff;
   --mkui-menubar-h:   28px;
   --mkui-statusbar-h: 22px;
   --mkui-tabbar-h:    28px;
@@ -25,6 +26,7 @@ mkui-app[theme="light"] {
   --mkui-border:    #d0d0d0;
   --mkui-accent:    #0066b8;
   --mkui-accent-fg: #ffffff;
+  --mkui-focus:     #000000;
   --mkui-frame-shadow: 0 10px 30px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.08);
 }
 
@@ -129,7 +131,7 @@ mkui-frame {
 
 /* Top of z-order — keyboard hotkeys target this frame. */
 mkui-frame[data-focused] {
-  border-color: var(--mkui-accent);
+  border-color: var(--mkui-focus);
 }
 
 /* Flexible drag region in the top tab bar — always some whitespace
@@ -257,7 +259,7 @@ mkui-pane {
 .mkui-tab.active {
   background: var(--mkui-bg);
   color: var(--mkui-fg);
-  box-shadow: inset 0 -2px 0 0 var(--mkui-accent);
+  box-shadow: inset 0 -2px 0 0 var(--mkui-focus);
 }
 /* Dim the active-tab underline outside the keyboard-focused tab group, so
    the "loud" bar stands out as the one that'll receive hotkeys. */
