@@ -1,35 +1,34 @@
 import { registerPaneType } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
 
-// A built-in pane type that subscribes to an mkio subpub service and
-// renders rows as a table. Config (under [panes.<id>] in the app config):
-//
-//   type    = "mkio-table"
-//   service = "all_orders"
-//   filter  = "status == 'pending'"   # optional
-//   columns = ["id", "symbol", "qty", "price"]   # optional; defaults to row keys
+let _subCounter = 0;
+
 registerPaneType("mkio-table", async (spec, app, host) => {
   const wsUrl = app.config?.mkio?.url;
   if (!wsUrl) {
-    host.textContent = "[mkio-table] no [mkio.url] configured";
+    host.textContent = "[mkio-table] no mkio.url configured";
     return;
   }
+
+  const protocol = spec.protocol ?? "query";
+  const idKey = protocol === "subpub" ? "_mkio_topic" : "_mkio_row";
 
   const table = document.createElement("table");
   table.className = "mkui-table";
   const thead = document.createElement("thead");
   const tbody = document.createElement("tbody");
-  table.appendChild(thead);
-  table.appendChild(tbody);
+  table.append(thead, tbody);
   host.appendChild(table);
 
   const rows = new Map();
+  const rowEls = new Map();
   let columns = spec.columns ?? null;
+  const visibleColumns = () => columns.filter((c) => !c.startsWith("_mkio_"));
 
   function renderHead() {
     thead.innerHTML = "";
     const tr = document.createElement("tr");
-    for (const c of columns) {
+    for (const c of visibleColumns()) {
       const th = document.createElement("th");
       th.textContent = c;
       tr.appendChild(th);
@@ -37,17 +36,86 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     thead.appendChild(tr);
   }
 
-  function renderBody() {
-    tbody.innerHTML = "";
-    for (const row of rows.values()) {
-      const tr = document.createElement("tr");
-      for (const c of columns) {
-        const td = document.createElement("td");
-        const v = row[c];
-        td.textContent = v == null ? "" : String(v);
-        tr.appendChild(td);
+  function buildRow(row) {
+    const tr = document.createElement("tr");
+    tr.dataset.ref = row[idKey];
+    for (const c of visibleColumns()) {
+      const td = document.createElement("td");
+      td.dataset.col = c;
+      const v = row[c];
+      td.textContent = v == null ? "" : String(v);
+      tr.appendChild(td);
+    }
+    return tr;
+  }
+
+  function flash(el, cls) {
+    el.classList.remove("mkui-flash-in", "mkui-flash-out", "mkui-flash-update");
+    void el.offsetWidth;
+    el.classList.add(cls);
+  }
+
+  function insertRow(row) {
+    rows.set(row[idKey], row);
+    const tr = buildRow(row);
+    rowEls.set(row[idKey], tr);
+    tbody.appendChild(tr);
+    return tr;
+  }
+
+  function applySnapshot(snap) {
+    for (const row of snap) {
+      const key = row[idKey];
+      if (rows.has(key)) {
+        applyReplace(row);
+      } else {
+        if (!columns) {
+          columns = Object.keys(row);
+          renderHead();
+        }
+        insertRow(row);
       }
-      tbody.appendChild(tr);
+    }
+  }
+
+  function applyInsert(row) {
+    if (!columns) {
+      columns = Object.keys(row);
+      renderHead();
+    }
+    const tr = insertRow(row);
+    flash(tr, "mkui-flash-in");
+  }
+
+  function applyDelete(row) {
+    const key = row[idKey];
+    rows.delete(key);
+    const tr = rowEls.get(key);
+    if (!tr) return;
+    rowEls.delete(key);
+    flash(tr, "mkui-flash-out");
+    tr.addEventListener("animationend", () => tr.remove(), { once: true });
+  }
+
+  function applyReplace(row) {
+    const key = row[idKey];
+    const prev = rows.get(key);
+    rows.set(key, row);
+    const tr = rowEls.get(key);
+    if (!tr) {
+      applyInsert(row);
+      return;
+    }
+    for (const c of visibleColumns()) {
+      const newVal = row[c] == null ? "" : String(row[c]);
+      const oldVal = prev?.[c] == null ? "" : String(prev[c]);
+      if (newVal !== oldVal) {
+        const td = tr.querySelector(`td[data-col="${CSS.escape(c)}"]`);
+        if (td) {
+          td.textContent = newVal;
+          flash(td, "mkui-flash-update");
+        }
+      }
     }
   }
 
@@ -59,19 +127,27 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return;
   }
 
-  const idKey = spec.idKey ?? "id";
-  client.subscribe(spec.service, {
-    filter: spec.filter,
-    onSnapshot: (snap) => {
-      rows.clear();
-      for (const row of snap) rows.set(row[idKey], row);
-      if (!columns && snap.length > 0) columns = Object.keys(snap[0]);
-      if (columns) { renderHead(); renderBody(); }
+  const callbacks = {
+    onSnapshot: (snap) => applySnapshot(snap),
+    onDelta: (changes) => {
+      for (const ch of changes) {
+        if (ch.op === "insert") applyInsert(ch.row);
+        else if (ch.op === "delete") applyDelete(ch.row);
+        else applyReplace(ch.row);
+      }
     },
     onUpdate: (op, row) => {
-      if (op === "delete") rows.delete(row[idKey]);
-      else rows.set(row[idKey], row);
-      renderBody();
+      if (op === "insert") applyInsert(row);
+      else if (op === "delete") applyDelete(row);
+      else applyReplace(row);
     },
+  };
+
+  const subid = `mkui-table-${++_subCounter}`;
+  client.subscribe(spec.service, protocol, {
+    subid,
+    topic: spec.topic,
+    filter: spec.filter,
+    ...callbacks,
   });
 });

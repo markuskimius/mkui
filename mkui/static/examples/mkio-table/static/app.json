@@ -1,0 +1,62 @@
+{
+  "app": {
+    "title": "Order Book",
+    "theme": "dark"
+  },
+  "state": {
+    "status": { "message": "Connected" }
+  },
+  "menubar": [
+    {
+      "label": "Window",
+      "items": [
+        { "label": "Tile Horizontal", "action": "window.tileH" },
+        { "label": "Tile Vertical",   "action": "window.tileV" },
+        { "label": "Grid",            "action": "window.grid" },
+        { "label": "Cascade",         "action": "window.cascade" }
+      ]
+    }
+  ],
+  "statusbar": {
+    "left":  [{ "type": "text", "bind": "status.message" }],
+    "right": [{ "type": "text", "text": "mkio-table demo" }]
+  },
+  "panes": {
+    "all-orders": {
+      "title": "All Orders",
+      "type": "mkio-table",
+      "service": "all_orders",
+      "protocol": "query"
+    },
+    "pending": {
+      "title": "Pending",
+      "type": "mkio-table",
+      "service": "all_orders",
+      "protocol": "query",
+      "filter": "status == 'pending'",
+      "columns": ["id", "side", "symbol", "qty", "price", "status"]
+    },
+    "last-trade": {
+      "title": "Last Trade",
+      "type": "mkio-table",
+      "service": "last_trade",
+      "protocol": "subpub",
+      "topic": ["AAPL", "GOOG", "MSFT", "AMZN", "TSLA", "NVDA"]
+    }
+  },
+  "frames": [
+    {
+      "id": "main",
+      "x": 0.02, "y": 0.03, "w": 0.64, "h": 0.94,
+      "layout": { "type": "tabs", "active": 0, "children": ["all-orders", "pending"] }
+    },
+    {
+      "id": "sidebar",
+      "x": 0.68, "y": 0.03, "w": 0.30, "h": 0.55,
+      "layout": { "type": "tabs", "active": 0, "children": ["last-trade"] }
+    }
+  ],
+  "mkio": {
+    "url": "ws://localhost:8080/ws"
+  }
+}

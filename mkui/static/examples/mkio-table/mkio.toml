@@ -1,0 +1,42 @@
+port = 8080
+host = "0.0.0.0"
+db_path = ":memory:"
+
+[tables.orders]
+columns = { id = "INTEGER PRIMARY KEY AUTOINCREMENT", side = "TEXT NOT NULL", symbol = "TEXT NOT NULL", qty = "INTEGER", price = "REAL DEFAULT 0", status = "TEXT DEFAULT 'pending'" }
+
+# Write endpoint: place and manage orders
+[services.orders]
+protocol = "transaction"
+
+[services.orders.ops]
+new    = [{ table = "orders", op_type = "insert", fields = ["side", "symbol", "qty", "price"] }]
+fill   = [{ table = "orders", op_type = "update", key = ["id"], fields = ["status"], defaults = { status = "filled" } }]
+cancel = [{ table = "orders", op_type = "update", key = ["id"], fields = ["status"], defaults = { status = "cancelled" } }]
+
+# Live table of all orders (mkui subscribes here)
+[services.all_orders]
+protocol = "query"
+primary_table = "orders"
+filterable = ["status", "symbol"]
+
+# Last filled trade per symbol
+[services.last_trade]
+protocol = "subpub"
+primary_table = "orders"
+topic = "symbol"
+where = "status == 'filled'"
+
+[services.last_trade.publish]
+symbol = "symbol"
+side   = "side"
+price  = "price"
+qty    = "qty"
+
+[services.last_trade.defaults]
+symbol = "_mkio_topic"
+
+# Serve frontend: app at /, mkui framework assets at /mkui/
+[static]
+"/" = "./static"
+"/mkui" = "../../"

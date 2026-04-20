@@ -322,3 +322,24 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   font-weight: normal;
   position: sticky; top: 0;
 }
+
+/* ─── Table row/cell animations ─────────────────────────────────────── */
+
+@keyframes mkui-flash-in {
+  0%   { background: var(--mkui-accent); opacity: 0; }
+  30%  { background: var(--mkui-accent); opacity: 1; }
+  100% { background: transparent; opacity: 1; }
+}
+@keyframes mkui-flash-out {
+  0%   { background: #c0392b; opacity: 1; }
+  30%  { background: #c0392b; opacity: 1; }
+  100% { background: transparent; opacity: 0; }
+}
+@keyframes mkui-flash-update {
+  0%   { background: var(--mkui-accent); }
+  100% { background: transparent; }
+}
+
+.mkui-flash-in     { animation: mkui-flash-in 600ms ease forwards; }
+.mkui-flash-out    { animation: mkui-flash-out 600ms ease forwards; }
+.mkui-flash-update { animation: mkui-flash-update 600ms ease forwards; }

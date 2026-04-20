@@ -89,7 +89,7 @@ Minimal config:
   "statusbar": { "left": [{ "type": "text", "bind": "status.message" }] },
 
   "panes": {
-    "orders":    { "title": "Orders", "type": "mkio-table", "service": "all_orders" },
+    "orders":    { "title": "Orders", "type": "mkio-table", "service": "all_orders", "protocol": "query" },
     "chart":     { "title": "Chart",  "widgets": [{ "type": "text", "text": "Chart goes here" }] },
     "inspector": { "title": "Inspector", "widgets": [{ "type": "text", "text": "Properties" }] }
   },
@@ -184,7 +184,7 @@ root.workspace.addFrame({ x: 0.5, y: 0.1, w: 0.4, h: 0.4,
   - `text` — static or `bind`-ed to a state path
   - `button` — fires an action by name
 - Pane types (whole-pane custom rendering):
-  - `mkio-table` — subscribes to an mkio subpub service and renders rows
+  - `mkio-table` — subscribes to an mkio service (query, subpub, or stream) and renders a live-updating table with flash animations for inserts, deletes, and field changes
 - Custom pane types are the primary extensibility surface. Register with
   `registerPaneType(name, factory)`; reference from config as `type = "<name>"`.
 
@@ -242,7 +242,8 @@ mkui/                    Python package (pip install mkui)
     examples/
       standalone-json/   Loaded from a static config
       library-js/        Built imperatively from JS
+      mkio-table/        Live table backed by mkio query/subpub services
 pyproject.toml           Python build config
 package.json             JS dev tooling
-tests/layout.test.js     33 unit tests
+tests/layout.test.js     35 unit tests
 ```

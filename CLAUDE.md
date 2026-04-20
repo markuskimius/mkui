@@ -24,6 +24,8 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 - `mkui/static/src/components/frame.js` — frame chrome, internal tree rendering, splitter drag; also defines `<mkui-pane>`
 - `mkui/static/src/components/app.js` — shell: menubar + workspace + statusbar
 - `mkui/static/src/core.js` — `App`, `State` (reactive store), widget/pane-type registries
+- `mkui/static/src/widgets/mkio-table.js` — built-in `mkio-table` pane type: subscribes to mkio services, renders live tables
+- `mkui/static/src/mkio-bridge.js` — lazy-loads mkio's `/mkio.js` client from the server origin
 - `mkui/static/styles/mkui.css` — default theme via CSS custom properties
 
 ## Commands
@@ -31,13 +33,31 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 - `cd mkui/static && python3 -m http.server 8000` — serve examples locally
 - `node --test tests/layout.test.js` — run unit tests (node:test, no deps needed)
 - `python -m build && twine upload dist/*` — build and publish to PyPI
-- Examples at `mkui/static/examples/standalone-json/` and `mkui/static/examples/library-js/`
+- Examples at `mkui/static/examples/standalone-json/`, `mkui/static/examples/library-js/`, and `mkui/static/examples/mkio-table/`
 
 ## Config format
 
 Runtime input is JSON. TOML is parsed server-side by mkio (Python `tomllib`); the browser never needs a TOML parser.
 
 Top-level keys: `app`, `state`, `menubar`, `statusbar`, `panes` (id→spec), `frames` (ordered array with position + layout tree), `mkio` (optional).
+
+## mkio-table pane type
+
+Built-in pane type that subscribes to an mkio service and renders a live-updating table.
+
+Config keys (under `panes.<id>`):
+- `type` = `"mkio-table"` (required)
+- `service` — mkio service name to subscribe to (required)
+- `protocol` — `"query"` (default), `"subpub"`, or `"stream"`
+- `topic` — string or array of strings; required for subpub (one subscription per topic if array)
+- `filter` — mkio filter expression (query only)
+- `columns` — array of column names to display; defaults to all keys from the first row
+
+Row identity: query uses `_mkio_row`, subpub uses `_mkio_topic`. All `_mkio_*` columns are hidden from display.
+
+Animations: inserts flash blue and fade in, deletes flash red and fade out, field updates flash blue on the changed cell. CSS classes: `mkui-flash-in`, `mkui-flash-out`, `mkui-flash-update`.
+
+Each pane instance gets a unique `subid` for multiplexing multiple subscriptions to the same service on one WebSocket.
 
 ## Conventions
 
