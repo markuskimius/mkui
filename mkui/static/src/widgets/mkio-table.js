@@ -144,10 +144,31 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   };
 
   const subid = `mkui-table-${++_subCounter}`;
-  client.subscribe(spec.service, protocol, {
-    subid,
-    topic: spec.topic,
-    filter: spec.filter,
-    ...callbacks,
+  let subscribed = false;
+
+  function sub() {
+    if (subscribed) return;
+    subscribed = true;
+    rows.clear();
+    rowEls.clear();
+    tbody.innerHTML = "";
+    client.subscribe(spec.service, protocol, {
+      subid,
+      topic: spec.topic,
+      filter: spec.filter,
+      ...callbacks,
+    });
+  }
+
+  function unsub() {
+    if (!subscribed) return;
+    subscribed = false;
+    client.unsubscribe(subid);
+  }
+
+  const io = new IntersectionObserver((entries) => {
+    const visible = entries[0].intersectionRatio > 0;
+    if (visible) sub(); else unsub();
   });
+  io.observe(host);
 });

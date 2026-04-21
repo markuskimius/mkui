@@ -59,6 +59,8 @@ Animations: inserts flash blue and fade in, deletes flash red and fade out, fiel
 
 Each pane instance gets a unique `subid` for multiplexing multiple subscriptions to the same service on one WebSocket.
 
+Visibility-aware subscriptions: an `IntersectionObserver` on the pane content element detects when the pane becomes hidden (tab switch, frame close/park) and calls `client.unsubscribe(subid)`. When the pane reappears the subscription is re-established — table state is cleared first so the fresh server snapshot populates a clean table.
+
 ## Conventions
 
 - Zero runtime dependencies; Web Components for framework-agnostic use
