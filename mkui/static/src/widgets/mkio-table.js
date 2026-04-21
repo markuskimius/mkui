@@ -76,6 +76,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         insertRow(row);
       }
     }
+    maybeRestoreScroll();
   }
 
   function applyInsert(row) {
@@ -135,20 +136,34 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         else if (ch.op === "delete") applyDelete(ch.row);
         else applyReplace(ch.row);
       }
+      maybeRestoreScroll();
     },
     onUpdate: (op, row) => {
       if (op === "insert") applyInsert(row);
       else if (op === "delete") applyDelete(row);
       else applyReplace(row);
+      maybeRestoreScroll();
     },
   };
 
   const subid = `mkui-table-${++_subCounter}`;
   let subscribed = false;
+  let savedScrollTop = 0;
+  let restoreScrollTarget = 0;
+
+  host.addEventListener("scroll", () => { savedScrollTop = host.scrollTop; });
+
+  function maybeRestoreScroll() {
+    if (!restoreScrollTarget) return;
+    const target = restoreScrollTarget;
+    restoreScrollTarget = 0;
+    requestAnimationFrame(() => { host.scrollTop = target; });
+  }
 
   function sub() {
     if (subscribed) return;
     subscribed = true;
+    restoreScrollTarget = savedScrollTop;
     rows.clear();
     rowEls.clear();
     tbody.innerHTML = "";
