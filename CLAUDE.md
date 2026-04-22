@@ -12,7 +12,8 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 - Pane elements are pooled at the workspace level with stable identity — `appendChild` moves them between frames preserving state
 - Frame positions stored as fractions of the workspace; split ratios sum to 1 — proportional resize is automatic
 - Every frame move/resize passes through `clampToDock` — nothing escapes the viewport
-- Keyboard focus model: the top frame gets `[data-focused]` (set by `_applyZOrder`); each frame tracks an `_activeTabGroup` updated on any mousedown within a tab bar or pane. Hotkeys act on that frame + group.
+- Keyboard focus model: the top frame gets `[data-focused]` (set by `_applyZOrder`); each frame tracks an `_activeTabGroup` updated on any interaction within a tab bar or pane. Hotkeys act on that frame + group.
+- Tab drag: pointer events (mouse + touch) on tabs. Dragging within a bar shows a ghost label locked to the bar's Y axis with an accent drop indicator; reorder commits on release. Dragging outside the bar tears the pane out into a new frame. `touch-action: none` on `.mkui-tab` prevents scroll interference.
 - Theming: `dark` and `light` are styled by `mkui.css` via `[theme=...]`. Custom themes go in `config.app.themes[name]` as `{ "--mkui-*": value }` overrides; `MkuiApp.setTheme(name)` applies them as inline styles on the host.
 
 ## Key files
@@ -58,6 +59,12 @@ Row identity: query uses `_mkio_row`, subpub uses `_mkio_topic`. All `_mkio_*` c
 Animations: inserts flash blue and fade in, deletes flash red and fade out, field updates flash blue on the changed cell. CSS classes: `mkui-flash-in`, `mkui-flash-out`, `mkui-flash-update`.
 
 Each pane instance gets a unique `subid` for multiplexing multiple subscriptions to the same service on one WebSocket.
+
+Sorting: click a column header to cycle ascending → descending → none. Shift+click adds secondary sort keys for multi-column sort; priority shown with superscript numbers (▲¹ ▼²). Auto-detects numeric vs string comparison. New rows insert at the correct sorted position; sort state persists across resubscribes.
+
+Filtering: each column header has a ▾ dropdown button. Click to open a filter panel with a search input, "Select all"/"Clear" links, and checkboxes for each unique value. Changes apply immediately. Active filters show the ▾ in accent color. Multiple columns can be filtered independently. Filter state persists across resubscribes.
+
+Column reorder: drag a column header to move it. Uses pointer events for unified mouse and touch support (5px movement threshold distinguishes drag from click). A ghost label and accent-colored drop indicator show the target position. Reorder state persists across resubscribes via a `displayOrder` array separate from the data-derived `columns`.
 
 Visibility-aware subscriptions: an `IntersectionObserver` on the pane content element detects when the pane becomes hidden (tab switch, frame close/park) and calls `client.unsubscribe(subid)`. When the pane reappears the subscription is re-established — table state is cleared first so the fresh server snapshot populates a clean table.
 

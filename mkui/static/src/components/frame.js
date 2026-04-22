@@ -222,9 +222,8 @@ class MkuiFrame extends HTMLElement {
       labelEl.className = "mkui-tab-label";
       labelEl.textContent = label;
       tab.appendChild(labelEl);
-      tab.addEventListener("mousedown", (ev) => {
+      tab.addEventListener("pointerdown", (ev) => {
         if (ev.button !== 0) return;
-        ev.stopPropagation();
         this._workspace?._beginPaneDrag(ev, this, id, tabGroup, bar);
       });
       tabs.appendChild(tab);

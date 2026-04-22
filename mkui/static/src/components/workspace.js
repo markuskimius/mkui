@@ -536,18 +536,23 @@ class MkuiWorkspace extends HTMLElement {
 
   _beginPaneDrag(ev, sourceFrame, paneId, tabGroup, tabBarEl) {
     ev.preventDefault();
-    // Mark this group as the keyboard-focus target and re-render so the
-    // focused-tab-bar cue moves immediately on click (not only after drag).
+    this._raiseFrame(sourceFrame);
     if (sourceFrame._activeTabGroup !== tabGroup) {
       sourceFrame._activeTabGroup = tabGroup;
       sourceFrame._renderInternal();
     }
+
+    const pid = ev.pointerId;
     const startX = ev.clientX, startY = ev.clientY;
     let tornFrame = null;
     let drop = null;
-    // tabBarEl gets replaced on every _renderInternal (e.g. after an in-bar
-    // reorder), so we re-find the live element by its tagged _tabGroup.
     let liveBar = tabBarEl;
+    let ghost = null;
+    let indicator = null;
+    let inBarDrag = false;
+    let dropIdx = -1;
+    let grabOffsetX = 0;
+
     const findLiveBar = () => {
       for (const child of sourceFrame.bodyEl.children) {
         if (child.classList?.contains("mkui-tabbar") && child._tabGroup === tabGroup) return child;
@@ -555,11 +560,59 @@ class MkuiWorkspace extends HTMLElement {
       return null;
     };
 
+    const createGhost = () => {
+      const spec = this._panes.get(paneId);
+      const label = spec?.title ?? paneId;
+      ghost = document.createElement("div");
+      ghost.className = "mkui-tab-drag-ghost";
+      ghost.textContent = label;
+      this.appendChild(ghost);
+      indicator = document.createElement("div");
+      indicator.className = "mkui-tab-drop-indicator";
+      this.appendChild(indicator);
+      const tabs = liveBar.querySelectorAll(".mkui-tab");
+      const idx = tabGroup.children.indexOf(paneId);
+      if (idx >= 0 && idx < tabs.length) {
+        grabOffsetX = startX - tabs[idx].getBoundingClientRect().left;
+        tabs[idx].classList.add("dragging");
+      }
+    };
+
+    const destroyGhost = () => {
+      if (ghost) { ghost.remove(); ghost = null; }
+      if (indicator) { indicator.remove(); indicator = null; }
+      liveBar?.querySelectorAll(".mkui-tab.dragging")
+        .forEach((t) => t.classList.remove("dragging"));
+    };
+
+    const calcDropIdx = (clientX) => {
+      const tabs = liveBar.querySelectorAll(".mkui-tab");
+      for (let i = 0; i < tabs.length; i++) {
+        const r = tabs[i].getBoundingClientRect();
+        if (clientX < r.left + r.width / 2) return i;
+      }
+      return tabs.length;
+    };
+
+    const updateIndicator = () => {
+      const tabs = liveBar.querySelectorAll(".mkui-tab");
+      const barRect = liveBar.getBoundingClientRect();
+      let x;
+      if (dropIdx < tabs.length) x = tabs[dropIdx].getBoundingClientRect().left;
+      else if (tabs.length > 0) x = tabs[tabs.length - 1].getBoundingClientRect().right;
+      else x = barRect.left;
+      Object.assign(indicator.style, {
+        position: "fixed",
+        left: (x - 1) + "px",
+        top: barRect.top + "px",
+        height: barRect.height + "px",
+        zIndex: "10002",
+      });
+    };
+
     const tearOut = (e) => {
-      // 1. Remove pane from source tree.
       const newSourceTree = removePane(sourceFrame.getTree(), paneId);
       sourceFrame.setTree(newSourceTree);
-      // 2. Create a new frame at the cursor holding just that pane.
       const wr = this.getBoundingClientRect();
       const ws = { x: 0, y: 0, w: this.clientWidth, h: this.clientHeight };
       const w = 360, h = 260;
@@ -569,25 +622,10 @@ class MkuiWorkspace extends HTMLElement {
       tornFrame = this._createFrameFor(paneId, frac);
     };
 
-    const reorderAt = (clientX) => {
-      const tabs = liveBar.querySelectorAll(".mkui-tab");
-      if (tabs.length < 2) return;
-      let targetIdx = tabs.length - 1;
-      for (let i = 0; i < tabs.length; i++) {
-        const r = tabs[i].getBoundingClientRect();
-        if (clientX < r.left + r.width / 2) { targetIdx = i; break; }
-      }
-      const curIdx = tabGroup.children.indexOf(paneId);
-      if (curIdx < 0 || targetIdx === curIdx) return;
-      tabGroup.children.splice(curIdx, 1);
-      tabGroup.children.splice(targetIdx, 0, paneId);
-      tabGroup.active = targetIdx;
-      sourceFrame._renderInternal();
-      liveBar = findLiveBar() ?? liveBar;
-    };
-
     const onMove = (e) => {
-      if (!tornFrame) {
+      if (e.pointerId !== pid) return;
+
+      if (!tornFrame && !inBarDrag) {
         const dist = Math.hypot(e.clientX - startX, e.clientY - startY);
         if (dist < 6) return;
         const fresh = findLiveBar();
@@ -597,41 +635,85 @@ class MkuiWorkspace extends HTMLElement {
           e.clientX < bar.left - 4 || e.clientX > bar.right + 4 ||
           e.clientY < bar.top - 8  || e.clientY > bar.bottom + 8;
         if (outside) { tearOut(e); return; }
-        reorderAt(e.clientX);
+        inBarDrag = true;
+        createGhost();
+      }
+
+      if (inBarDrag) {
+        const bar = liveBar.getBoundingClientRect();
+        Object.assign(ghost.style, {
+          position: "fixed",
+          left: (e.clientX - grabOffsetX) + "px",
+          top: bar.top + "px",
+          zIndex: "10002",
+        });
+        const outside =
+          e.clientX < bar.left - 4 || e.clientX > bar.right + 4 ||
+          e.clientY < bar.top - 8  || e.clientY > bar.bottom + 8;
+        if (outside) {
+          destroyGhost();
+          inBarDrag = false;
+          tearOut(e);
+          return;
+        }
+        dropIdx = calcDropIdx(e.clientX);
+        updateIndicator();
         return;
       }
 
-      // Drag the torn frame by its (invisible) titlebar pivot.
-      const wr = this.getBoundingClientRect();
-      const ws = { x: 0, y: 0, w: this.clientWidth, h: this.clientHeight };
-      const el = this._frameEls.get(tornFrame.id);
-      const spec = tornFrame;
-      const start = fracToRect({ xFrac: spec.x, yFrac: spec.y, wFrac: spec.w, hFrac: spec.h }, ws);
-      const clamped = clampToDock(
-        { x: e.clientX - wr.left - 120, y: e.clientY - wr.top - 14, w: start.w, h: start.h },
-        ws,
-      );
-      const frac = rectToFrac(clamped, ws);
-      spec.x = frac.xFrac; spec.y = frac.yFrac;
-      Object.assign(el.style, { left: clamped.x + "px", top: clamped.y + "px" });
+      if (tornFrame) {
+        const wr = this.getBoundingClientRect();
+        const ws = { x: 0, y: 0, w: this.clientWidth, h: this.clientHeight };
+        const el = this._frameEls.get(tornFrame.id);
+        const spec = tornFrame;
+        const start = fracToRect({ xFrac: spec.x, yFrac: spec.y, wFrac: spec.w, hFrac: spec.h }, ws);
+        const clamped = clampToDock(
+          { x: e.clientX - wr.left - 120, y: e.clientY - wr.top - 14, w: start.w, h: start.h },
+          ws,
+        );
+        const frac = rectToFrac(clamped, ws);
+        spec.x = frac.xFrac; spec.y = frac.yFrac;
+        Object.assign(el.style, { left: clamped.x + "px", top: clamped.y + "px" });
 
-      drop = this._hitTestForDrop(el, e.clientX, e.clientY);
-      if (drop) this._showDropOverlay(drop.previewRect);
-      else this._hideDropOverlay();
+        drop = this._hitTestForDrop(el, e.clientX, e.clientY);
+        if (drop) this._showDropOverlay(drop.previewRect);
+        else this._hideDropOverlay();
+      }
     };
 
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+    const finish = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", finish);
+      destroyGhost();
       this._hideDropOverlay();
+    };
 
-      if (!tornFrame) {
-        // Pure click: activate this tab.
+    const onUp = (e) => {
+      if (e.pointerId !== pid) return;
+      finish();
+
+      if (!tornFrame && !inBarDrag) {
         const i = tabGroup.children.indexOf(paneId);
         if (i >= 0 && i !== tabGroup.active) {
           tabGroup.active = i;
           sourceFrame._renderInternal();
         }
+        return;
+      }
+
+      if (inBarDrag) {
+        const curIdx = tabGroup.children.indexOf(paneId);
+        const effective = dropIdx > curIdx ? dropIdx - 1 : dropIdx;
+        if (effective !== curIdx && effective >= 0 && effective < tabGroup.children.length) {
+          tabGroup.children.splice(curIdx, 1);
+          tabGroup.children.splice(effective, 0, paneId);
+          tabGroup.active = effective;
+        } else {
+          tabGroup.active = curIdx;
+        }
+        sourceFrame._activeTabGroup = tabGroup;
+        sourceFrame._renderInternal();
         return;
       }
 
@@ -644,8 +726,9 @@ class MkuiWorkspace extends HTMLElement {
       }
     };
 
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", finish);
   }
 
   _createFrameFor(paneId, frac) {
