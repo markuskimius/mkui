@@ -1,5 +1,10 @@
 # mkui
 
+[![PyPI](https://img.shields.io/pypi/v/mkui)](https://pypi.org/project/mkui/)
+[![Python](https://img.shields.io/pypi/pyversions/mkui)](https://pypi.org/project/mkui/)
+[![License](https://img.shields.io/pypi/l/mkui)](https://github.com/markuskimius/mkui/blob/main/LICENSE)
+[![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)]()
+
 A config-driven, dependency-free web GUI framework with a floating-frame
 workspace and dockable panes inside each frame. Designed to pair with
 [mkio](../mkio) — the same project's TOML-driven microservice backend —
