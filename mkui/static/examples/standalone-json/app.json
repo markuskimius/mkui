@@ -18,8 +18,13 @@
     {
       "label": "Window",
       "items": [
-        { "label": "Cascade", "action": "window.cascade" },
+        { "label": "Explorer",  "action": "pane.show", "args": "explorer" },
+        { "label": "Editor",    "action": "pane.show", "args": "editor" },
+        { "label": "Preview",   "action": "pane.show", "args": "preview" },
+        { "label": "Console",   "action": "pane.show", "args": "console" },
+        { "label": "Inspector", "action": "pane.show", "args": "inspector" },
         { "sep": true },
+        { "label": "Cascade", "action": "window.cascade" },
         {
           "label": "Tile",
           "items": [

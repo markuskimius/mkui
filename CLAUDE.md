@@ -42,6 +42,19 @@ Runtime input is JSON. TOML is parsed server-side by mkio (Python `tomllib`); th
 
 Top-level keys: `app`, `state`, `menubar`, `statusbar`, `panes` (id→spec), `frames` (ordered array with position + layout tree), `mkio` (optional).
 
+## Menubar
+
+`menubar` is a top-level array. Each element has `label` (dropdown name) and `items` (array of menu items).
+
+Item keys:
+- `label` — display text
+- `action` — action name fired on click (leaf items only)
+- `args` — optional argument passed to action handler
+- `items` — child array; presence makes it a nested submenu (opens on hover, nests arbitrarily)
+- `sep` — `true` renders a separator line
+
+Leaf items fire `app.fireAction(action, args)` on mouseup. Built-in actions: `app.quit`, `pane.show` (takes pane ID — switches to its tab and raises the frame, or opens a new frame if parked), `window.tileH`, `window.tileV`, `window.grid`, `window.cascade`. Custom actions registered with `app.registerAction(name, fn)`.
+
 ## mkio-table pane type
 
 Built-in pane type that subscribes to an mkio service and renders a live-updating table.
@@ -72,6 +85,6 @@ Visibility-aware subscriptions: an `IntersectionObserver` on the pane content el
 
 - Zero runtime dependencies; Web Components for framework-agnostic use
 - `registerPaneType(name, factory)` for custom content; `registerWidget(name, factory)` for lightweight inline widgets
-- Built-in actions prefixed `window.*` (tileH, tileV, grid, cascade) and `app.*` (quit)
+- Built-in actions prefixed `pane.*` (show), `window.*` (tileH, tileV, grid, cascade), and `app.*` (quit)
 - Layout tree invariant: every leaf sits inside a `{ type: "tabs", children: [...] }` — never bare strings after normalize
 - Tests use `node:test` + `node:assert/strict`; no test framework dependency

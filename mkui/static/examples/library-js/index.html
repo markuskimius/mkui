@@ -37,6 +37,10 @@
           { label: "Quit", action: "app.quit" },
         ]},
         { label: "Window", items: [
+          { label: "Clock",  action: "pane.show", args: "clock" },
+          { label: "Notes",  action: "pane.show", args: "notes" },
+          { label: "Readme", action: "pane.show", args: "readme" },
+          { sep: true },
           { label: "Tile Horizontal",  action: "window.tileH" },
           { label: "Tile Vertical",    action: "window.tileV" },
           { label: "Tile Grid",        action: "window.grid" },

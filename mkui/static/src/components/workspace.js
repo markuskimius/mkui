@@ -14,8 +14,8 @@
 
 import "./frame.js";
 import { getPaneType, getWidget } from "../core.js";
-import { clampToDock, rectToFrac, fracToRect, dropZoneFor, previewRect, snapMove, snapResize } from "../layout/drag.js";
-import { layout, insertPane, removePane, firstTabGroup } from "../layout/tree.js";
+import { clampToDock, rectToFrac, fracToRect, dropZoneFor, previewRect, snapMove, snapResize, cascadePosition } from "../layout/drag.js";
+import { layout, insertPane, removePane, findPane, firstTabGroup } from "../layout/tree.js";
 
 class MkuiWorkspace extends HTMLElement {
   constructor() {
@@ -244,6 +244,28 @@ class MkuiWorkspace extends HTMLElement {
     this._layoutFrames();
     this._applyZOrder();
     return s.id;
+  }
+
+  showPane(paneId) {
+    if (!this._panes.has(paneId)) return;
+    for (const spec of this._frames) {
+      const el = this._frameEls.get(spec.id);
+      if (!el) continue;
+      const hit = findPane(el.getTree(), paneId);
+      if (hit) {
+        hit.tabGroup.active = hit.tabIndex;
+        el._renderInternal();
+        this._raiseFrame(el);
+        return;
+      }
+    }
+    const w = 0.4, h = 0.4;
+    const top = this._frames[this._frames.length - 1] ?? null;
+    const { x, y } = cascadePosition(top, w, h);
+    this.addFrame({
+      x, y, w, h,
+      layout: { type: "tabs", active: 0, children: [paneId] },
+    });
   }
 
   // Window arrangement ─────────────────────────────────────────────────────

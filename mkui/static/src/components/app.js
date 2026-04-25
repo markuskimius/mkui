@@ -56,6 +56,7 @@ class MkuiApp extends HTMLElement {
     this._app.registerAction("window.tileV",    () => ws.arrangeVertical());
     this._app.registerAction("window.grid",     () => ws.arrangeGrid());
     this._app.registerAction("window.cascade",  () => ws.arrangeCascade());
+    this._app.registerAction("pane.show",       (app, id) => ws.showPane(id));
 
     this._menubar.setApp(this._app);
     this._workspace.setApp(this._app);

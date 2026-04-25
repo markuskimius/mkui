@@ -8,6 +8,7 @@ import {
 import {
   clampToDock, rectToFrac, fracToRect, dropZoneFor,
   snapMove, snapResize, SNAP_THRESHOLD,
+  cascadePosition, CASCADE_STEP,
 } from "../mkui/static/src/layout/drag.js";
 
 // ── normalize ────────────────────────────────────────────────────────────
@@ -313,7 +314,39 @@ test("snapResize snaps south edge", () => {
   assert.equal(snapped.h, 300);
 });
 
-// ── end-to-end docking flow ──────────────────────────────────────────────
+// ── cascade placement ───────────────────────────────────────────────────
+
+test("cascadePosition defaults to (0.2, 0.2) with no top frame", () => {
+  const pos = cascadePosition(null, 0.4, 0.4);
+  assert.equal(pos.x, 0.2);
+  assert.equal(pos.y, 0.2);
+});
+
+test("cascadePosition offsets from the top frame by CASCADE_STEP", () => {
+  const pos = cascadePosition({ x: 0.1, y: 0.1 }, 0.4, 0.4);
+  assert.equal(pos.x, 0.1 + CASCADE_STEP);
+  assert.equal(pos.y, 0.1 + CASCADE_STEP);
+});
+
+test("cascadePosition wraps x when frame would exceed right edge", () => {
+  const pos = cascadePosition({ x: 0.58, y: 0.1 }, 0.4, 0.4);
+  assert.equal(pos.x, CASCADE_STEP);
+  assert.equal(pos.y, 0.1 + CASCADE_STEP);
+});
+
+test("cascadePosition wraps y when frame would exceed bottom edge", () => {
+  const pos = cascadePosition({ x: 0.1, y: 0.58 }, 0.4, 0.4);
+  assert.equal(pos.x, 0.1 + CASCADE_STEP);
+  assert.equal(pos.y, CASCADE_STEP);
+});
+
+test("cascadePosition wraps both axes independently", () => {
+  const pos = cascadePosition({ x: 0.58, y: 0.58 }, 0.4, 0.4);
+  assert.equal(pos.x, CASCADE_STEP);
+  assert.equal(pos.y, CASCADE_STEP);
+});
+
+// ── end-to-end docking flow ───────────────────���──────────────────────────
 
 test("tear-out → drop-right flow preserves all panes", () => {
   // Start: frame with two tabs [a, b]. Tear b out, then drop b onto a's right edge.

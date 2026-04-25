@@ -8,6 +8,19 @@
   },
   "menubar": [
     {
+      "label": "Orders",
+      "items": [
+        { "label": "All Orders", "action": "pane.show", "args": "all-orders" },
+        { "label": "Pending",    "action": "pane.show", "args": "pending" }
+      ]
+    },
+    {
+      "label": "Trades",
+      "items": [
+        { "label": "Last Trade", "action": "pane.show", "args": "last-trade" }
+      ]
+    },
+    {
       "label": "Window",
       "items": [
         { "label": "Tile Horizontal", "action": "window.tileH" },

@@ -122,6 +122,22 @@ function nearest(edge, lines, threshold) {
   return bestDist <= threshold ? best : 0;
 }
 
+// ─── Cascade placement ──────────────────────────────────────────────
+// Pick a position for a new frame by offsetting from an existing one.
+// Returns { x, y } in fractional coordinates. Wraps to avoid going
+// off-screen given the frame's size (w, h also fractional).
+
+export const CASCADE_STEP = 0.03;
+
+export function cascadePosition(topFrame, w, h, step = CASCADE_STEP) {
+  if (!topFrame) return { x: 0.2, y: 0.2 };
+  let x = topFrame.x + step;
+  let y = topFrame.y + step;
+  if (x + w > 1) x = step;
+  if (y + h > 1) y = step;
+  return { x, y };
+}
+
 // ─── Drop preview ───────────────────────────────────────────────────────
 
 // Return the on-screen overlay rect that previews where the window will land

@@ -113,6 +113,70 @@ Minimal config:
 
 Frame positions (`x`, `y`, `w`, `h`) are fractions of the workspace rect.
 
+## Menubar
+
+`menubar` is a top-level array. Each element is a dropdown menu with a
+`label` and an `items` array:
+
+```json
+"menubar": [
+  {
+    "label": "File",
+    "items": [
+      { "label": "New Frame", "action": "demo.newFrame" },
+      { "sep": true },
+      { "label": "Open Recent", "items": [
+          { "label": "foo.txt", "action": "demo.open", "args": "foo.txt" }
+        ]
+      },
+      { "label": "Quit", "action": "app.quit" }
+    ]
+  },
+  {
+    "label": "Window",
+    "items": [
+      { "label": "Cascade", "action": "window.cascade" },
+      { "label": "Tile", "items": [
+          { "label": "Horizontal", "action": "window.tileH" },
+          { "label": "Vertical",   "action": "window.tileV" },
+          { "label": "Grid",       "action": "window.grid" }
+        ]
+      }
+    ]
+  }
+]
+```
+
+Item keys:
+
+| Key | Type | Description |
+|---|---|---|
+| `label` | string | Display text |
+| `action` | string | Action name fired on click (leaf items only) |
+| `args` | any | Optional argument passed to the action handler |
+| `items` | array | Child items — makes this a submenu (opens on hover) |
+| `sep` | boolean | `true` renders a horizontal separator line |
+
+Any item with an `items` array is a submenu; submenus nest arbitrarily.
+Leaf items (no `items`) fire `action` on click via `app.fireAction()`.
+
+**Built-in actions:** `app.quit`, `pane.show` (takes a pane ID as
+`args` — switches to that pane's tab and raises its frame, or opens a
+new frame if the pane is parked/closed), `window.tileH`, `window.tileV`,
+`window.grid`, `window.cascade`. Register custom actions with
+`app.registerAction(name, fn)`.
+
+A typical Window menu lists each pane for quick access:
+
+```json
+{ "label": "Window", "items": [
+  { "label": "Explorer",  "action": "pane.show", "args": "explorer" },
+  { "label": "Console",   "action": "pane.show", "args": "console" },
+  { "sep": true },
+  { "label": "Cascade",   "action": "window.cascade" }
+]}
+```
+
 ## Themes
 
 `dark` and `light` are built-in. To ship additional themes, list them under
