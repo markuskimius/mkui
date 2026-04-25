@@ -134,7 +134,8 @@ the stylesheet default.
 ## mkio connection state
 
 When `config.mkio.url` is set, `<mkui-app>` automatically connects to the
-mkio server and tracks connection lifecycle. The optional `connected` and
+mkio server and tracks connection lifecycle — including the initial
+connection, not just reconnections. The optional `connected` and
 `disconnected` keys are state maps — on each event, every entry is applied
 via `state.set(path, value)`:
 

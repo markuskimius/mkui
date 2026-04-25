@@ -61,7 +61,9 @@ Leaf items fire `app.fireAction(action, args)` on mouseup. Built-in actions: `ap
 
 ## mkio connection state
 
-When `config.mkio.url` is present, `<mkui-app>` eagerly calls `ensureMkio` with `onConnect`/`onDisconnect` callbacks. The optional `config.mkio.connected` and `config.mkio.disconnected` are state maps (object of `"state.path": value` entries) applied on each lifecycle event. Defaults: `{ "status.message": "Connected" }` / `{ "status.message": "Disconnected" }`. Combine with `statusbar.bindStyle` for visual feedback (e.g., changing statusbar background on disconnect).
+When `config.mkio.url` is present, `<mkui-app>` calls `ensureMkio` with `onConnect`/`onDisconnect` callbacks **before** setting up menubar, workspace, and statusbar components. This ordering is load-bearing: pane factories (e.g., `mkio-table`) also call `ensureMkio`, and the bridge caches the first caller's promise — so the app's call must come first to ensure lifecycle callbacks are registered. The bridge also explicitly fires `onConnect` after the initial `client.connect()` resolves, since `MkioClient` may only fire it on reconnections.
+
+The optional `config.mkio.connected` and `config.mkio.disconnected` are state maps (object of `"state.path": value` entries) applied on each lifecycle event. Defaults: `{ "status.message": "Connected" }` / `{ "status.message": "Disconnected" }`. Combine with `statusbar.bindStyle` for visual feedback (e.g., changing statusbar background on disconnect).
 
 ## mkio-table pane type
 

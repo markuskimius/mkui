@@ -140,3 +140,30 @@ test("App without config.state starts with empty state", () => {
   const app = new App({});
   assert.equal(app.state.get("anything"), undefined);
 });
+
+// ── Multi-field connection state maps ──────────────────────────────────
+
+test("connected map with null values clears fields for subscribers", () => {
+  const s = new State({
+    status: { message: "Connecting...", color: "#000", background: "#b8b8b8" },
+  });
+
+  const msgs = [], colors = [], bgs = [];
+  s.subscribe("status.message", (v) => msgs.push(v));
+  s.subscribe("status.color", (v) => colors.push(v));
+  s.subscribe("status.background", (v) => bgs.push(v));
+
+  const apply = (map) => {
+    for (const [path, value] of Object.entries(map)) s.set(path, value);
+  };
+
+  apply({ "status.message": "Connected", "status.color": null, "status.background": null });
+  assert.deepEqual(msgs, ["Connecting...", "Connected"]);
+  assert.deepEqual(colors, ["#000", null]);
+  assert.deepEqual(bgs, ["#b8b8b8", null]);
+
+  apply({ "status.message": "Disconnected", "status.color": "#000", "status.background": "#b8b8b8" });
+  assert.deepEqual(msgs, ["Connecting...", "Connected", "Disconnected"]);
+  assert.deepEqual(colors, ["#000", null, "#000"]);
+  assert.deepEqual(bgs, ["#b8b8b8", null, "#b8b8b8"]);
+});

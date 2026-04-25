@@ -24,6 +24,7 @@ async function loadAndConnect(wsUrl, opts) {
   }
   const client = new window.MkioClient(wsUrl, opts);
   await client.connect();
+  opts.onConnect?.();
   cachedClient = client;
   return client;
 }

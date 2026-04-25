@@ -4,7 +4,7 @@
     "theme": "dark"
   },
   "state": {
-    "status": { "message": "Connecting...", "background": "#858585" }
+    "status": { "message": "Connecting...", "color": "#000000", "background": "#b8b8b8" }
   },
   "menubar": [
     {

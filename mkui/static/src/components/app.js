@@ -59,10 +59,6 @@ class MkuiApp extends HTMLElement {
     this._app.registerAction("window.cascade",  () => ws.arrangeCascade());
     this._app.registerAction("pane.show",       (app, id) => ws.showPane(id));
 
-    this._menubar.setApp(this._app);
-    this._workspace.setApp(this._app);
-    this._statusbar.setApp(this._app);
-
     if (config.mkio?.url) {
       const st = this._app.state;
       const apply = (map) => {
@@ -74,6 +70,10 @@ class MkuiApp extends HTMLElement {
         onDisconnect: () => apply(config.mkio.disconnected ?? { "status.message": "Disconnected" }),
       });
     }
+
+    this._menubar.setApp(this._app);
+    this._workspace.setApp(this._app);
+    this._statusbar.setApp(this._app);
   }
 
   // Apply a named theme. Built-in names ("dark", "light") are styled by
