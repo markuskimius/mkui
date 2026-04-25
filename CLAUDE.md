@@ -32,7 +32,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 ## Commands
 
 - `cd mkui/static && python3 -m http.server 8000` — serve examples locally
-- `node --test tests/layout.test.js` — run unit tests (node:test, no deps needed)
+- `node --test tests/layout.test.js tests/state.test.js` — run unit tests (node:test, no deps needed)
 - `python -m build && twine upload dist/*` — build and publish to PyPI
 - Examples at `mkui/static/examples/standalone-json/`, `mkui/static/examples/library-js/`, and `mkui/static/examples/mkio-table/`
 
@@ -54,6 +54,14 @@ Item keys:
 - `sep` — `true` renders a separator line
 
 Leaf items fire `app.fireAction(action, args)` on mouseup. Built-in actions: `app.quit`, `pane.show` (takes pane ID — switches to its tab and raises the frame, or opens a new frame if parked), `window.tileH`, `window.tileV`, `window.grid`, `window.cascade`. Custom actions registered with `app.registerAction(name, fn)`.
+
+## Statusbar
+
+`statusbar` config keys: `left` (widget array), `right` (widget array), `bindStyle` (optional object mapping CSS property names to state paths). `bindStyle` subscribes to each state path and applies the value as an inline style on `<mkui-statusbar>`. Setting a state value to `null` removes the inline override (reverts to stylesheet default).
+
+## mkio connection state
+
+When `config.mkio.url` is present, `<mkui-app>` eagerly calls `ensureMkio` with `onConnect`/`onDisconnect` callbacks. The optional `config.mkio.connected` and `config.mkio.disconnected` are state maps (object of `"state.path": value` entries) applied on each lifecycle event. Defaults: `{ "status.message": "Connected" }` / `{ "status.message": "Disconnected" }`. Combine with `statusbar.bindStyle` for visual feedback (e.g., changing statusbar background on disconnect).
 
 ## mkio-table pane type
 

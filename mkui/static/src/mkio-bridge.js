@@ -8,13 +8,13 @@
 let loadingPromise = null;
 let cachedClient = null;
 
-export async function ensureMkio(wsUrl) {
+export async function ensureMkio(wsUrl, opts = {}) {
   if (cachedClient) return cachedClient;
-  if (!loadingPromise) loadingPromise = loadAndConnect(wsUrl);
+  if (!loadingPromise) loadingPromise = loadAndConnect(wsUrl, opts);
   return loadingPromise;
 }
 
-async function loadAndConnect(wsUrl) {
+async function loadAndConnect(wsUrl, opts) {
   const httpOrigin = wsUrl.replace(/^ws/, "http").replace(/\/ws.*$/, "");
   if (typeof window.MkioClient === "undefined") {
     await injectScript(httpOrigin + "/mkio.js");
@@ -22,7 +22,7 @@ async function loadAndConnect(wsUrl) {
   if (typeof window.MkioClient === "undefined") {
     throw new Error(`[mkui] failed to load MkioClient from ${httpOrigin}/mkio.js`);
   }
-  const client = new window.MkioClient(wsUrl);
+  const client = new window.MkioClient(wsUrl, opts);
   await client.connect();
   cachedClient = client;
   return client;

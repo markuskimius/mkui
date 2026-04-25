@@ -7,6 +7,7 @@
 // single docked tree. Docking happens inside each frame.
 
 import { App } from "../core.js";
+import { ensureMkio } from "../mkio-bridge.js";
 import "./menubar.js";
 import "./statusbar.js";
 import "./workspace.js";
@@ -61,6 +62,18 @@ class MkuiApp extends HTMLElement {
     this._menubar.setApp(this._app);
     this._workspace.setApp(this._app);
     this._statusbar.setApp(this._app);
+
+    if (config.mkio?.url) {
+      const st = this._app.state;
+      const apply = (map) => {
+        for (const [path, value] of Object.entries(map))
+          st.set(path, value);
+      };
+      ensureMkio(config.mkio.url, {
+        onConnect:    () => apply(config.mkio.connected ?? { "status.message": "Connected" }),
+        onDisconnect: () => apply(config.mkio.disconnected ?? { "status.message": "Disconnected" }),
+      });
+    }
   }
 
   // Apply a named theme. Built-in names ("dark", "light") are styled by

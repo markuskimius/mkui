@@ -113,6 +113,43 @@ Minimal config:
 
 Frame positions (`x`, `y`, `w`, `h`) are fractions of the workspace rect.
 
+## Statusbar
+
+`statusbar` is a top-level object with `left` and `right` widget arrays,
+plus an optional `bindStyle` map that binds CSS properties to state paths:
+
+```json
+"statusbar": {
+  "left":  [{ "type": "text", "bind": "status.message" }],
+  "right": [{ "type": "text", "text": "v0.1" }],
+  "bindStyle": { "background": "status.background", "color": "status.color" }
+}
+```
+
+Each `bindStyle` entry subscribes to the given state path. When the value
+changes, the CSS property is set as an inline style on `<mkui-statusbar>`.
+Setting the state value to `null` removes the inline override, reverting to
+the stylesheet default.
+
+## mkio connection state
+
+When `config.mkio.url` is set, `<mkui-app>` automatically connects to the
+mkio server and tracks connection lifecycle. The optional `connected` and
+`disconnected` keys are state maps — on each event, every entry is applied
+via `state.set(path, value)`:
+
+```json
+"mkio": {
+  "url": "ws://localhost:8080/ws",
+  "connected":    { "status.message": "Connected", "status.background": null },
+  "disconnected": { "status.message": "Disconnected", "status.background": "#858585" }
+}
+```
+
+If omitted, the defaults are `{ "status.message": "Connected" }` and
+`{ "status.message": "Disconnected" }`. Combine with `statusbar.bindStyle`
+to change the statusbar appearance on disconnect.
+
 ## Menubar
 
 `menubar` is a top-level array. Each element is a dropdown menu with a
@@ -309,5 +346,6 @@ mkui/                    Python package (pip install mkui)
       mkio-table/        Live table backed by mkio query/subpub services
 pyproject.toml           Python build config
 package.json             JS dev tooling
-tests/layout.test.js     35 unit tests
+tests/layout.test.js     40 layout unit tests
+tests/state.test.js      15 state + connection lifecycle tests
 ```

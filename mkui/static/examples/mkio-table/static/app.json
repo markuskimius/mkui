@@ -4,7 +4,7 @@
     "theme": "dark"
   },
   "state": {
-    "status": { "message": "Connected" }
+    "status": { "message": "Connecting...", "background": "#858585" }
   },
   "menubar": [
     {
@@ -32,7 +32,8 @@
   ],
   "statusbar": {
     "left":  [{ "type": "text", "bind": "status.message" }],
-    "right": [{ "type": "text", "text": "mkio-table demo" }]
+    "right": [{ "type": "text", "text": "mkio-table demo" }],
+    "bindStyle": { "color": "status.color", "background": "status.background" }
   },
   "panes": {
     "all-orders": {
@@ -70,6 +71,8 @@
     }
   ],
   "mkio": {
-    "url": "ws://localhost:8080/ws"
+    "url": "ws://localhost:8080/ws",
+    "connected":    { "status.message": "Connected", "status.color": null, "status.background": null },
+    "disconnected": { "status.message": "Disconnected", "status.color": "#000000", "status.background": "#b8b8b8" }
   }
 }
