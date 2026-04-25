@@ -6,7 +6,7 @@
 
 A config-driven, dependency-free web GUI framework with a floating-frame
 workspace and dockable panes inside each frame. Designed to pair with
-[mkio](../mkio) — the same project's TOML-driven microservice backend —
+[mkio](https://pypi.org/project/mkio/) — the same project's TOML-driven microservice backend —
 but works against any backend (or none at all).
 
 ## Model
