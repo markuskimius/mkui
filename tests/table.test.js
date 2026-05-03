@@ -92,6 +92,7 @@ let ioCallbacks = [];
 globalThis.IntersectionObserver = class {
   constructor(cb) { this._cb = cb; ioCallbacks.push(cb); }
   observe() {}
+  disconnect() {}
 };
 
 let fakeClient;

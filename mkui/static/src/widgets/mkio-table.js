@@ -623,7 +623,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   let pageHasMore = false;
 
   function loadPage(n) {
-    client.unsubscribe(subid);
+    unsub();
     subscribed = true;
     rows.clear();
     rowEls.clear();
@@ -682,6 +682,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   if (paneEl) {
     paneEl.addEventListener("mkui-pane-close", () => {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+      io.disconnect();
       unsub();
     });
   }
