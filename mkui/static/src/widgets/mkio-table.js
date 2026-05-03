@@ -584,6 +584,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   const subid = `mkui-table-${++_subCounter}`;
   let subscribed = false;
+  let closed = false;
   let liveMode = !isPaged;
   let savedScrollTop = 0;
   let restoreScrollTarget = 0;
@@ -598,7 +599,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function sub() {
-    if (subscribed) return;
+    if (closed || subscribed) return;
     subscribed = true;
     ++snapshotGen;
     restoreScrollTarget = savedScrollTop;
@@ -623,6 +624,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   let pageHasMore = false;
 
   function loadPage(n) {
+    if (closed) return;
     unsub();
     subscribed = true;
     rows.clear();
@@ -682,8 +684,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   if (paneEl) {
     paneEl.addEventListener("mkui-pane-close", () => {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+      closed = true;
       io.disconnect();
-      unsub();
+      subscribed = false;
+      client.unsubscribe(subid);
     });
   }
 

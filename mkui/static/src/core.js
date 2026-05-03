@@ -4,7 +4,7 @@
 // The state store is intentionally tiny: it's a Proxy over a plain object,
 // supports dot-path get/set, and notifies subscribers per path.
 
-export const VERSION = "0.1.15";
+export const VERSION = "0.1.16";
 export function version() { return VERSION; }
 
 const widgetTypes = new Map();

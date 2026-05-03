@@ -511,6 +511,20 @@ test("close event unsubs paged stream immediately", async () => {
   assert.equal(fakeClient.calls[callsBefore].type, "unsubscribe");
 });
 
+test("closed flag prevents re-subscription after close", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeRows(50), { hasmore: true, ref: "r" });
+
+  const paneEl = host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+  const callsAfterClose = fakeClient.calls.length;
+
+  triggerVisible(io);
+  assert.equal(fakeClient.calls.length, callsAfterClose,
+    "no new subscribe after close");
+});
+
 /* ── Empty / edge cases ───────────────────────────────────────────────── */
 
 test("empty page renders no rows and updates toolbar", async () => {
