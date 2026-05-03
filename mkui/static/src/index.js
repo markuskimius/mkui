@@ -8,6 +8,7 @@ import "./widgets/button.js";
 import "./widgets/mkio-table.js";
 
 export {
+  VERSION, version,
   App, State,
   registerWidget, registerPaneType,
   getWidget, getPaneType,
@@ -18,5 +19,5 @@ export { ensureMkio } from "./mkio-bridge.js";
 import * as Mkui from "./core.js";
 import { ensureMkio } from "./mkio-bridge.js";
 if (typeof window !== "undefined") {
-  window.Mkui = { ...Mkui, ensureMkio };
+  window.mkui = window.Mkui = { ...Mkui, ensureMkio };
 }
