@@ -12,13 +12,58 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   const protocol = spec.protocol ?? "query";
   const idKey = protocol === "subpub" ? "_mkio_topic" : "_mkio_row";
+  const maxcount = spec.maxcount !== undefined ? spec.maxcount : 200;
+  const isPaged = protocol === "stream" && maxcount > 0;
 
   const table = document.createElement("table");
   table.className = "mkui-table";
   const thead = document.createElement("thead");
   const tbody = document.createElement("tbody");
   table.append(thead, tbody);
-  host.appendChild(table);
+
+  /* ── DOM structure ───────────────────────────────────────────────── */
+
+  let scrollHost = host;
+  let pagingToolbar = null;
+  let prevBtn = null, nextBtn = null, pageInfo = null, liveBtn = null;
+
+  if (isPaged) {
+    host.style.overflow = "hidden";
+    host.style.padding = "0";
+    host.style.display = "flex";
+    host.style.flexDirection = "column";
+
+    const scrollArea = document.createElement("div");
+    scrollArea.className = "mkui-table-scroll";
+    scrollArea.appendChild(table);
+    scrollHost = scrollArea;
+
+    pagingToolbar = document.createElement("div");
+    pagingToolbar.className = "mkui-table-paging";
+    prevBtn = document.createElement("button");
+    prevBtn.className = "mkui-btn mkui-paging-btn";
+    prevBtn.textContent = "◀ Prev";
+    prevBtn.disabled = true;
+    pageInfo = document.createElement("span");
+    pageInfo.className = "mkui-paging-info";
+    nextBtn = document.createElement("button");
+    nextBtn.className = "mkui-btn mkui-paging-btn";
+    nextBtn.textContent = "Next ▶";
+    nextBtn.disabled = true;
+    liveBtn = document.createElement("button");
+    liveBtn.className = "mkui-btn mkui-paging-live";
+    liveBtn.textContent = "● Live";
+    pagingToolbar.append(prevBtn, pageInfo, nextBtn, liveBtn);
+
+    host.append(scrollArea, pagingToolbar);
+  } else {
+    host.appendChild(table);
+  }
+
+  const progress = document.createElement("div");
+  progress.className = "mkui-table-progress";
+  progress.style.display = "none";
+  if (!isPaged) host.appendChild(progress);
 
   const rows = new Map();
   const rowEls = new Map();
@@ -410,21 +455,58 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return tr;
   }
 
+  /* ── Snapshot rendering (chunked for large datasets) ────────────── */
+
+  let snapshotGen = 0;
+  const CHUNK = 100;
+
   function applySnapshot(snap) {
-    for (const row of snap) {
-      const key = row[idKey];
-      if (rows.has(key)) {
-        applyReplace(row);
-      } else {
-        if (!columns) {
-          columns = Object.keys(row);
-          renderHead();
+    if (snap.length <= CHUNK) {
+      for (const row of snap) {
+        const key = row[idKey];
+        if (rows.has(key)) {
+          applyReplace(row);
+        } else {
+          if (!columns) {
+            columns = Object.keys(row);
+            renderHead();
+          }
+          insertRow(row);
         }
-        insertRow(row);
+      }
+      if (sortKeys.length) reorder();
+      maybeRestoreScroll();
+      return;
+    }
+
+    const gen = ++snapshotGen;
+    let i = 0;
+    if (!columns && snap.length > 0) {
+      columns = Object.keys(snap[0]);
+      renderHead();
+    }
+    progress.textContent = `Loading 0 / ${snap.length}…`;
+    progress.style.display = "";
+
+    function renderChunk() {
+      if (gen !== snapshotGen) return;
+      const end = Math.min(i + CHUNK, snap.length);
+      for (; i < end; i++) {
+        const row = snap[i];
+        const key = row[idKey];
+        if (rows.has(key)) applyReplace(row);
+        else insertRow(row);
+      }
+      if (i < snap.length) {
+        progress.textContent = `Loading ${i} / ${snap.length}…`;
+        requestAnimationFrame(renderChunk);
+      } else {
+        progress.style.display = "none";
+        if (sortKeys.length) reorder();
+        maybeRestoreScroll();
       }
     }
-    if (sortKeys.length) reorder();
-    maybeRestoreScroll();
+    renderChunk();
   }
 
   function applyInsert(row) {
@@ -502,31 +584,30 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   const subid = `mkui-table-${++_subCounter}`;
   let subscribed = false;
+  let liveMode = !isPaged;
   let savedScrollTop = 0;
   let restoreScrollTarget = 0;
 
-  host.addEventListener("scroll", () => { savedScrollTop = host.scrollTop; });
+  scrollHost.addEventListener("scroll", () => { savedScrollTop = scrollHost.scrollTop; });
 
   function maybeRestoreScroll() {
     if (!restoreScrollTarget) return;
     const target = restoreScrollTarget;
     restoreScrollTarget = 0;
-    requestAnimationFrame(() => { host.scrollTop = target; });
+    requestAnimationFrame(() => { scrollHost.scrollTop = target; });
   }
 
   function sub() {
     if (subscribed) return;
     subscribed = true;
+    ++snapshotGen;
     restoreScrollTarget = savedScrollTop;
     rows.clear();
     rowEls.clear();
     tbody.innerHTML = "";
-    client.subscribe(spec.service, protocol, {
-      subid,
-      topic: spec.topic,
-      filter: spec.filter,
-      ...callbacks,
-    });
+    const opts = { subid, topic: spec.topic, filter: spec.filter, ...callbacks };
+    if (protocol === "query" && maxcount) opts.maxcount = maxcount;
+    client.subscribe(spec.service, protocol, opts);
   }
 
   function unsub() {
@@ -535,9 +616,75 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     client.unsubscribe(subid);
   }
 
+  /* ── Paging (stream) ──────────────────────────────────────────────── */
+
+  let pageRefs = [null];
+  let currentPage = 0;
+  let pageHasMore = false;
+
+  function loadPage(n) {
+    client.unsubscribe(subid);
+    rows.clear();
+    rowEls.clear();
+    tbody.innerHTML = "";
+    client.subscribe(spec.service, "stream", {
+      subid,
+      maxcount,
+      ref: pageRefs[n - 1] ?? null,
+      updates: false,
+      topic: spec.topic,
+      filter: spec.filter,
+      onPage: (pageRows, info) => {
+        pageHasMore = info.hasmore;
+        currentPage = n;
+        if (info.hasmore && pageRefs.length <= n) pageRefs.push(info.ref);
+        if (pageRows.length > 0) {
+          if (!columns) { columns = Object.keys(pageRows[0]); renderHead(); }
+          for (const row of pageRows) insertRow(row);
+          if (sortKeys.length) reorder();
+        }
+        updatePagingUI();
+      },
+    });
+  }
+
+  function goLive() {
+    liveMode = true;
+    if (pagingToolbar) pagingToolbar.style.display = "none";
+    columns = spec.columns ?? null;
+    displayOrder = null;
+    sortKeys.length = 0;
+    filters.clear();
+    sub();
+  }
+
+  function updatePagingUI() {
+    if (!pagingToolbar) return;
+    prevBtn.disabled = currentPage <= 1;
+    nextBtn.disabled = !pageHasMore;
+    pageInfo.textContent = `Page ${currentPage}`;
+  }
+
+  if (isPaged) {
+    prevBtn.addEventListener("click", () => { if (currentPage > 1) loadPage(currentPage - 1); });
+    nextBtn.addEventListener("click", () => { if (pageHasMore) loadPage(currentPage + 1); });
+    liveBtn.addEventListener("click", goLive);
+  }
+
+  /* ── Visibility-aware sub/unsub ─────────────────────────────────── */
+
   const io = new IntersectionObserver((entries) => {
     const visible = entries[0].intersectionRatio > 0;
-    if (visible) sub(); else { closeDropdown(); unsub(); }
+    if (visible) {
+      if (isPaged && !liveMode) {
+        if (currentPage === 0) loadPage(1);
+      } else {
+        sub();
+      }
+    } else {
+      closeDropdown();
+      if (liveMode) unsub();
+    }
   });
   io.observe(host);
 });

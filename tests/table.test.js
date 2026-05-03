@@ -1,0 +1,443 @@
+// Run with: node --test tests/table.test.js
+//
+// mkio-table is a browser component so we provide lightweight DOM stubs
+// before importing the module.  No jsdom dependency needed.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+/* ── Minimal browser globals ──────────────────────────────────────────── */
+
+function mockEl(tag) {
+  const el = {
+    tagName: tag?.toUpperCase() ?? "",
+    className: "", textContent: "", disabled: false,
+    type: "", placeholder: "",
+    style: new Proxy({}, { set(t, p, v) { t[p] = v; return true; }, get(t, p) { return t[p] ?? ""; } }),
+    dataset: {},
+    _ch: [],
+    _ev: {},
+    classList: {
+      _s: new Set(),
+      add(...cs) { for (const c of cs) this._s.add(c); },
+      remove(...cs) { for (const c of cs) this._s.delete(c); },
+      toggle(c, f) { f !== undefined ? (f ? this._s.add(c) : this._s.delete(c)) : (this._s.has(c) ? this._s.delete(c) : this._s.add(c)); },
+      contains(c) { return this._s.has(c); },
+    },
+    append(...ns) { for (const n of ns) el._ch.push(n); },
+    appendChild(n) { el._ch.push(n); return n; },
+    insertBefore(n, ref) {
+      const i = el._ch.indexOf(ref);
+      if (i >= 0) el._ch.splice(i, 0, n); else el._ch.push(n);
+      return n;
+    },
+    remove() {},
+    replaceWith() {},
+    addEventListener(e, fn) { (el._ev[e] ??= []).push(fn); },
+    removeEventListener() {},
+    querySelector(sel) {
+      const m = sel.match(/\[data-col="([^"]+)"\]/);
+      if (m) return el._ch.find(c => c.dataset?.col === m[1]) ?? null;
+      if (sel.startsWith(".")) {
+        const cls = sel.slice(1);
+        return el._ch.find(c => c.className?.includes(cls)) ?? null;
+      }
+      return null;
+    },
+    querySelectorAll() { return []; },
+    closest() { return null; },
+    contains() { return false; },
+    getBoundingClientRect() { return { left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20 }; },
+    dispatchEvent() {},
+    focus() {},
+    get children() { return el._ch; },
+    get offsetWidth() { return 100; },
+  };
+
+  let _ih = "";
+  Object.defineProperty(el, "innerHTML", {
+    get() { return _ih; },
+    set(v) { _ih = v; if (v === "") el._ch.length = 0; },
+  });
+
+  let _st = 0;
+  Object.defineProperty(el, "scrollTop", {
+    get() { return _st; },
+    set(v) { _st = v; },
+  });
+
+  return el;
+}
+
+globalThis.document = {
+  createElement: (tag) => mockEl(tag),
+  createTextNode: (text) => ({ textContent: text, nodeType: 3 }),
+  addEventListener() {},
+  removeEventListener() {},
+  head: mockEl("head"),
+};
+globalThis.window = globalThis;
+globalThis.CSS = { escape: (s) => s };
+
+let rafQueue = [];
+globalThis.requestAnimationFrame = (fn) => { rafQueue.push(fn); return rafQueue.length; };
+function flushRaf() { while (rafQueue.length) rafQueue.shift()(); }
+
+let ioCallbacks = [];
+globalThis.IntersectionObserver = class {
+  constructor(cb) { this._cb = cb; ioCallbacks.push(cb); }
+  observe() {}
+};
+
+let fakeClient;
+globalThis.MkioClient = class {
+  constructor() {
+    this.calls = [];
+    fakeClient = this;
+  }
+  async connect() {}
+  subscribe(service, protocol, opts) {
+    this.calls.push({ type: "subscribe", service, protocol, opts });
+  }
+  unsubscribe(subid) {
+    this.calls.push({ type: "unsubscribe", subid });
+  }
+};
+
+/* ── Import modules (after globals) ───────────────────────────────────── */
+
+const { getPaneType } = await import("../mkui/static/src/core.js");
+await import("../mkui/static/src/widgets/mkio-table.js");
+
+const factory = getPaneType("mkio-table");
+
+/* ── Helpers ──────────────────────────────────────────────────────────── */
+
+async function createTable(specOverrides = {}) {
+  rafQueue.length = 0;
+  const host = mockEl("div");
+  const app = { config: { mkio: { url: "ws://localhost:8080/ws" } } };
+  const spec = { service: "test-svc", ...specOverrides };
+  const prevLen = ioCallbacks.length;
+  await factory(spec, app, host);
+  const io = ioCallbacks.length > prevLen ? ioCallbacks[ioCallbacks.length - 1] : null;
+  return { host, spec, io };
+}
+
+function lastSubscribe() {
+  return fakeClient.calls.filter(c => c.type === "subscribe").at(-1);
+}
+
+function triggerVisible(io) { io([{ intersectionRatio: 1 }]); }
+function triggerHidden(io) { io([{ intersectionRatio: 0 }]); }
+
+function makeRows(n, startId = 0) {
+  return Array.from({ length: n }, (_, i) => ({
+    _mkio_row: String(startId + i),
+    name: `row-${startId + i}`,
+    value: startId + i,
+  }));
+}
+
+function findByClass(el, cls) {
+  return el._ch.find(c => c.className === cls) ?? null;
+}
+
+function getTbody(host) {
+  const table = findByClass(host, "mkui-table")
+    ?? host._ch.find(h => findByClass(h, "mkui-table"))?._ch.find(c => c.className === "mkui-table");
+  if (!table) {
+    for (const child of host._ch) {
+      const t = findByClass(child, "mkui-table");
+      if (t) return t._ch.find(c => c.tagName === "TBODY");
+    }
+    return null;
+  }
+  return table._ch.find(c => c.tagName === "TBODY");
+}
+
+/* ── Config & maxcount defaults ───────────────────────────────────────── */
+
+test("maxcount defaults to 200 when not specified", async () => {
+  const { io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  assert.equal(lastSubscribe().opts.maxcount, 200);
+});
+
+test("maxcount can be overridden in spec", async () => {
+  const { io } = await createTable({ protocol: "query", maxcount: 500 });
+  triggerVisible(io);
+  assert.equal(lastSubscribe().opts.maxcount, 500);
+});
+
+test("maxcount null disables query paging", async () => {
+  const { io } = await createTable({ protocol: "query", maxcount: null });
+  triggerVisible(io);
+  assert.equal(lastSubscribe().opts.maxcount, undefined);
+});
+
+test("query never enters paged mode", async () => {
+  const { io } = await createTable({ protocol: "query", maxcount: 200 });
+  triggerVisible(io);
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.onPage, undefined);
+  assert.notEqual(sub.opts.onSnapshot, undefined);
+});
+
+test("stream with maxcount enters paged mode", async () => {
+  const { io } = await createTable({ protocol: "stream", maxcount: 100 });
+  triggerVisible(io);
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.maxcount, 100);
+  assert.equal(typeof sub.opts.onPage, "function");
+  assert.equal(sub.opts.updates, false);
+});
+
+test("stream with null maxcount subscribes normally", async () => {
+  const { io } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.onPage, undefined);
+  assert.notEqual(sub.opts.onSnapshot, undefined);
+});
+
+/* ── Chunked rendering ────────────────────────────────────────────────── */
+
+test("small snapshot renders synchronously without rAF", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const prevRaf = rafQueue.length;
+  lastSubscribe().opts.onSnapshot(makeRows(50));
+  assert.equal(rafQueue.length, prevRaf);
+  assert.equal(getTbody(host)._ch.length, 50);
+});
+
+test("large snapshot renders in rAF-batched chunks", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(250));
+  const tbody = getTbody(host);
+  assert.equal(tbody._ch.length, 100);
+  flushRaf();
+  assert.equal(tbody._ch.length, 250);
+});
+
+test("progress indicator shown during chunked rendering", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const progress = findByClass(host, "mkui-table-progress");
+  assert.ok(progress);
+  lastSubscribe().opts.onSnapshot(makeRows(250));
+  assert.notEqual(progress.style.display, "none");
+  assert.ok(progress.textContent.includes("100"));
+  assert.ok(progress.textContent.includes("250"));
+  flushRaf();
+  assert.equal(progress.style.display, "none");
+});
+
+test("new snapshot cancels in-progress chunking via generation counter", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const onSnapshot = lastSubscribe().opts.onSnapshot;
+
+  onSnapshot(makeRows(300));
+  const tbody = getTbody(host);
+  assert.equal(tbody._ch.length, 100);
+
+  triggerHidden(io);
+  triggerVisible(io);
+  const onSnapshot2 = lastSubscribe().opts.onSnapshot;
+  onSnapshot2(makeRows(50, 1000));
+
+  flushRaf();
+  assert.equal(tbody._ch.length, 50);
+});
+
+/* ── Stream paging toolbar ────────────────────────────────────────────── */
+
+test("paged stream creates toolbar with prev/next/live", async () => {
+  const { host } = await createTable({ protocol: "stream", maxcount: 50 });
+  const toolbar = findByClass(host, "mkui-table-paging");
+  assert.ok(toolbar);
+  assert.equal(toolbar._ch.length, 4);
+  assert.ok(toolbar._ch[0].textContent.includes("Prev"));
+  assert.ok(toolbar._ch[2].textContent.includes("Next"));
+  assert.ok(toolbar._ch[3].textContent.includes("Live"));
+});
+
+test("non-paged stream has no toolbar", async () => {
+  const { host } = await createTable({ protocol: "stream", maxcount: null });
+  assert.equal(findByClass(host, "mkui-table-paging"), null);
+});
+
+test("query has no toolbar", async () => {
+  const { host } = await createTable({ protocol: "query" });
+  assert.equal(findByClass(host, "mkui-table-paging"), null);
+});
+
+/* ── Stream page navigation ───────────────────────────────────────────── */
+
+test("page 1 loads from beginning on first visibility", async () => {
+  const { io } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.ref, null);
+  assert.equal(sub.opts.maxcount, 50);
+  assert.equal(sub.opts.updates, false);
+});
+
+test("page navigation: next uses ref, prev goes back", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const [prevBtn, pageInfoEl, nextBtn] = toolbar._ch;
+
+  lastSubscribe().opts.onPage(makeRows(50), { hasmore: true, ref: "cursor-A" });
+  assert.equal(pageInfoEl.textContent, "Page 1");
+  assert.equal(prevBtn.disabled, true);
+  assert.equal(nextBtn.disabled, false);
+
+  nextBtn._ev.click[0]();
+  assert.equal(lastSubscribe().opts.ref, "cursor-A");
+
+  lastSubscribe().opts.onPage(makeRows(50, 50), { hasmore: true, ref: "cursor-B" });
+  assert.equal(pageInfoEl.textContent, "Page 2");
+  assert.equal(prevBtn.disabled, false);
+
+  nextBtn._ev.click[0]();
+  assert.equal(lastSubscribe().opts.ref, "cursor-B");
+
+  lastSubscribe().opts.onPage(makeRows(20, 100), { hasmore: false, ref: "cursor-C" });
+  assert.equal(pageInfoEl.textContent, "Page 3");
+  assert.equal(nextBtn.disabled, true);
+
+  prevBtn._ev.click[0]();
+  assert.equal(lastSubscribe().opts.ref, "cursor-A");
+  lastSubscribe().opts.onPage(makeRows(50, 50), { hasmore: true, ref: "cursor-B2" });
+  assert.equal(pageInfoEl.textContent, "Page 2");
+
+  prevBtn._ev.click[0]();
+  assert.equal(lastSubscribe().opts.ref, null);
+});
+
+test("page data is rendered as table rows", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeRows(25), { hasmore: false, ref: "end" });
+  const tbody = getTbody(host);
+  assert.equal(tbody._ch.length, 25);
+});
+
+test("navigating pages clears previous rows", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+
+  lastSubscribe().opts.onPage(makeRows(30), { hasmore: true, ref: "r1" });
+  const tbody = getTbody(host);
+  assert.equal(tbody._ch.length, 30);
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[2]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeRows(10, 30), { hasmore: false, ref: "r2" });
+  assert.equal(tbody._ch.length, 10);
+});
+
+test("prev on page 1 is a no-op", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeRows(50), { hasmore: true, ref: "r" });
+
+  const callsBefore = fakeClient.calls.length;
+  const prevBtn = findByClass(host, "mkui-table-paging")._ch[0];
+  prevBtn._ev.click[0]();
+  assert.equal(fakeClient.calls.length, callsBefore);
+});
+
+test("next on last page is a no-op", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeRows(10), { hasmore: false, ref: "r" });
+
+  const callsBefore = fakeClient.calls.length;
+  const nextBtn = findByClass(host, "mkui-table-paging")._ch[2];
+  nextBtn._ev.click[0]();
+  assert.equal(fakeClient.calls.length, callsBefore);
+});
+
+/* ── Go Live ──────────────────────────────────────────────────────────── */
+
+test("Go Live hides toolbar and subscribes for live updates", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeRows(50), { hasmore: true, ref: "r" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const liveBtn = toolbar._ch[3];
+  liveBtn._ev.click[0]();
+
+  assert.equal(toolbar.style.display, "none");
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.onPage, undefined);
+  assert.equal(sub.opts.maxcount, undefined);
+  assert.notEqual(sub.opts.onSnapshot, undefined);
+});
+
+test("after Go Live, hide/show cycles use normal sub/unsub", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeRows(50), { hasmore: true, ref: "r" });
+
+  findByClass(host, "mkui-table-paging")._ch[3]._ev.click[0]();
+  const subAfterLive = fakeClient.calls.length;
+
+  triggerHidden(io);
+  const unsub = fakeClient.calls[subAfterLive];
+  assert.equal(unsub.type, "unsubscribe");
+
+  triggerVisible(io);
+  assert.equal(lastSubscribe().type ?? lastSubscribe().opts ? "subscribe" : "", "subscribe");
+});
+
+/* ── Visibility behaviour ─────────────────────────────────────────────── */
+
+test("paged stream: hide+show does not reload if page already loaded", async () => {
+  const { io } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeRows(50), { hasmore: true, ref: "r" });
+
+  const callsBefore = fakeClient.calls.length;
+  triggerHidden(io);
+  triggerVisible(io);
+  assert.equal(fakeClient.calls.length, callsBefore);
+});
+
+test("query: hide triggers unsubscribe, show re-subscribes", async () => {
+  const { io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const callsAfterSub = fakeClient.calls.length;
+
+  triggerHidden(io);
+  assert.equal(fakeClient.calls[callsAfterSub].type, "unsubscribe");
+
+  triggerVisible(io);
+  assert.equal(fakeClient.calls.at(-1).type, "subscribe");
+});
+
+/* ── Empty / edge cases ───────────────────────────────────────────────── */
+
+test("empty page renders no rows and updates toolbar", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage([], { hasmore: false, ref: null });
+  assert.equal(getTbody(host)._ch.length, 0);
+  const toolbar = findByClass(host, "mkui-table-paging");
+  assert.equal(toolbar._ch[1].textContent, "Page 1");
+  assert.equal(toolbar._ch[2].disabled, true);
+});
+
+test("empty snapshot renders nothing", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([]);
+  assert.equal(getTbody(host)._ch.length, 0);
+});

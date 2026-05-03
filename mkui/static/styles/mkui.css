@@ -460,3 +460,42 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-flash-in     { animation: mkui-flash-in 600ms ease forwards; }
 .mkui-flash-out    { animation: mkui-flash-out 600ms ease forwards; }
 .mkui-flash-update { animation: mkui-flash-update 600ms ease forwards; }
+
+/* ─── Table paging & progress ───────────────────────────────────────── */
+
+.mkui-table-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+}
+.mkui-table-paging {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--mkui-border);
+  background: var(--mkui-bg-alt);
+  font-size: 12px;
+}
+.mkui-paging-info {
+  color: var(--mkui-fg-mute);
+  min-width: 60px;
+  text-align: center;
+}
+.mkui-paging-btn:disabled,
+.mkui-paging-live:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.mkui-paging-live {
+  margin-left: auto;
+}
+.mkui-table-progress {
+  text-align: center;
+  padding: 8px;
+  color: var(--mkui-fg-mute);
+  font-size: 12px;
+}

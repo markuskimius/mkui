@@ -32,7 +32,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 ## Commands
 
 - `cd mkui/static && python3 -m http.server 8000` — serve examples locally
-- `node --test tests/layout.test.js tests/state.test.js` — run unit tests (node:test, no deps needed)
+- `node --test tests/layout.test.js tests/state.test.js tests/table.test.js` — run unit tests (node:test, no deps needed)
 - `python -m build && twine upload dist/*` — build and publish to PyPI
 - Examples at `mkui/static/examples/standalone-json/`, `mkui/static/examples/library-js/`, and `mkui/static/examples/mkio-table/`
 
@@ -76,6 +76,7 @@ Config keys (under `panes.<id>`):
 - `topic` — string or array of strings; required for subpub (one subscription per topic if array)
 - `filter` — mkio filter expression (query only)
 - `columns` — array of column names to display; defaults to all keys from the first row
+- `maxcount` — page size for paged subscriptions (default 200, `null` to disable)
 
 Row identity: query uses `_mkio_row`, subpub uses `_mkio_topic`. All `_mkio_*` columns are hidden from display.
 
@@ -89,7 +90,11 @@ Filtering: each column header has a ▾ dropdown button. Click to open a filter 
 
 Column reorder: drag a column header to move it. Uses pointer events for unified mouse and touch support (5px movement threshold distinguishes drag from click). A ghost label and accent-colored drop indicator show the target position. Reorder state persists across resubscribes via a `displayOrder` array separate from the data-derived `columns`.
 
-Visibility-aware subscriptions: an `IntersectionObserver` on the pane content element detects when the pane becomes hidden (tab switch, frame close/park) and calls `client.unsubscribe(subid)`. When the pane reappears the subscription is re-established — table state is cleared first so the fresh server snapshot populates a clean table.
+Paging (query): when `maxcount` is set (default 200), the subscription uses mkio's paged snapshot protocol. The mkio client accumulates all pages transparently and fires `onSnapshot` once. `applySnapshot` then renders rows in `requestAnimationFrame`-batched chunks of 100 to avoid freezing the UI on large datasets. A progress indicator ("Loading N / Total…") is shown during chunked rendering. A generation counter cancels stale chunk loops when a new snapshot arrives.
+
+Paging (stream): when `maxcount` is set (default 200), the table enters paged mode with a toolbar showing `◀ Prev | Page N | Next ▶ | ● Live`. Each page is a separate `subscribe` call with `onPage` (disables the mkio client's auto-paging). A `pageRefs` stack of cursor values enables backward navigation. The `● Live` button switches to normal streaming mode — the toolbar hides and the table subscribes for live updates.
+
+Visibility-aware subscriptions: an `IntersectionObserver` on the pane content element detects when the pane becomes hidden (tab switch, frame close/park) and calls `client.unsubscribe(subid)`. When the pane reappears the subscription is re-established — table state is cleared first so the fresh server snapshot populates a clean table. In stream paged mode, hidden/shown transitions preserve the current page without re-fetching.
 
 ## Conventions
 

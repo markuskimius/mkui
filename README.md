@@ -290,7 +290,7 @@ root.workspace.addFrame({ x: 0.5, y: 0.1, w: 0.4, h: 0.4,
   - `text` — static or `bind`-ed to a state path
   - `button` — fires an action by name
 - Pane types (whole-pane custom rendering):
-  - `mkio-table` — subscribes to an mkio service (query, subpub, or stream) and renders a live-updating table with flash animations for inserts, deletes, and field changes. Subscriptions are automatically paused when the pane is not visible (hidden tab, closed frame) and resumed with a fresh snapshot when it reappears.
+  - `mkio-table` — subscribes to an mkio service (query, subpub, or stream) and renders a live-updating table with flash animations for inserts, deletes, and field changes. Subscriptions are automatically paused when the pane is not visible (hidden tab, closed frame) and resumed with a fresh snapshot when it reappears. Large query snapshots render progressively in chunked batches to avoid freezing the UI. Stream tables support paged navigation (prev/next) with a toolbar, and a "Live" button to switch to real-time streaming.
 - Custom pane types are the primary extensibility surface. Register with
   `registerPaneType(name, factory)`; reference from config as `type = "<name>"`.
 
