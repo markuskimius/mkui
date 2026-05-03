@@ -94,7 +94,7 @@ Paging (query): when `maxcount` is set (default 200), the subscription uses mkio
 
 Paging (stream): when `maxcount` is set (default 200), the table enters paged mode with a toolbar showing `◀ Prev | Page N | Next ▶ | ● Live`. Each page is a separate `subscribe` call with `onPage` (disables the mkio client's auto-paging). A `pageRefs` stack of cursor values enables backward navigation. The `● Live` button switches to normal streaming mode — the toolbar hides and the table subscribes for live updates.
 
-Visibility-aware subscriptions: an `IntersectionObserver` on the pane content element detects when the pane becomes hidden (tab switch, frame close/park) and calls `client.unsubscribe(subid)`. When the pane reappears the subscription is re-established — table state is cleared first so the fresh server snapshot populates a clean table. In stream paged mode, hidden/shown transitions preserve the current page without re-fetching.
+Visibility-aware subscriptions: an `IntersectionObserver` on the pane content element detects visibility changes. Panes that start hidden (inactive tab) do not subscribe until first shown. When a pane becomes hidden (tab switch, park), a 5-minute timer starts; if still hidden when it fires, the subscription is dropped. If the pane reappears before the timer fires, the timer is cancelled and the subscription stays alive. When a frame is closed, the workspace dispatches a `mkui-pane-close` event on each pane element, triggering immediate unsubscribe with no delay. On re-subscribe after timeout, table state is cleared so the fresh server snapshot populates a clean table. In stream paged mode, brief hidden/shown transitions (under 5 minutes) preserve the current page without re-fetching.
 
 ## Conventions
 

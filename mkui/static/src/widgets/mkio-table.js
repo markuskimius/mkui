@@ -461,6 +461,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   const CHUNK = 100;
 
   function applySnapshot(snap) {
+    const gen = ++snapshotGen;
     if (snap.length <= CHUNK) {
       for (const row of snap) {
         const key = row[idKey];
@@ -479,7 +480,6 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       return;
     }
 
-    const gen = ++snapshotGen;
     let i = 0;
     if (!columns && snap.length > 0) {
       columns = Object.keys(snap[0]);
@@ -624,6 +624,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function loadPage(n) {
     client.unsubscribe(subid);
+    subscribed = true;
     rows.clear();
     rowEls.clear();
     tbody.innerHTML = "";
@@ -655,6 +656,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     displayOrder = null;
     sortKeys.length = 0;
     filters.clear();
+    unsub();
     sub();
   }
 
@@ -673,17 +675,34 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   /* ── Visibility-aware sub/unsub ─────────────────────────────────── */
 
+  let hideTimer = null;
+  const HIDE_TIMEOUT = 5 * 60 * 1000;
+
+  const paneEl = host.closest("mkui-pane");
+  if (paneEl) {
+    paneEl.addEventListener("mkui-pane-close", () => {
+      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+      unsub();
+    });
+  }
+
   const io = new IntersectionObserver((entries) => {
     const visible = entries[0].intersectionRatio > 0;
     if (visible) {
+      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       if (isPaged && !liveMode) {
-        if (currentPage === 0) loadPage(1);
+        if (!subscribed) loadPage(currentPage || 1);
       } else {
         sub();
       }
     } else {
       closeDropdown();
-      if (liveMode) unsub();
+      if (subscribed) {
+        hideTimer = setTimeout(() => {
+          hideTimer = null;
+          unsub();
+        }, HIDE_TIMEOUT);
+      }
     }
   });
   io.observe(host);

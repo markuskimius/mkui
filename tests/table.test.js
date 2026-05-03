@@ -82,6 +82,12 @@ let rafQueue = [];
 globalThis.requestAnimationFrame = (fn) => { rafQueue.push(fn); return rafQueue.length; };
 function flushRaf() { while (rafQueue.length) rafQueue.shift()(); }
 
+let timerIdSeq = 0;
+let pendingTimers = new Map();
+globalThis.setTimeout = (fn, ms) => { const id = ++timerIdSeq; pendingTimers.set(id, { fn, ms }); return id; };
+globalThis.clearTimeout = (id) => { pendingTimers.delete(id); };
+function advanceTimers() { for (const { fn } of pendingTimers.values()) fn(); pendingTimers.clear(); }
+
 let ioCallbacks = [];
 globalThis.IntersectionObserver = class {
   constructor(cb) { this._cb = cb; ioCallbacks.push(cb); }
@@ -114,7 +120,11 @@ const factory = getPaneType("mkio-table");
 
 async function createTable(specOverrides = {}) {
   rafQueue.length = 0;
+  pendingTimers.clear();
   const host = mockEl("div");
+  const paneEl = mockEl("mkui-pane");
+  host.closest = (sel) => sel === "mkui-pane" ? paneEl : null;
+  host._paneEl = paneEl;
   const app = { config: { mkio: { url: "ws://localhost:8080/ws" } } };
   const spec = { service: "test-svc", ...specOverrides };
   const prevLen = ioCallbacks.length;
@@ -244,6 +254,7 @@ test("new snapshot cancels in-progress chunking via generation counter", async (
   assert.equal(tbody._ch.length, 100);
 
   triggerHidden(io);
+  advanceTimers();
   triggerVisible(io);
   const onSnapshot2 = lastSubscribe().opts.onSnapshot;
   onSnapshot2(makeRows(50, 1000));
@@ -391,6 +402,7 @@ test("after Go Live, hide/show cycles use normal sub/unsub", async () => {
   const subAfterLive = fakeClient.calls.length;
 
   triggerHidden(io);
+  advanceTimers();
   const unsub = fakeClient.calls[subAfterLive];
   assert.equal(unsub.type, "unsubscribe");
 
@@ -411,16 +423,91 @@ test("paged stream: hide+show does not reload if page already loaded", async () 
   assert.equal(fakeClient.calls.length, callsBefore);
 });
 
-test("query: hide triggers unsubscribe, show re-subscribes", async () => {
+test("query: hide triggers unsubscribe after timeout, show re-subscribes", async () => {
   const { io } = await createTable({ protocol: "query" });
   triggerVisible(io);
   const callsAfterSub = fakeClient.calls.length;
 
   triggerHidden(io);
+  assert.equal(fakeClient.calls.length, callsAfterSub);
+  advanceTimers();
   assert.equal(fakeClient.calls[callsAfterSub].type, "unsubscribe");
 
   triggerVisible(io);
   assert.equal(fakeClient.calls.at(-1).type, "subscribe");
+});
+
+test("query: brief hide+show does not trigger unsubscribe", async () => {
+  const { io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const callsAfterSub = fakeClient.calls.length;
+
+  triggerHidden(io);
+  triggerVisible(io);
+  assert.equal(fakeClient.calls.length, callsAfterSub);
+});
+
+test("pane hidden from the start does not subscribe until visible", async () => {
+  const { io } = await createTable({ protocol: "query" });
+  const callsAtStart = fakeClient.calls.length;
+  triggerHidden(io);
+  assert.equal(fakeClient.calls.length, callsAtStart);
+
+  triggerVisible(io);
+  assert.equal(fakeClient.calls[callsAtStart].type, "subscribe");
+});
+
+test("close event triggers immediate unsubscribe without waiting for timeout", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const callsAfterSub = fakeClient.calls.length;
+
+  triggerHidden(io);
+  assert.equal(fakeClient.calls.length, callsAfterSub);
+
+  const paneEl = host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+  assert.equal(fakeClient.calls[callsAfterSub]?.type, "unsubscribe");
+});
+
+test("close cancels pending hide timer so unsub is not called twice", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  triggerHidden(io);
+
+  const paneEl = host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+  const callsAfterClose = fakeClient.calls.length;
+
+  advanceTimers();
+  assert.equal(fakeClient.calls.length, callsAfterClose);
+});
+
+test("paged stream: timeout unsubs and re-show reloads current page", async () => {
+  const { io } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeRows(50), { hasmore: true, ref: "r1" });
+
+  const callsBeforeHide = fakeClient.calls.length;
+  triggerHidden(io);
+  advanceTimers();
+  assert.equal(fakeClient.calls[callsBeforeHide].type, "unsubscribe");
+
+  triggerVisible(io);
+  const resub = fakeClient.calls.at(-1);
+  assert.equal(resub.type, "subscribe");
+  assert.equal(resub.protocol, "stream");
+});
+
+test("close event unsubs paged stream immediately", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeRows(50), { hasmore: true, ref: "r" });
+  const callsBefore = fakeClient.calls.length;
+
+  const paneEl = host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+  assert.equal(fakeClient.calls[callsBefore].type, "unsubscribe");
 });
 
 /* ── Empty / edge cases ───────────────────────────────────────────────── */

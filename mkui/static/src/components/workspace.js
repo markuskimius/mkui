@@ -210,11 +210,12 @@ class MkuiWorkspace extends HTMLElement {
     const idx = this._frames.findIndex(f => f.id === id);
     if (idx < 0) return;
     const el = this._frameEls.get(id);
-    // Park any panes still inside this frame's body, so pane state survives
-    // frame closure (they just become hidden in the pool).
     if (el) {
       for (const child of [...el.bodyEl.children]) {
-        if (child.tagName === "MKUI-PANE") this._parkPane(child);
+        if (child.tagName === "MKUI-PANE") {
+          child.dispatchEvent(new CustomEvent("mkui-pane-close"));
+          this._parkPane(child);
+        }
       }
       el.remove();
     }
