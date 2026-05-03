@@ -77,7 +77,8 @@ class MkuiFrame extends HTMLElement {
     // target. Capture phase so inner stopPropagation can't hide the click.
     this.addEventListener("mousedown", (ev) => {
       this._workspace?._raiseFrame(this);
-      this._activateTabGroupFromEvent(ev);
+      if (!ev.target.closest(".mkui-frame-btn"))
+        this._activateTabGroupFromEvent(ev);
     }, true);
 
     // Re-render the internal layout whenever the body resizes (either from
