@@ -316,11 +316,22 @@ app.mount("/mkui", StaticFiles(directory=mkui.static_dir))
 
 ## Running the examples
 
+The standalone and library examples need only a static file server:
+
 ```
 cd mkui/static
 python3 -m http.server 8000
 # http://localhost:8000/examples/standalone-json/
 # http://localhost:8000/examples/library-js/
+```
+
+The mkio-table example requires [mkio](https://pypi.org/project/mkio/):
+
+```
+cd mkui/static/examples/mkio-table
+mkio                # starts on port 8080 (configured in mkio.toml)
+python seed.py      # (optional) populates sample orders in a loop
+# http://localhost:8080/
 ```
 
 ## Project layout
