@@ -525,6 +525,57 @@ test("closed flag prevents re-subscription after close", async () => {
     "no new subscribe after close");
 });
 
+/* ── Reopen after close ──────────────────────────────────────────────── */
+
+test("mkui-pane-open resets closed state and allows re-subscription", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(5));
+
+  const paneEl = host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+  const callsAfterClose = fakeClient.calls.length;
+
+  triggerVisible(io);
+  assert.equal(fakeClient.calls.length, callsAfterClose, "still blocked after close");
+
+  for (const fn of paneEl._ev["mkui-pane-open"] ?? []) fn();
+  triggerVisible(io);
+  assert.equal(fakeClient.calls.at(-1).type, "subscribe");
+});
+
+test("mkui-pane-open clears stale rows", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(10));
+  flushRaf();
+  assert.equal(getTbody(host)._ch.length, 10);
+
+  const paneEl = host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+  for (const fn of paneEl._ev["mkui-pane-open"] ?? []) fn();
+  assert.equal(getTbody(host)._ch.length, 0);
+});
+
+test("mkui-pane-open resets paged stream to page 1", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[2]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeRows(50, 50), { hasmore: false, ref: "r2" });
+
+  const paneEl = host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+  for (const fn of paneEl._ev["mkui-pane-open"] ?? []) fn();
+  triggerVisible(io);
+
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.ref, null);
+  assert.equal(sub.opts.maxcount, 50);
+});
+
 /* ── Empty / edge cases ───────────────────────────────────────────────── */
 
 test("empty page renders no rows and updates toolbar", async () => {

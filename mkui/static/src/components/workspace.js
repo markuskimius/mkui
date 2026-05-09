@@ -267,6 +267,8 @@ class MkuiWorkspace extends HTMLElement {
       x, y, w, h,
       layout: { type: "tabs", active: 0, children: [paneId] },
     });
+    const paneEl = this._paneEls.get(paneId);
+    if (paneEl) paneEl.dispatchEvent(new CustomEvent("mkui-pane-open"));
   }
 
   // Window arrangement ─────────────────────────────────────────────────────

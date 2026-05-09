@@ -689,6 +689,25 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       subscribed = false;
       client.unsubscribe(subid);
     });
+    paneEl.addEventListener("mkui-pane-open", () => {
+      closed = false;
+      subscribed = false;
+      rows.clear();
+      rowEls.clear();
+      tbody.innerHTML = "";
+      columns = spec.columns ?? null;
+      displayOrder = null;
+      sortKeys.length = 0;
+      filters.clear();
+      if (isPaged) {
+        liveMode = false;
+        pageRefs = [null];
+        currentPage = 0;
+        pageHasMore = false;
+        if (pagingToolbar) pagingToolbar.style.display = "";
+      }
+      io.observe(host);
+    });
   }
 
   const io = new IntersectionObserver((entries) => {
