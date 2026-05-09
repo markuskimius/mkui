@@ -1,6 +1,10 @@
-/build/
-/dist/
-node_modules/
-.DS_Store
-*.log
+*.db
+*.db-shm
+*.db-wal
 *.egg-info
+*.log
+*.swo
+*.swp
+.DS_Store
+/build
+/dist
