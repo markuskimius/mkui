@@ -271,6 +271,17 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   color: var(--mkui-fg-mute);
 }
 
+.mkui-tabbar-nodock .mkui-tab {
+  background: transparent;
+  border-right: none;
+  box-shadow: none;
+  color: var(--mkui-fg);
+  font-weight: 600;
+  pointer-events: none;
+}
+.mkui-tabbar-nodock .mkui-tab:hover { background: transparent; }
+.mkui-tabbar-nodock .mkui-tab.active { box-shadow: none; }
+
 .mkui-splitter {
   position: absolute;
   background: var(--mkui-border);
@@ -498,4 +509,145 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   padding: 8px;
   color: var(--mkui-fg-mute);
   font-size: 12px;
+}
+
+/* ─── Table row selection ──────────────────────────────────────────── */
+
+.mkui-table tbody tr { cursor: pointer; }
+.mkui-table tr.mkui-selected {
+  background: rgba(14, 99, 156, 0.25);
+}
+.mkui-table tr.mkui-selected td {
+  border-bottom-color: rgba(14, 99, 156, 0.4);
+}
+
+/* ─── Table toolbar ────────────────────────────────────────────────── */
+
+.mkui-table-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--mkui-border);
+  background: var(--mkui-bg-alt);
+}
+.mkui-toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ─── Dialog ───────────────────────────────────────────────────────── */
+
+.mkui-pane-content:has(.mkui-dialog-content) {
+  padding: 0 4px 4px 4px;
+}
+.mkui-dialog-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.mkui-dialog-body {
+  padding: 6px;
+  overflow-y: auto;
+  flex: 1;
+  box-sizing: border-box;
+}
+
+.mkui-dialog-group {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--mkui-fg-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 12px 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--mkui-border);
+}
+.mkui-dialog-group:first-child { margin-top: 0; }
+
+.mkui-dialog-row {
+  display: flex;
+  gap: 6px;
+}
+.mkui-dialog-row > .mkui-dialog-field { flex: 1; min-width: 0; }
+
+.mkui-dialog-field {
+  margin-bottom: 6px;
+}
+.mkui-dialog-field label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--mkui-fg-mute);
+  font-size: 12px;
+}
+.mkui-dialog-field input,
+.mkui-dialog-field select,
+.mkui-dialog-field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--mkui-bg-alt);
+  border: 1px solid var(--mkui-border);
+  color: var(--mkui-fg);
+  font-family: inherit;
+  font-size: 13px;
+  border-radius: 3px;
+  outline: none;
+}
+.mkui-dialog-field input:focus,
+.mkui-dialog-field select:focus,
+.mkui-dialog-field textarea:focus {
+  border-color: var(--mkui-accent);
+}
+.mkui-dialog-field.mkui-dialog-invalid input,
+.mkui-dialog-field.mkui-dialog-invalid select,
+.mkui-dialog-field.mkui-dialog-invalid textarea {
+  border-color: #c0392b;
+}
+.mkui-dialog-error {
+  color: #c0392b;
+  font-size: 11px;
+  margin-top: 2px;
+}
+.mkui-dialog-readonly {
+  padding: 6px 0;
+  color: var(--mkui-fg);
+  font-size: 13px;
+}
+
+.mkui-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 4px;
+  border-top: 1px solid var(--mkui-border);
+}
+.mkui-dialog-status {
+  flex: 1;
+  color: var(--mkui-fg-mute);
+  font-size: 11px;
+  align-self: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mkui-dialog-status-error {
+  color: #c0392b;
+}
+
+.mkui-btn-primary {
+  background: var(--mkui-accent);
+  color: var(--mkui-accent-fg);
+  border-color: var(--mkui-accent);
+}
+.mkui-btn-primary:hover {
+  filter: brightness(1.15);
+}
+
+.mkui-dialog-loading {
+  color: var(--mkui-fg-mute);
+  font-size: 12px;
+  padding: 6px 0;
 }

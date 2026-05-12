@@ -1,5 +1,6 @@
 import { registerPaneType } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
+import { resolveExpr, resolveObject } from "../lib/expressions.js";
 
 let _subCounter = 0;
 
@@ -65,6 +66,43 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   progress.style.display = "none";
   if (!isPaged) host.appendChild(progress);
 
+  /* ── Toolbar (buttons) ──────────────────────────────────────────── */
+
+  const hasButtons = Array.isArray(spec.buttons) && spec.buttons.length > 0;
+  let toolbar = null;
+  const buttonEls = [];
+
+  if (hasButtons && !isPaged) {
+    host.style.overflow = "hidden";
+    host.style.padding = "0";
+    host.style.display = "flex";
+    host.style.flexDirection = "column";
+
+    const scrollArea = document.createElement("div");
+    scrollArea.className = "mkui-table-scroll";
+    host.removeChild(table);
+    scrollArea.appendChild(table);
+    if (!isPaged) host.removeChild(progress);
+    scrollHost = scrollArea;
+    host.appendChild(scrollArea);
+    if (!isPaged) host.appendChild(progress);
+  }
+
+  if (hasButtons) {
+    toolbar = document.createElement("div");
+    toolbar.className = "mkui-table-toolbar";
+    for (const btnSpec of spec.buttons) {
+      const btn = document.createElement("button");
+      btn.className = "mkui-btn mkui-toolbar-btn";
+      btn.textContent = btnSpec.label ?? "Button";
+      btn.disabled = true;
+      btn.addEventListener("click", () => handleButtonClick(btnSpec));
+      toolbar.appendChild(btn);
+      buttonEls.push({ el: btn, spec: btnSpec });
+    }
+    host.insertBefore(toolbar, host.firstChild);
+  }
+
   const rows = new Map();
   const rowEls = new Map();
   let columns = spec.columns ?? null;
@@ -80,6 +118,122 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   let dropdownCol = null;
   let dropdownCleanup = null;
   let suppressClick = false;
+
+  /* ── Selection state ──────────────────────────────────────────────── */
+
+  const selectedKeys = new Set();
+  let selectedAnchor = null;
+
+  function getSelectedRows() {
+    const out = [];
+    for (const key of selectedKeys) {
+      const row = rows.get(key);
+      if (row) out.push(row);
+    }
+    return out;
+  }
+
+  function setRowSelected(key, selected) {
+    if (selected) selectedKeys.add(key);
+    else selectedKeys.delete(key);
+    const tr = rowEls.get(key);
+    if (tr) tr.classList.toggle("mkui-selected", selected);
+  }
+
+  function clearSelection() {
+    for (const key of selectedKeys) {
+      const tr = rowEls.get(key);
+      if (tr) tr.classList.remove("mkui-selected");
+    }
+    selectedKeys.clear();
+  }
+
+  function handleRowClick(key, e) {
+    if (e.target.closest(".mkui-filter-btn")) return;
+    const metaKey = e.ctrlKey || e.metaKey;
+    if (e.shiftKey && selectedAnchor != null) {
+      const trList = [...tbody.children].filter((tr) => tr.style.display !== "none");
+      const anchorIdx = trList.findIndex((tr) => tr.dataset.ref === String(selectedAnchor));
+      const targetIdx = trList.findIndex((tr) => tr.dataset.ref === String(key));
+      if (anchorIdx >= 0 && targetIdx >= 0) {
+        if (!metaKey) clearSelection();
+        const lo = Math.min(anchorIdx, targetIdx);
+        const hi = Math.max(anchorIdx, targetIdx);
+        for (let i = lo; i <= hi; i++) setRowSelected(trList[i].dataset.ref, true);
+      }
+    } else if (metaKey) {
+      setRowSelected(key, !selectedKeys.has(key));
+      selectedAnchor = key;
+    } else {
+      clearSelection();
+      setRowSelected(key, true);
+      selectedAnchor = key;
+    }
+    updateButtonStates();
+  }
+
+  /* ── Button enablement & click ────────────────────────────────────── */
+
+  let mkioConnected = false;
+
+  function updateButtonStates() {
+    const selected = getSelectedRows();
+    const count = selected.length;
+    for (const { el, spec: bs } of buttonEls) {
+      const en = bs.enable ?? {};
+      let ok = true;
+      if (en.connected && !mkioConnected) ok = false;
+      if (ok && en.minSelected != null && count < en.minSelected) ok = false;
+      if (ok && en.maxSelected != null && count > en.maxSelected) ok = false;
+      if (ok && en.rowMatch && count > 0) {
+        for (const [field, expected] of Object.entries(en.rowMatch)) {
+          const vals = Array.isArray(expected) ? expected : [expected];
+          if (!selected.every((r) => vals.includes(r[field] == null ? "" : String(r[field])))) {
+            ok = false;
+            break;
+          }
+        }
+      }
+      if (ok && en.rowMatch && count === 0) ok = false;
+      el.disabled = !ok;
+    }
+  }
+
+  async function handleButtonClick(btnSpec) {
+    const action = btnSpec.action;
+    if (!action) return;
+    const selected = getSelectedRows();
+    const first = selected[0] ?? {};
+    const ctx = { row: first, rows: selected, selection: { count: selected.length }, state: app.state.get() };
+
+    if (action.type === "transaction") {
+      for (const row of selected) {
+        const rowCtx = { ...ctx, row };
+        const data = resolveObject(action.data ?? {}, rowCtx);
+        client.send(action.service, data, { op: action.op });
+      }
+    } else if (action.type === "dialog") {
+      let dialogSpec;
+      if (action.dialog) {
+        dialogSpec = action.dialog;
+      } else if (action.dialogService) {
+        const reqData = resolveObject(action.dialogService.data ?? {}, ctx);
+        try {
+          dialogSpec = await client.request(action.dialogService.service, reqData);
+        } catch (e) {
+          console.error("[mkui-table] dialog service error:", e);
+          return;
+        }
+      }
+      if (!dialogSpec) return;
+
+      const tableRows = rows;
+      const { openDialog } = await import("./mkui-dialog.js");
+      await openDialog(dialogSpec, ctx, app, { client, tableRows });
+    } else if (action.type === "action") {
+      app.fireAction(action.name, action.args);
+    }
+  }
 
   const SUPER = "¹²³⁴⁵⁶⁷⁸⁹";
 
@@ -427,7 +581,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function buildRow(row) {
     const tr = document.createElement("tr");
-    tr.dataset.ref = row[idKey];
+    const key = row[idKey];
+    tr.dataset.ref = key;
     for (const c of visibleColumns()) {
       const td = document.createElement("td");
       td.dataset.col = c;
@@ -435,6 +590,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       td.textContent = v == null ? "" : String(v);
       tr.appendChild(td);
     }
+    if (selectedKeys.has(key)) tr.classList.add("mkui-selected");
+    tr.addEventListener("click", (e) => handleRowClick(key, e));
     return tr;
   }
 
@@ -442,6 +599,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     el.classList.remove("mkui-flash-in", "mkui-flash-out", "mkui-flash-update");
     void el.offsetWidth;
     el.classList.add(cls);
+    el.addEventListener("animationend", () => el.classList.remove(cls), { once: true });
   }
 
   function insertRow(row) {
@@ -521,6 +679,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function applyDelete(row) {
     const key = row[idKey];
     rows.delete(key);
+    selectedKeys.delete(key);
     const tr = rowEls.get(key);
     if (!tr) return;
     rowEls.delete(key);
@@ -562,6 +721,14 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   } catch (e) {
     host.textContent = "[mkio-table] " + e.message;
     return;
+  }
+
+  if (hasButtons) {
+    mkioConnected = !!app.state.get("mkio.connected");
+    app.state.subscribe("mkio.connected", (v) => {
+      mkioConnected = !!v;
+      updateButtonStates();
+    });
   }
 
   const callbacks = {
@@ -606,6 +773,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     rows.clear();
     rowEls.clear();
     tbody.innerHTML = "";
+    clearSelection();
     const opts = { subid, topic: spec.topic, filter: spec.filter, ...callbacks };
     if (protocol === "query" && maxcount) opts.maxcount = maxcount;
     client.subscribe(spec.service, protocol, opts);
@@ -699,6 +867,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       displayOrder = null;
       sortKeys.length = 0;
       filters.clear();
+      clearSelection();
       if (isPaged) {
         liveMode = false;
         pageRefs = [null];

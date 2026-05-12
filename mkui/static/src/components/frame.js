@@ -93,6 +93,7 @@ class MkuiFrame extends HTMLElement {
     this._workspace = workspace;
     this._app = app;
     this._id = spec.id;
+    this._noDock = spec.noDock ?? false;
     this._tree = normalize(spec.layout);
     this._renderInternal();
   }
@@ -200,7 +201,8 @@ class MkuiFrame extends HTMLElement {
     const bar = document.createElement("div");
     bar.className = "mkui-tabbar"
       + ((withDrag || withControls) ? " mkui-tabbar-top" : "")
-      + (focused ? " mkui-tabbar-focused" : "");
+      + (focused ? " mkui-tabbar-focused" : "")
+      + (this._noDock ? " mkui-tabbar-nodock" : "");
     // Tagged so that an in-flight pane drag can re-locate its source bar
     // after _renderInternal rebuilds the chrome.
     bar._tabGroup = tabGroup;
@@ -223,10 +225,12 @@ class MkuiFrame extends HTMLElement {
       labelEl.className = "mkui-tab-label";
       labelEl.textContent = label;
       tab.appendChild(labelEl);
-      tab.addEventListener("pointerdown", (ev) => {
-        if (ev.button !== 0) return;
-        this._workspace?._beginPaneDrag(ev, this, id, tabGroup, bar);
-      });
+      if (!this._noDock) {
+        tab.addEventListener("pointerdown", (ev) => {
+          if (ev.button !== 0) return;
+          this._workspace?._beginPaneDrag(ev, this, id, tabGroup, bar);
+        });
+      }
       tabs.appendChild(tab);
     }
     bar.appendChild(tabs);

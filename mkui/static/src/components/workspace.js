@@ -89,10 +89,24 @@ class MkuiWorkspace extends HTMLElement {
       h: f.h ?? 0.5,
       layout: f.layout,
     }));
+    if (this._frames.length > 0) {
+      this._focusedId = this._frames[this._frames.length - 1].id;
+    }
     this._renderFrames();
   }
 
   getPaneSpec(id) { return this._panes.get(id); }
+
+  registerPane(id, spec) {
+    this._panes.set(id, spec);
+  }
+
+  unregisterPane(id) {
+    const el = this._paneEls.get(id);
+    if (el) el.remove();
+    this._paneEls.delete(id);
+    this._panes.delete(id);
+  }
 
   _nextFrameId() {
     this._frameSeq += 1;
@@ -187,12 +201,18 @@ class MkuiWorkspace extends HTMLElement {
   }
 
   _applyZOrder() {
-    const topIdx = this._frames.length - 1;
-    for (let i = 0; i < this._frames.length; i++) {
-      const el = this._frameEls.get(this._frames[i].id);
+    const normal = [];
+    const onTop = [];
+    for (const spec of this._frames) {
+      if (spec.stayOnTop) onTop.push(spec);
+      else normal.push(spec);
+    }
+    const ordered = [...normal, ...onTop];
+    for (let i = 0; i < ordered.length; i++) {
+      const el = this._frameEls.get(ordered[i].id);
       if (!el) continue;
       el.style.zIndex = 10 + i;
-      if (i === topIdx) el.setAttribute("data-focused", "");
+      if (ordered[i].id === this._focusedId) el.setAttribute("data-focused", "");
       else el.removeAttribute("data-focused");
     }
   }
@@ -200,9 +220,21 @@ class MkuiWorkspace extends HTMLElement {
   _raiseFrame(frameEl) {
     const id = frameEl.getAttribute("data-id");
     const idx = this._frames.findIndex(f => f.id === id);
-    if (idx < 0 || idx === this._frames.length - 1) return;
-    const [spec] = this._frames.splice(idx, 1);
-    this._frames.push(spec);
+    if (idx < 0) return;
+    this._focusedId = id;
+    const spec = this._frames[idx];
+    if (spec.stayOnTop) {
+      if (idx === this._frames.length - 1) { this._applyZOrder(); return; }
+      this._frames.splice(idx, 1);
+      this._frames.push(spec);
+    } else {
+      const firstOnTop = this._frames.findIndex(f => f.stayOnTop);
+      const target = firstOnTop < 0 ? this._frames.length - 1 : firstOnTop - 1;
+      if (idx === target) { this._applyZOrder(); return; }
+      this._frames.splice(idx, 1);
+      const insertAt = firstOnTop < 0 ? this._frames.length : this._frames.findIndex(f => f.stayOnTop);
+      this._frames.splice(insertAt, 0, spec);
+    }
     this._applyZOrder();
   }
 
@@ -234,8 +266,11 @@ class MkuiWorkspace extends HTMLElement {
       x: spec.x ?? 0.2, y: spec.y ?? 0.2,
       w: spec.w ?? 0.4, h: spec.h ?? 0.4,
       layout: spec.layout,
+      stayOnTop: spec.stayOnTop ?? false,
+      noDock: spec.noDock ?? false,
     };
     this._frames.push(s);
+    this._focusedId = s.id;
     const el = document.createElement("mkui-frame");
     el.setAttribute("data-id", s.id);
     this.appendChild(el);
@@ -781,7 +816,7 @@ class MkuiWorkspace extends HTMLElement {
     for (let i = this._frames.length - 1; i >= 0; i--) {
       const spec = this._frames[i];
       const el = this._frameEls.get(spec.id);
-      if (!el || el === exceptEl) continue;
+      if (!el || el === exceptEl || spec.noDock) continue;
       const body = el.bodyEl.getBoundingClientRect();
       if (clientX < body.left || clientX > body.right ||
           clientY < body.top  || clientY > body.bottom) continue;

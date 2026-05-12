@@ -66,8 +66,8 @@ class MkuiApp extends HTMLElement {
           st.set(path, value);
       };
       ensureMkio(config.mkio.url, {
-        onConnect:    () => apply(config.mkio.connected ?? { "status.message": "Connected" }),
-        onDisconnect: () => apply(config.mkio.disconnected ?? { "status.message": "Disconnected" }),
+        onConnect:    () => { st.set("mkio.connected", true);  apply(config.mkio.connected ?? { "status.message": "Connected" }); },
+        onDisconnect: () => { st.set("mkio.connected", false); apply(config.mkio.disconnected ?? { "status.message": "Disconnected" }); },
       });
     }
 
