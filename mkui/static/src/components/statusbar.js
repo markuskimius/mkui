@@ -31,7 +31,7 @@ class MkuiStatusbar extends HTMLElement {
 
     for (const [prop, path] of Object.entries(cfg.bindStyle ?? {})) {
       this._app.state.subscribe(path, (v) => {
-        if (v == null) this.style.removeProperty(prop);
+        if (v == null || v === "") this.style.removeProperty(prop);
         else this.style.setProperty(prop, v);
       });
     }

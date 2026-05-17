@@ -167,3 +167,27 @@ test("connected map with null values clears fields for subscribers", () => {
   assert.deepEqual(colors, ["#000", null, "#000"]);
   assert.deepEqual(bgs, ["#b8b8b8", null, "#b8b8b8"]);
 });
+
+// ── Empty string as null (TOML compat) ─────────────────────────────────
+
+test("empty string is equivalent to null for style clearing in state maps", () => {
+  const s = new State({
+    status: { message: "Connecting...", color: "#000", background: "#b8b8b8" },
+  });
+
+  const colors = [], bgs = [];
+  s.subscribe("status.color", (v) => colors.push(v));
+  s.subscribe("status.background", (v) => bgs.push(v));
+
+  const apply = (map) => {
+    for (const [path, value] of Object.entries(map)) s.set(path, value);
+  };
+
+  apply({ "status.color": "", "status.background": "" });
+  assert.deepEqual(colors, ["#000", ""]);
+  assert.deepEqual(bgs, ["#b8b8b8", ""]);
+
+  apply({ "status.color": "#000", "status.background": "#b8b8b8" });
+  assert.deepEqual(colors, ["#000", "", "#000"]);
+  assert.deepEqual(bgs, ["#b8b8b8", "", "#b8b8b8"]);
+});

@@ -38,7 +38,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 
 ## Config format
 
-Runtime input is JSON. TOML is parsed server-side by mkio (Python `tomllib`); the browser never needs a TOML parser.
+Runtime input is JSON. When using mkio as backend, set `config_dir = "."` in `mkio.toml` to enable the `/config/*` route — requests for `/config/app.json` are served from `app.toml` (parsed with `tomllib`). The browser never needs a TOML parser. TOML configs use empty string `""` where JSON would use `null` (TOML has no null literal).
 
 Top-level keys: `app`, `state`, `menubar`, `statusbar`, `panes` (id→spec), `frames` (ordered array with position + layout tree), `mkio` (optional).
 
@@ -57,7 +57,7 @@ Leaf items fire `app.fireAction(action, args)` on mouseup. Built-in actions: `ap
 
 ## Statusbar
 
-`statusbar` config keys: `left` (widget array), `right` (widget array), `bindStyle` (optional object mapping CSS property names to state paths). `bindStyle` subscribes to each state path and applies the value as an inline style on `<mkui-statusbar>`. Setting a state value to `null` removes the inline override (reverts to stylesheet default).
+`statusbar` config keys: `left` (widget array), `right` (widget array), `bindStyle` (optional object mapping CSS property names to state paths). `bindStyle` subscribes to each state path and applies the value as an inline style on `<mkui-statusbar>`. Setting a state value to `null` or empty string `""` removes the inline override (reverts to stylesheet default).
 
 ## mkio connection state
 

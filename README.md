@@ -79,10 +79,11 @@ entirely inside frames.
 
 ## Configs
 
-mkui's runtime input is JSON. When the backend is mkio, mkio's Python
-side parses `app.toml` with stdlib `tomllib` and serves the result as
-JSON — so the browser never needs a TOML parser. For other backends,
-author or generate `app.json` directly.
+mkui's runtime input is JSON. When the backend is mkio, add `config_dir`
+to your `mkio.toml` and point your HTML at `/config/app.json` — mkio reads
+`app.toml` from that directory and serves it as JSON. The browser never
+needs a TOML parser. For other backends, author or generate `app.json`
+directly.
 
 Minimal config:
 
@@ -132,8 +133,9 @@ plus an optional `bindStyle` map that binds CSS properties to state paths:
 
 Each `bindStyle` entry subscribes to the given state path. When the value
 changes, the CSS property is set as an inline style on `<mkui-statusbar>`.
-Setting the state value to `null` removes the inline override, reverting to
-the stylesheet default.
+Setting the state value to `null` (or empty string `""`) removes the inline
+override, reverting to the stylesheet default. Empty string is treated as
+null to support TOML configs, which have no null literal.
 
 ## mkio connection state
 
