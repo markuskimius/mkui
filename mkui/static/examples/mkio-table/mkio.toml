@@ -1,7 +1,6 @@
 port = 8080
 host = "0.0.0.0"
-db_path = ":memory:"
-config_dir = "."
+db_path = "orders.db"
 
 [tables.orders]
 columns = { id = "INTEGER PRIMARY KEY AUTOINCREMENT", side = "TEXT NOT NULL", symbol = "TEXT NOT NULL", qty = "INTEGER", price = "REAL DEFAULT 0", status = "TEXT DEFAULT 'pending'" }
@@ -41,3 +40,7 @@ symbol = "_mkio_topic"
 [static]
 "/" = "./static"
 "/mkui" = "../../"
+
+# Serve config files
+[config]
+"/config" = "./config"
