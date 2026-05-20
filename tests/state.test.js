@@ -168,6 +168,108 @@ test("connected map with null values clears fields for subscribers", () => {
   assert.deepEqual(bgs, ["#b8b8b8", null, "#b8b8b8"]);
 });
 
+// ── Server verification state lifecycle ────────────────────────────────
+
+test("verification lifecycle: connect sets connected, verify sets verified and server info", () => {
+  const s = new State({
+    status: { message: "Connecting...", color: "#000", background: "#b8b8b8" },
+  });
+
+  const apply = (map) => {
+    for (const [path, value] of Object.entries(map)) s.set(path, value);
+  };
+
+  // Phase 1: WebSocket opens
+  s.set("mkio.connected", true);
+  apply({ "status.message": "Connected", "status.color": null, "status.background": null });
+
+  assert.equal(s.get("mkio.connected"), true);
+  assert.equal(s.get("status.message"), "Connected");
+
+  // Phase 2: _mkio verification succeeds
+  s.set("mkio.verified", true);
+  s.set("mkio.server.name", "order-book");
+  s.set("mkio.server.version", "1.0.0");
+  s.set("mkio.server.protocol", "1.0");
+  s.set("mkio.server.mkio", "0.1.44");
+
+  assert.equal(s.get("mkio.verified"), true);
+  assert.equal(s.get("mkio.server.name"), "order-book");
+  assert.equal(s.get("mkio.server.version"), "1.0.0");
+  assert.equal(s.get("mkio.server.protocol"), "1.0");
+  assert.equal(s.get("mkio.server.mkio"), "0.1.44");
+});
+
+test("verification failure applies incompatible state map", () => {
+  const s = new State({
+    status: { message: "Connecting...", color: "#000", background: "#b8b8b8" },
+  });
+
+  const apply = (map) => {
+    for (const [path, value] of Object.entries(map)) s.set(path, value);
+  };
+
+  // WebSocket opens
+  s.set("mkio.connected", true);
+  apply({ "status.message": "Connected", "status.color": null, "status.background": null });
+
+  // Verification fails (wrong name, incompatible version, or timeout)
+  s.set("mkio.verified", false);
+  apply({ "status.message": "Wrong server", "status.color": "#ffffff", "status.background": "#cc0000" });
+
+  assert.equal(s.get("mkio.connected"), true);
+  assert.equal(s.get("mkio.verified"), false);
+  assert.equal(s.get("status.message"), "Wrong server");
+  assert.equal(s.get("status.color"), "#ffffff");
+  assert.equal(s.get("status.background"), "#cc0000");
+});
+
+test("disconnect clears verified and server state", () => {
+  const s = new State({});
+
+  const apply = (map) => {
+    for (const [path, value] of Object.entries(map)) s.set(path, value);
+  };
+
+  // Connected and verified
+  s.set("mkio.connected", true);
+  s.set("mkio.verified", true);
+  s.set("mkio.server", { name: "order-book", version: "1.0.0", protocol: "1.0", mkio: "0.1.44" });
+
+  // Disconnect
+  s.set("mkio.connected", false);
+  s.set("mkio.verified", false);
+  apply({ "status.message": "Disconnected", "status.color": "#000", "status.background": "#b8b8b8" });
+
+  assert.equal(s.get("mkio.connected"), false);
+  assert.equal(s.get("mkio.verified"), false);
+  assert.equal(s.get("status.message"), "Disconnected");
+});
+
+test("subscribers see full verification lifecycle", () => {
+  const s = new State({});
+
+  const connected = [], verified = [];
+  s.subscribe("mkio.connected", (v) => connected.push(v));
+  s.subscribe("mkio.verified", (v) => verified.push(v));
+
+  // Connect
+  s.set("mkio.connected", true);
+  s.set("mkio.verified", false);
+  // Verify succeeds
+  s.set("mkio.verified", true);
+  // Disconnect
+  s.set("mkio.connected", false);
+  s.set("mkio.verified", false);
+  // Reconnect + verify
+  s.set("mkio.connected", true);
+  s.set("mkio.verified", false);
+  s.set("mkio.verified", true);
+
+  assert.deepEqual(connected, [undefined, true, false, true]);
+  assert.deepEqual(verified, [undefined, false, true, false, false, true]);
+});
+
 // ── Empty string as null (TOML compat) ─────────────────────────────────
 
 test("empty string is equivalent to null for style clearing in state maps", () => {

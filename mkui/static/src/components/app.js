@@ -65,9 +65,65 @@ class MkuiApp extends HTMLElement {
         for (const [path, value] of Object.entries(map))
           st.set(path, value);
       };
+
+      let verifyGen = 0;
+
+      const verify = async (client) => {
+        const gen = ++verifyGen;
+        st.set("mkio.verified", false);
+        st.set("mkio.server", {});
+
+        const expect = config.mkio.expect;
+        const reqData = {};
+        if (expect?.version)  reqData.version  = expect.version;
+        if (expect?.protocol) reqData.protocol = expect.protocol;
+        if (expect?.mkio)     reqData.mkio     = expect.mkio;
+
+        let reply;
+        try {
+          const ms = config.mkio.timeout ?? 5000;
+          reply = await Promise.race([
+            client.request("_mkio", Object.keys(reqData).length ? reqData : undefined),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms)),
+          ]);
+        } catch (e) {
+          if (gen !== verifyGen) return;
+          st.set("mkio.verified", false);
+          apply(config.mkio.incompatible ?? { "status.message": "Incompatible server" });
+          return;
+        }
+
+        if (gen !== verifyGen) return;
+        const info = reply.row;
+
+        st.set("mkio.server.name",     info.name     ?? null);
+        st.set("mkio.server.version",  info.version  ?? null);
+        st.set("mkio.server.protocol", info.protocol ?? null);
+        st.set("mkio.server.mkio",     info.mkio     ?? null);
+
+        let verified = true;
+        if (expect) {
+          if (expect.name && info.name !== expect.name) verified = false;
+          if (info.compatible === false) verified = false;
+        }
+
+        st.set("mkio.verified", verified);
+        if (!verified) {
+          apply(config.mkio.incompatible ?? { "status.message": "Incompatible server" });
+        }
+      };
+
       ensureMkio(config.mkio.url, {
-        onConnect:    () => { st.set("mkio.connected", true);  apply(config.mkio.connected ?? { "status.message": "Connected" }); },
-        onDisconnect: () => { st.set("mkio.connected", false); apply(config.mkio.disconnected ?? { "status.message": "Disconnected" }); },
+        onConnect: (client) => {
+          st.set("mkio.connected", true);
+          apply(config.mkio.connected ?? { "status.message": "Connected" });
+          verify(client);
+        },
+        onDisconnect: () => {
+          st.set("mkio.connected", false);
+          st.set("mkio.verified", false);
+          apply(config.mkio.disconnected ?? { "status.message": "Disconnected" });
+        },
       });
     }
 

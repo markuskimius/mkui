@@ -61,9 +61,21 @@ Leaf items fire `app.fireAction(action, args)` on mouseup. Built-in actions: `ap
 
 ## mkio connection state
 
-When `config.mkio.url` is present, `<mkui-app>` calls `ensureMkio` with `onConnect`/`onDisconnect` callbacks **before** setting up menubar, workspace, and statusbar components. This ordering is load-bearing: pane factories (e.g., `mkio-table`) also call `ensureMkio`, and the bridge caches the first caller's promise — so the app's call must come first to ensure lifecycle callbacks are registered. The bridge also explicitly fires `onConnect` after the initial `client.connect()` resolves, since `MkioClient` may only fire it on reconnections.
+When `config.mkio.url` is present, `<mkui-app>` calls `ensureMkio` with `onConnect`/`onDisconnect` callbacks **before** setting up menubar, workspace, and statusbar components. This ordering is load-bearing: pane factories (e.g., `mkio-table`) also call `ensureMkio`, and the bridge caches the first caller's promise — so the app's call must come first to ensure lifecycle callbacks are registered. The bridge wraps user callbacks to pass the `client` as the first argument, enabling verification logic in the callbacks.
 
-The optional `config.mkio.connected` and `config.mkio.disconnected` are state maps (object of `"state.path": value` entries) applied on each lifecycle event. Defaults: `{ "status.message": "Connected" }` / `{ "status.message": "Disconnected" }`. Combine with `statusbar.bindStyle` for visual feedback (e.g., changing statusbar background on disconnect).
+Connection is two-phase: **connect** then **verify**. When the WebSocket opens, `mkio.connected` is set to `true` and the `config.mkio.connected` state map is applied immediately. Then an async `_mkio` reqrep request queries the server's identity (name, version, protocol version, mkio version). If verification passes, `mkio.verified` is set to `true`. If it fails, `mkio.verified` stays `false` and the `config.mkio.incompatible` state map is applied (overwriting the connected state map). On reconnect, verification re-runs automatically.
+
+The optional `config.mkio.expect` object declares expected server identity. Keys: `name` (exact string match), `version`, `protocol`, `mkio` (all semver-compatible, checked server-side). When `expect` is absent, the `_mkio` query still runs to confirm it is an mkio server and populate `mkio.server.*` state paths. The `_mkio` request has a configurable timeout (`config.mkio.timeout`, default 5000ms) — non-mkio servers that don't respond are detected as incompatible.
+
+State maps: `config.mkio.connected`, `config.mkio.disconnected`, and `config.mkio.incompatible` are objects of `"state.path": value` entries applied on each lifecycle event. Defaults: `{ "status.message": "Connected" }` / `{ "status.message": "Disconnected" }` / `{ "status.message": "Incompatible server" }`. Combine with `statusbar.bindStyle` for visual feedback.
+
+State paths set by the connection lifecycle:
+- `mkio.connected` — boolean, WebSocket is open
+- `mkio.verified` — boolean, server passed `_mkio` verification
+- `mkio.server.name` — server's application name
+- `mkio.server.version` — server's application version
+- `mkio.server.protocol` — server's protocol version
+- `mkio.server.mkio` — server's mkio package version
 
 ## mkio-table pane type
 

@@ -140,22 +140,45 @@ null to support TOML configs, which have no null literal.
 ## mkio connection state
 
 When `config.mkio.url` is set, `<mkui-app>` automatically connects to the
-mkio server and tracks connection lifecycle — including the initial
-connection, not just reconnections. The optional `connected` and
-`disconnected` keys are state maps — on each event, every entry is applied
-via `state.set(path, value)`:
+mkio server and verifies its identity. Connection is two-phase:
+
+1. **Connect** — WebSocket opens, `mkio.connected` becomes `true`, and the
+   `connected` state map is applied immediately.
+2. **Verify** — an async `_mkio` request confirms the server is a genuine
+   mkio server and optionally checks its name, version, and protocol against
+   expectations declared in `config.mkio.expect`. On success `mkio.verified`
+   becomes `true`; on failure the `incompatible` state map is applied.
+   Verification re-runs on every reconnect.
 
 ```json
 "mkio": {
   "url": "ws://localhost:8080/ws",
+  "expect": {
+    "name": "order-book",
+    "version": "1.0",
+    "protocol": "1.0"
+  },
   "connected":    { "status.message": "Connected", "status.background": null },
+  "incompatible": { "status.message": "Wrong server", "status.background": "#cc0000" },
   "disconnected": { "status.message": "Disconnected", "status.background": "#858585" }
 }
 ```
 
-If omitted, the defaults are `{ "status.message": "Connected" }` and
-`{ "status.message": "Disconnected" }`. Combine with `statusbar.bindStyle`
-to change the statusbar appearance on disconnect.
+The `expect` keys are all optional. `name` is checked by exact match;
+`version`, `protocol`, and `mkio` use semver-compatible matching (delegated
+to the server's `_mkio` service). When `expect` is absent, the `_mkio`
+query still runs to confirm it is an mkio server and to populate
+`mkio.server.*` state paths (name, version, protocol, mkio).
+
+The `_mkio` request has a configurable timeout (`config.mkio.timeout`,
+default 5000 ms) — non-mkio servers that don't respond are detected as
+incompatible.
+
+State maps default to `{ "status.message": "Connected" }`,
+`{ "status.message": "Disconnected" }`, and
+`{ "status.message": "Incompatible server" }`. Combine with
+`statusbar.bindStyle` to change the statusbar appearance on disconnect or
+server mismatch.
 
 ## Menubar
 
@@ -365,5 +388,5 @@ mkui/                    Python package (pip install mkui)
 pyproject.toml           Python build config
 package.json             JS dev tooling
 tests/layout.test.js     40 layout unit tests
-tests/state.test.js      15 state + connection lifecycle tests
+tests/state.test.js      19 state + connection/verification lifecycle tests
 ```

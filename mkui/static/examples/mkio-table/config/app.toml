@@ -136,10 +136,20 @@ layout = { type = "tabs", active = 0, children = ["last-trade"] }
 [mkio]
 url = "ws://localhost:8080/ws"
 
+[mkio.expect]
+name = "order-book"
+version = "1.0"
+protocol = "1.0"
+
 [mkio.connected]
 "status.message" = "Connected"
 "status.color" = ""
 "status.background" = ""
+
+[mkio.incompatible]
+"status.message" = "Wrong server"
+"status.color" = "#ffffff"
+"status.background" = "#cc0000"
 
 [mkio.disconnected]
 "status.message" = "Disconnected"

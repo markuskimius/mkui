@@ -22,9 +22,14 @@ async function loadAndConnect(wsUrl, opts) {
   if (typeof window.MkioClient === "undefined") {
     throw new Error(`[mkui] failed to load MkioClient from ${httpOrigin}/mkio.js`);
   }
-  const client = new window.MkioClient(wsUrl, opts);
+  const userOnConnect = opts.onConnect;
+  const userOnDisconnect = opts.onDisconnect;
+  const client = new window.MkioClient(wsUrl, {
+    ...opts,
+    onConnect:    () => userOnConnect?.(client),
+    onDisconnect: () => userOnDisconnect?.(client),
+  });
   await client.connect();
-  opts.onConnect?.();
   cachedClient = client;
   return client;
 }

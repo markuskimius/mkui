@@ -1,3 +1,5 @@
+name = "order-book"
+version = "1.0.0"
 port = 8080
 host = "0.0.0.0"
 db_path = "orders.db"
