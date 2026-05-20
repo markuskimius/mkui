@@ -80,10 +80,10 @@ entirely inside frames.
 ## Configs
 
 mkui's runtime input is JSON. When the backend is mkio, add `config_dir`
-to your `mkio.toml` and point your HTML at `/config/app.json` — mkio reads
-`app.toml` from that directory and serves it as JSON. The browser never
-needs a TOML parser. For other backends, author or generate `app.json`
-directly.
+to your `server.toml` and point your HTML at `/config/client.json` — mkio
+reads `client.toml` from that directory and serves it as JSON. The browser
+never needs a TOML parser. For other backends, author or generate
+`client.json` directly.
 
 Minimal config:
 
@@ -282,7 +282,7 @@ keys fall back to the default (dark) values. Switch themes at runtime with
 <!doctype html>
 <link rel="stylesheet" href="/mkui/styles/mkui.css">
 <script type="module" src="/mkui/src/index.js"></script>
-<mkui-app config="/mkui/config.json"></mkui-app>
+<mkui-app config="/mkui/client.json"></mkui-app>
 ```
 
 ## Library mode
@@ -355,7 +355,7 @@ The mkio-table example requires [mkio](https://pypi.org/project/mkio/):
 
 ```
 cd mkui/static/examples/mkio-table
-mkio                # starts on port 8080 (configured in mkio.toml)
+mkio                # starts on port 8080 (configured in server.toml)
 python seed.py      # (optional) populates sample orders in a loop
 # http://localhost:8080/
 ```

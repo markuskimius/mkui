@@ -38,7 +38,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 
 ## Config format
 
-Runtime input is JSON. When using mkio as backend, set `config_dir = "."` in `mkio.toml` to enable the `/config/*` route — requests for `/config/app.json` are served from `app.toml` (parsed with `tomllib`). The browser never needs a TOML parser. TOML configs use empty string `""` where JSON would use `null` (TOML has no null literal).
+Runtime input is JSON. When using mkio as backend, set `config_dir = "."` in `server.toml` to enable the `/config/*` route — requests for `/config/client.json` are served from `client.toml` (parsed with `tomllib`). The browser never needs a TOML parser. TOML configs use empty string `""` where JSON would use `null` (TOML has no null literal).
 
 Top-level keys: `app`, `state`, `menubar`, `statusbar`, `panes` (id→spec), `frames` (ordered array with position + layout tree), `mkio` (optional).
 
