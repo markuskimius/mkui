@@ -140,6 +140,7 @@ url = "ws://localhost:8080/ws"
 name = "order-book"
 version = "1.0"
 protocol = "1.0"
+mkio = "0.1"
 
 [mkio.connected]
 "status.message" = "Connected"

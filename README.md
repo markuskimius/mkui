@@ -156,7 +156,8 @@ mkio server and verifies its identity. Connection is two-phase:
   "expect": {
     "name": "order-book",
     "version": "1.0",
-    "protocol": "1.0"
+    "protocol": "1.0",
+    "mkio": "0.1"
   },
   "connected":    { "status.message": "Connected", "status.background": null },
   "incompatible": { "status.message": "Wrong server", "status.background": "#cc0000" },
