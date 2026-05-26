@@ -143,7 +143,7 @@ type = "mkio-table"
 service = "feed"
 protocol = "stream"
 columns = ["id", "action", "name", "category"]
-labels = { id = "ID", action = "Action", name = "Name", category = "Category" }
+labels = { id = "ID", category = "Category", name = "Name", action = "Action" }
 
 # ─── Frames ───────────────────────────────────────────────────────────
 
