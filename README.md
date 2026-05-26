@@ -317,6 +317,8 @@ root.workspace.addFrame({ x: 0.5, y: 0.1, w: 0.4, h: 0.4,
   - `button` — fires an action by name
 - Pane types (whole-pane custom rendering):
   - `mkio-table` — subscribes to an mkio service (query, subpub, or stream) and renders a live-updating table with flash animations for inserts, deletes, and field changes. Subscriptions are deferred until the pane is first visible, unsubscribed immediately when the frame is closed, and dropped after 5 minutes of being hidden (e.g. inactive tab) — brief tab switches preserve the live connection. Large query snapshots render progressively in chunked batches to avoid freezing the UI. Stream tables support paged navigation (prev/next) with a toolbar, and a toggleable "Live" button that switches to real-time streaming (blinking green indicator) — click again to return to paged mode.
+- Dialogs:
+  - `openDialog(spec, context, app, extra)` — config-driven modal dialog with typed fields (text, number, select, checkbox, textarea, readonly, hidden), validation, conditional visibility (`showWhen`), async service-backed options (`optionsFrom`), and RPC submission with error handling. A **pin button** (📌) in the titlebar keeps the dialog open after successful submission — the form resets to defaults only after the server confirms success; errors leave the form intact for retry.
 - Custom pane types are the primary extensibility surface. Register with
   `registerPaneType(name, factory)`; reference from config as `type = "<name>"`.
 
@@ -415,7 +417,7 @@ mkui/                    Python package (pip install mkui)
         workspace.js     <mkui-workspace> — frame list, arrangement, snap
         frame.js         <mkui-frame> + <mkui-pane>
       widgets/
-        text.js  button.js  mkio-table.js
+        text.js  button.js  mkio-table.js  mkui-dialog.js
       mkio-bridge.js     Lazy-loads mkio's /mkio.js client
     styles/mkui.css      Default theme (CSS custom properties)
     examples/
@@ -427,5 +429,6 @@ tests/
   layout.test.js         Layout tree unit tests (node:test)
   state.test.js          State + connection lifecycle tests (node:test)
   table.test.js          mkio-table pane tests (node:test)
+  dialog.test.js         Dialog expression + submission tests (node:test)
   test_cli.py            CLI init/serve tests (unittest)
 ```

@@ -27,6 +27,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 - `mkui/static/src/components/app.js` — shell: menubar + workspace + statusbar
 - `mkui/static/src/core.js` — `App`, `State` (reactive store), widget/pane-type registries
 - `mkui/static/src/widgets/mkio-table.js` — built-in `mkio-table` pane type: subscribes to mkio services, renders live tables
+- `mkui/static/src/widgets/mkui-dialog.js` — `openDialog()`: config-driven modal dialogs with validation, RPC submission, and pin-to-keep-open
 - `mkui/static/src/mkio-bridge.js` — lazy-loads mkio's `/mkio.js` client from the server origin
 - `mkui/static/styles/mkui.css` — default theme via CSS custom properties
 
@@ -34,7 +35,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 
 - `mkui init [dir]` — scaffold a new project (server.toml + config/client.toml + static/index.html)
 - `mkui serve [dir] [-p PORT]` — serve a project using mkio's server API
-- `node --test tests/layout.test.js tests/state.test.js tests/table.test.js` — run JS unit tests (node:test, no deps needed)
+- `node --test tests/layout.test.js tests/state.test.js tests/table.test.js tests/dialog.test.js` — run JS unit tests (node:test, no deps needed)
 - `python -m pytest tests/test_cli.py` — run CLI tests (unittest)
 - `python -m build && twine upload dist/*` — build and publish to PyPI
 - `cd mkui/static && python3 -m http.server 8000` — serve examples locally (standalone/library only)
@@ -117,6 +118,18 @@ Paging (query): when `maxcount` is set (default 200), the subscription uses mkio
 Paging (stream): when `maxcount` is set (default 200), the table enters paged mode with a toolbar showing `◀ Prev | Page N | Next ▶ | ● Live`. Each page is a separate `subscribe` call with `onPage` (disables the mkio client's auto-paging). A `pageRefs` stack of cursor values enables backward navigation. The `● Live` button toggles live streaming mode — when active (accent-colored), prev/next are disabled and the table subscribes for live updates; clicking it again exits live mode and returns to page 1.
 
 Visibility-aware subscriptions: an `IntersectionObserver` on the pane content element detects visibility changes. Panes that start hidden (inactive tab) do not subscribe until first shown. When a pane becomes hidden (tab switch, park), a 5-minute timer starts; if still hidden when it fires, the subscription is dropped. If the pane reappears before the timer fires, the timer is cancelled and the subscription stays alive. When a frame is closed, the workspace dispatches a `mkui-pane-close` event on each pane element; the close handler sets a `closed` flag, disconnects the `IntersectionObserver`, and unconditionally calls `client.unsubscribe(subid)` (bypassing the `subscribed` guard to ensure the server always receives the unsubscribe). The `closed` flag prevents `sub()` and `loadPage()` from re-subscribing after close. When a parked pane is reopened via `showPane()`, the workspace dispatches `mkui-pane-open`; the open handler resets `closed`, clears stale rows/sort/filter/paging state, and re-observes with the `IntersectionObserver`, which triggers a fresh subscription. On re-subscribe after timeout, table state is cleared so the fresh server snapshot populates a clean table. In stream paged mode, brief hidden/shown transitions (under 5 minutes) preserve the current page without re-fetching.
+
+## Dialogs
+
+`openDialog(spec, context, app, extra)` creates a modal dialog as a floating frame (`stayOnTop`, `noDock`). Returns a Promise that resolves with the form data on successful submit, or `null` on cancel/close.
+
+Field types: `hidden`, `readonly`, `select`, `checkbox`, `textarea`, `number`, text (default). Fields support `required`, `pattern`, `min`/`max`/`step` validation, `showWhen` conditional visibility, `optionsFrom` (async service-backed options), and `optionsFromColumn` (values from table data).
+
+Layout: fields are listed in `spec.fields`. Items can be `{ group: "Header" }` for section headers, `{ row: [field, field] }` for horizontal layout, or plain field objects. `field.width` sets flex proportion in rows.
+
+Submission: when `spec.submit.service` is set, the dialog sends form data via `client.send()` with a configurable timeout (default 5s). `submitPerRow` mode sends one request per selected row. Transaction errors are shown inline and the form stays open for retry. Without a service, the dialog resolves immediately with form data.
+
+Pin button: a 📌 toggle in the dialog's titlebar (frame controls area, before maximize/close). When active (accent-colored), successful submission resets the form to its default values instead of closing the dialog. The form is only reset after the server confirms success — errors leave the form intact for retry. The pin button is injected via `frameEl._extraControls`, a callback that `_makeControls()` in frame.js calls to prepend custom elements before the standard window controls. Since `_makeControls` runs on every `_renderInternal`, the callback re-creates the button each render; the `pinned` state is held in a closure shared with the submit handler.
 
 ## Conventions
 

@@ -125,12 +125,34 @@ export function openDialog(spec, context, app, extra = {}) {
     const xFrac = Math.max(0, (1 - wFrac) / 2);
     const yFrac = Math.max(0, (1 - hFrac) / 2);
 
+    let pinned = false;
+    function makePinBtn() {
+      const btn = document.createElement("div");
+      btn.className = "mkui-frame-btn mkui-dialog-pin" + (pinned ? " mkui-dialog-pin-active" : "");
+      btn.textContent = "\u{1F4CC}";
+      btn.title = pinned ? "Will stay open after submit" : "Keep open after submit";
+      btn.addEventListener("mousedown", (ev) => ev.stopPropagation());
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        pinned = !pinned;
+        btn.classList.toggle("mkui-dialog-pin-active", pinned);
+        btn.title = pinned ? "Will stay open after submit" : "Keep open after submit";
+      });
+      return btn;
+    }
+
     const frameId = ws.addFrame({
       x: xFrac, y: yFrac, w: wFrac, h: hFrac,
       stayOnTop: true,
       noDock: true,
       layout: { type: "tabs", active: 0, children: [paneId] },
     });
+
+    const frameEl = ws._frameEls.get(frameId);
+    if (frameEl) {
+      frameEl._extraControls = () => [makePinBtn()];
+      frameEl._renderInternal();
+    }
 
     const paneEl = ws._paneEls.get(paneId);
     if (!paneEl) { resolve(null); return; }
@@ -278,6 +300,33 @@ export function openDialog(spec, context, app, extra = {}) {
       resolve(null);
     }
 
+    function resetForm() {
+      for (const f of allFields) {
+        if (!f.name || f.type === "readonly" || f.type === "hidden") continue;
+        const rv = resolveExpr(f.value ?? "", context);
+        const input = fieldInputs[f.name];
+        if (f.type === "checkbox") {
+          if (input) input.checked = !!rv;
+          fieldState[f.name] = !!rv;
+        } else if (f.type === "select") {
+          if (input) input.value = rv !== "" ? String(rv) : (input.options[0]?.value ?? "");
+          fieldState[f.name] = input?.value ?? "";
+        } else {
+          if (input) input.value = rv == null ? "" : String(rv);
+          fieldState[f.name] = input?.value ?? "";
+        }
+        const el = fieldEls[f.name];
+        if (el) {
+          el.classList.remove("mkui-dialog-invalid");
+          const err = el.querySelector(".mkui-dialog-error");
+          if (err) err.remove();
+        }
+      }
+      applyShowWhen();
+      const firstInput = host.querySelector("input:not([type=hidden]):not([type=checkbox]), select, textarea");
+      firstInput?.focus();
+    }
+
     async function submit() {
       if (resolved) return;
       if (!validate()) return;
@@ -324,10 +373,18 @@ export function openDialog(spec, context, app, extra = {}) {
             cancelBtn.disabled = false;
             return;
           }
-          resolved = true;
-          ws.closeFrame(frameId);
-          cleanup();
-          resolve(data);
+          if (pinned) {
+            status.textContent = "OK";
+            status.className = "mkui-dialog-status";
+            submitBtn.disabled = false;
+            cancelBtn.disabled = false;
+            resetForm();
+          } else {
+            resolved = true;
+            ws.closeFrame(frameId);
+            cleanup();
+            resolve(data);
+          }
         } catch (e) {
           status.textContent = e.message || "Transaction failed";
           status.className = "mkui-dialog-status mkui-dialog-status-error";
@@ -335,10 +392,14 @@ export function openDialog(spec, context, app, extra = {}) {
           cancelBtn.disabled = false;
         }
       } else {
-        resolved = true;
-        ws.closeFrame(frameId);
-        cleanup();
-        resolve(data);
+        if (pinned) {
+          resetForm();
+        } else {
+          resolved = true;
+          ws.closeFrame(frameId);
+          cleanup();
+          resolve(data);
+        }
       }
     }
 

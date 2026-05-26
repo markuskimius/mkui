@@ -259,6 +259,10 @@ class MkuiFrame extends HTMLElement {
     const actions = document.createElement("div");
     actions.className = "mkui-frame-actions";
 
+    if (this._extraControls) {
+      for (const el of this._extraControls()) actions.appendChild(el);
+    }
+
     const maxBtn = document.createElement("div");
     maxBtn.className = "mkui-frame-btn mkui-frame-maximize";
     maxBtn.innerHTML = "&#9723;";

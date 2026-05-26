@@ -73,3 +73,24 @@ test("resolveExpr with selection context", async () => {
   assert.equal(resolveExpr("${selection.count} item(s)", ctx), "3 item(s)");
   assert.equal(resolveExpr("${selection.count}", ctx), 3);
 });
+
+// Pin / reset behavior — tested via resolveExpr since resetForm re-resolves
+// field.value expressions against the original context to produce defaults.
+
+test("resolveExpr re-resolves default values for form reset", async () => {
+  const { resolveExpr } = await import("../mkui/static/src/lib/expressions.js");
+  const ctx = { row: { qty: 100, side: "BUY" } };
+  // Simulates what resetForm does: re-resolve each field's value expression
+  assert.equal(resolveExpr("${row.qty}", ctx), 100);
+  assert.equal(resolveExpr("${row.side}", ctx), "BUY");
+  assert.equal(resolveExpr("", ctx), "");
+  assert.equal(resolveExpr("fixed-default", ctx), "fixed-default");
+});
+
+test("resolveExpr with empty/null default values for reset", async () => {
+  const { resolveExpr } = await import("../mkui/static/src/lib/expressions.js");
+  const ctx = {};
+  assert.equal(resolveExpr("", ctx), "");
+  assert.equal(resolveExpr(undefined ?? "", ctx), "");
+  assert.equal(resolveExpr(null ?? "", ctx), "");
+});
