@@ -18,7 +18,8 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 
 ## Key files
 
-- `mkui/__init__.py` — Python package; exposes `static_dir` for serving assets
+- `mkui/__init__.py` — Python package; exposes `static_dir` and `__version__`
+- `mkui/__main__.py` — CLI (`mkui init`, `mkui serve`); scaffold templates, mkio `create_app` integration
 - `mkui/static/src/layout/tree.js` — normalized tree math (normalize, find, insert, remove, layout), no DOM
 - `mkui/static/src/layout/drag.js` — clamp, snap, drop-zone, frac↔rect helpers, no DOM
 - `mkui/static/src/components/workspace.js` — frame lifecycle, z-order, arrangement commands, inter-frame drag routing, snap
@@ -31,14 +32,23 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 
 ## Commands
 
-- `cd mkui/static && python3 -m http.server 8000` — serve examples locally
-- `node --test tests/layout.test.js tests/state.test.js tests/table.test.js` — run unit tests (node:test, no deps needed)
+- `mkui init [dir]` — scaffold a new project (server.toml + config/client.toml + static/index.html)
+- `mkui serve [dir] [-p PORT]` — serve a project using mkio's server API
+- `node --test tests/layout.test.js tests/state.test.js tests/table.test.js` — run JS unit tests (node:test, no deps needed)
+- `python -m pytest tests/test_cli.py` — run CLI tests (unittest)
 - `python -m build && twine upload dist/*` — build and publish to PyPI
+- `cd mkui/static && python3 -m http.server 8000` — serve examples locally (standalone/library only)
 - Examples at `mkui/static/examples/standalone-json/`, `mkui/static/examples/library-js/`, and `mkui/static/examples/mkio-table/`
+
+## CLI architecture
+
+`mkui init` runs `mkio init --no-static` to generate `server.toml` (ensuring it stays in sync with mkio), then appends `[static]` and `[config]` routing sections, and creates mkui-specific files (`static/index.html`, `config/client.toml`).
+
+`mkui serve` loads `server.toml`, resolves the `<mkui.static_dir>` placeholder to the installed package path, and delegates to `mkio.create_app()`. mkio's server handles all routing: static files, TOML→JSON config, `/mkio.js`, and the WebSocket endpoint.
 
 ## Config format
 
-Runtime input is JSON. When using mkio as backend, set `config_dir = "."` in `server.toml` to enable the `/config/*` route — requests for `/config/client.json` are served from `client.toml` (parsed with `tomllib`). The browser never needs a TOML parser. TOML configs use empty string `""` where JSON would use `null` (TOML has no null literal).
+Runtime input is JSON. `mkui serve` uses mkio's `[config]` routing — requests for `/config/client.json` are served from `config/client.toml` (parsed with `tomllib`). The browser never needs a TOML parser. TOML configs use empty string `""` where JSON would use `null` (TOML has no null literal).
 
 Top-level keys: `app`, `state`, `menubar`, `statusbar`, `panes` (id→spec), `frames` (ordered array with position + layout tree), `mkio` (optional).
 

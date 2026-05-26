@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mkui"
-version = "0.1.23"
+version = "0.1.24"
 description = "Config-driven, zero-dependency web GUI framework with dockable panes"
 readme = "README.md"
 license = "Apache-2.0"
@@ -19,6 +19,9 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Software Development :: User Interfaces",
 ]
+
+[project.scripts]
+mkui = "mkui.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/markuskimius/mkui"

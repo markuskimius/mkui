@@ -320,20 +320,55 @@ root.workspace.addFrame({ x: 0.5, y: 0.1, w: 0.4, h: 0.4,
 - Custom pane types are the primary extensibility surface. Register with
   `registerPaneType(name, factory)`; reference from config as `type = "<name>"`.
 
+## Quick start
+
+```
+pip install mkui mkio
+mkui init myapp
+mkui serve myapp
+# http://localhost:8080/
+```
+
+`mkui init` scaffolds a complete project:
+
+```
+myapp/
+  server.toml          ← mkio server config (schema, services, routes)
+  config/
+    client.toml        ← mkui app config (panes, menus, layout)
+  static/
+    index.html         ← entry point
+```
+
+`mkui serve` starts an [mkio](https://pypi.org/project/mkio/) server that
+handles static files, config serving (TOML→JSON), the WebSocket endpoint,
+and the mkio client JS — all from one process, one port.
+
 ## Installation
 
 ```
-pip install mkui
+pip install mkui mkio
 ```
 
-Then serve the static assets from your Python backend:
+### CLI
+
+```
+mkui init [dir]               # scaffold a new project (default: .)
+mkui serve [dir] [-p PORT]    # serve with mkio backend (default port from server.toml)
+mkui --version
+```
+
+`serve` reads `server.toml` in the project directory, resolves the
+`<mkui.static_dir>` placeholder to the installed package path, and
+delegates to `mkio.create_app()`. The `--port` flag overrides the
+port in `server.toml`.
+
+### Library usage
+
+For custom backends (no mkio), serve the static assets directly:
 
 ```python
 import mkui
-
-# With mkio (toml config):
-#   [static]
-#   "/mkui" = "<result of mkui.static_dir>"
 
 # With FastAPI / Starlette:
 from starlette.staticfiles import StaticFiles
@@ -364,7 +399,8 @@ python seed.py      # (optional) populates sample orders in a loop
 
 ```
 mkui/                    Python package (pip install mkui)
-  __init__.py            Exposes static_dir path
+  __init__.py            Exposes static_dir path and version
+  __main__.py            CLI: init + serve commands
   static/
     src/
       core.js            State store, registries, App class
@@ -387,7 +423,9 @@ mkui/                    Python package (pip install mkui)
       library-js/        Built imperatively from JS
       mkio-table/        Live table backed by mkio query/subpub services
 pyproject.toml           Python build config
-package.json             JS dev tooling
-tests/layout.test.js     40 layout unit tests
-tests/state.test.js      19 state + connection/verification lifecycle tests
+tests/
+  layout.test.js         Layout tree unit tests (node:test)
+  state.test.js          State + connection lifecycle tests (node:test)
+  table.test.js          mkio-table pane tests (node:test)
+  test_cli.py            CLI init/serve tests (unittest)
 ```
