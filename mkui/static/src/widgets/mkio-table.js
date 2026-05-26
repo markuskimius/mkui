@@ -821,26 +821,51 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function goLive() {
     liveMode = true;
-    if (pagingToolbar) pagingToolbar.style.display = "none";
     columns = spec.columns ?? null;
     displayOrder = null;
     sortKeys.length = 0;
     filters.clear();
     unsub();
     sub();
+    updatePagingUI();
+  }
+
+  function exitLive() {
+    liveMode = false;
+    unsub();
+    columns = spec.columns ?? null;
+    displayOrder = null;
+    sortKeys.length = 0;
+    filters.clear();
+    rows.clear();
+    rowEls.clear();
+    tbody.innerHTML = "";
+    pageRefs = [null];
+    currentPage = 0;
+    pageHasMore = false;
+    loadPage(1);
+    updatePagingUI();
   }
 
   function updatePagingUI() {
     if (!pagingToolbar) return;
-    prevBtn.disabled = currentPage <= 1;
-    nextBtn.disabled = !pageHasMore;
-    pageInfo.textContent = `Page ${currentPage}`;
+    if (liveMode) {
+      prevBtn.disabled = true;
+      nextBtn.disabled = true;
+      pageInfo.textContent = "Live";
+      liveBtn.classList.add("active");
+    } else {
+      prevBtn.disabled = currentPage <= 1;
+      nextBtn.disabled = !pageHasMore;
+      pageInfo.textContent = `Page ${currentPage}`;
+      liveBtn.classList.remove("active");
+    }
   }
 
   if (isPaged) {
     prevBtn.addEventListener("click", () => { if (currentPage > 1) loadPage(currentPage - 1); });
     nextBtn.addEventListener("click", () => { if (pageHasMore) loadPage(currentPage + 1); });
-    liveBtn.addEventListener("click", goLive);
+    liveBtn.addEventListener("click", () => liveMode ? exitLive() : goLive());
   }
 
   /* ── Visibility-aware sub/unsub ─────────────────────────────────── */
@@ -873,7 +898,6 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         pageRefs = [null];
         currentPage = 0;
         pageHasMore = false;
-        if (pagingToolbar) pagingToolbar.style.display = "";
       }
       io.observe(host);
     });

@@ -504,6 +504,14 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-paging-live {
   margin-left: auto;
 }
+.mkui-paging-live.active {
+  color: #4f4;
+  animation: mkui-live-blink 1.5s ease-in-out infinite;
+}
+@keyframes mkui-live-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
 .mkui-table-progress {
   text-align: center;
   padding: 8px;

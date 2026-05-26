@@ -378,20 +378,72 @@ test("next on last page is a no-op", async () => {
 
 /* ── Go Live ──────────────────────────────────────────────────────────── */
 
-test("Go Live hides toolbar and subscribes for live updates", async () => {
+test("Go Live keeps toolbar visible, disables paging, subscribes live", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeRows(50), { hasmore: true, ref: "r" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const prevBtn = toolbar._ch[0];
+  const pageInfo = toolbar._ch[1];
+  const nextBtn = toolbar._ch[2];
+  const liveBtn = toolbar._ch[3];
+  liveBtn._ev.click[0]();
+
+  assert.notEqual(toolbar.style.display, "none");
+  assert.equal(prevBtn.disabled, true);
+  assert.equal(nextBtn.disabled, true);
+  assert.equal(pageInfo.textContent, "Live");
+  assert.ok(liveBtn.classList.contains("active"));
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.onPage, undefined);
+  assert.equal(sub.opts.maxcount, undefined);
+  assert.notEqual(sub.opts.onSnapshot, undefined);
+});
+
+test("Exit Live returns to paged mode and loads page 1", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeRows(50), { hasmore: true, ref: "r" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const prevBtn = toolbar._ch[0];
+  const pageInfo = toolbar._ch[1];
+  const nextBtn = toolbar._ch[2];
+  const liveBtn = toolbar._ch[3];
+
+  liveBtn._ev.click[0]();
+  assert.ok(liveBtn.classList.contains("active"));
+
+  liveBtn._ev.click[0]();
+  assert.ok(!liveBtn.classList.contains("active"));
+
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.ref, null);
+  assert.equal(sub.opts.maxcount, 50);
+  assert.equal(sub.opts.updates, false);
+  assert.equal(typeof sub.opts.onPage, "function");
+
+  sub.opts.onPage(makeRows(50), { hasmore: true, ref: "r2" });
+  assert.equal(pageInfo.textContent, "Page 1");
+  assert.equal(prevBtn.disabled, true);
+  assert.equal(nextBtn.disabled, false);
+});
+
+test("Exit Live clears rows from live mode before loading page", async () => {
   const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
   triggerVisible(io);
   lastSubscribe().opts.onPage(makeRows(50), { hasmore: true, ref: "r" });
 
   const toolbar = findByClass(host, "mkui-table-paging");
   const liveBtn = toolbar._ch[3];
-  liveBtn._ev.click[0]();
 
-  assert.equal(toolbar.style.display, "none");
-  const sub = lastSubscribe();
-  assert.equal(sub.opts.onPage, undefined);
-  assert.equal(sub.opts.maxcount, undefined);
-  assert.notEqual(sub.opts.onSnapshot, undefined);
+  liveBtn._ev.click[0]();
+  lastSubscribe().opts.onSnapshot(makeRows(10, 500));
+  assert.equal(getTbody(host)._ch.length, 10);
+
+  liveBtn._ev.click[0]();
+  assert.equal(getTbody(host)._ch.length, 0);
 });
 
 test("after Go Live, hide/show cycles use normal sub/unsub", async () => {
