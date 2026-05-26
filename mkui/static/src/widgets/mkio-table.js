@@ -12,7 +12,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   const protocol = spec.protocol ?? "query";
-  const idKey = protocol === "subpub" ? "_mkio_topic" : "_mkio_row";
+  const idKey = protocol === "stream" ? "_mkio_ref" : protocol === "subpub" ? "_mkio_topic" : "_mkio_row";
   const maxcount = spec.maxcount !== undefined ? spec.maxcount : 200;
   const isPaged = protocol === "stream" && maxcount > 0;
 

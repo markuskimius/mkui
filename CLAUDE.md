@@ -104,7 +104,7 @@ Config keys (under `panes.<id>`):
 
 When `columns` is pre-configured, the header row renders immediately at init (before any data arrives). When `columns` is omitted, headers render on first data row. Labels are used in both the header row and the column drag ghost.
 
-Row identity: query uses `_mkio_row`, subpub uses `_mkio_topic`. All `_mkio_*` columns are hidden from display.
+Row identity: query uses `_mkio_row`, stream uses `_mkio_ref`, subpub uses `_mkio_topic`. All `_mkio_*` columns are hidden from display.
 
 Animations: inserts flash blue and fade in, deletes flash red and fade out, field updates flash blue on the changed cell. CSS classes: `mkui-flash-in`, `mkui-flash-out`, `mkui-flash-update`.
 
