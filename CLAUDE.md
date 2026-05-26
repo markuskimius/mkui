@@ -99,7 +99,10 @@ Config keys (under `panes.<id>`):
 - `topic` — string or array of strings; required for subpub (one subscription per topic if array)
 - `filter` — mkio filter expression (query only)
 - `columns` — array of column names to display; defaults to all keys from the first row
+- `labels` — object mapping column names to display labels (e.g. `{ "ts": "Timestamp" }`); defaults to the column name
 - `maxcount` — page size for paged subscriptions (default 200, `null` to disable)
+
+When `columns` is pre-configured, the header row renders immediately at init (before any data arrives). When `columns` is omitted, headers render on first data row. Labels are used in both the header row and the column drag ghost.
 
 Row identity: query uses `_mkio_row`, subpub uses `_mkio_topic`. All `_mkio_*` columns are hidden from display.
 

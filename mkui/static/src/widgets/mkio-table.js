@@ -107,6 +107,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   const rowEls = new Map();
   let columns = spec.columns ?? null;
   let displayOrder = null;
+  const labels = spec.labels ?? {};
+  const label = (col) => labels[col] ?? col;
   const visibleColumns = () =>
     displayOrder || columns.filter((c) => !c.startsWith("_mkio_"));
 
@@ -325,7 +327,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const sortInd = document.createElement("span");
       sortInd.className = "mkui-sort-indicator";
 
-      th.append(filterBtn, document.createTextNode(c), sortInd);
+      th.append(filterBtn, document.createTextNode(label(c)), sortInd);
 
       th.addEventListener("click", (e) => {
         if (suppressClick) { suppressClick = false; return; }
@@ -413,7 +415,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         closeDropdown();
         ghost = document.createElement("div");
         ghost.className = "mkui-col-drag-ghost";
-        ghost.textContent = visibleColumns()[fromIdx];
+        ghost.textContent = label(visibleColumns()[fromIdx]);
         host.appendChild(ghost);
         indicator = document.createElement("div");
         indicator.className = "mkui-col-drop-indicator";
@@ -576,6 +578,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         document.removeEventListener("mousedown", onDown, true);
     });
   }
+
+  if (columns) renderHead();
 
   /* ── Row building ─────────────────────────────────────────────────── */
 

@@ -99,6 +99,7 @@ type = "mkio-table"
 service = "all_items"
 protocol = "query"
 columns = ["category", "name", "value"]
+labels = { category = "Category", name = "Name", value = "Value" }
 
 # Add Item button — opens a dialog form
 [[panes.all-items.buttons]]
@@ -142,6 +143,7 @@ type = "mkio-table"
 service = "feed"
 protocol = "stream"
 columns = ["id", "action", "name", "category"]
+labels = { id = "ID", action = "Action", name = "Name", category = "Category" }
 
 # ─── Frames ───────────────────────────────────────────────────────────
 

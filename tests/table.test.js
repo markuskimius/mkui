@@ -153,18 +153,115 @@ function findByClass(el, cls) {
   return el._ch.find(c => c.className === cls) ?? null;
 }
 
-function getTbody(host) {
+function getTable(host) {
   const table = findByClass(host, "mkui-table")
     ?? host._ch.find(h => findByClass(h, "mkui-table"))?._ch.find(c => c.className === "mkui-table");
   if (!table) {
     for (const child of host._ch) {
       const t = findByClass(child, "mkui-table");
-      if (t) return t._ch.find(c => c.tagName === "TBODY");
+      if (t) return t;
     }
     return null;
   }
-  return table._ch.find(c => c.tagName === "TBODY");
+  return table;
 }
+
+function getTbody(host) {
+  return getTable(host)?._ch.find(c => c.tagName === "TBODY") ?? null;
+}
+
+function getThead(host) {
+  return getTable(host)?._ch.find(c => c.tagName === "THEAD") ?? null;
+}
+
+function getHeaderTexts(host) {
+  const thead = getThead(host);
+  if (!thead || !thead._ch.length) return [];
+  const tr = thead._ch[0];
+  return tr._ch.map(th => {
+    const textNodes = th._ch.filter(n => n.nodeType === 3);
+    return textNodes.map(n => n.textContent).join("");
+  });
+}
+
+/* ── Column headers & labels ──────────────────────────────────────────── */
+
+test("pre-configured columns render header immediately before data", async () => {
+  const { host } = await createTable({ columns: ["a", "b", "c"] });
+  const texts = getHeaderTexts(host);
+  assert.deepEqual(texts, ["a", "b", "c"]);
+});
+
+test("omitted columns: no header until first data row", async () => {
+  const { host, io } = await createTable({});
+  assert.deepEqual(getHeaderTexts(host), []);
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", x: 10, y: 20 }]);
+  assert.deepEqual(getHeaderTexts(host), ["x", "y"]);
+});
+
+test("labels maps column keys to display text in headers", async () => {
+  const { host } = await createTable({
+    columns: ["id", "name", "qty"],
+    labels: { id: "ID", name: "Name", qty: "Quantity" },
+  });
+  assert.deepEqual(getHeaderTexts(host), ["ID", "Name", "Quantity"]);
+});
+
+test("labels: unlabelled columns fall back to column key", async () => {
+  const { host } = await createTable({
+    columns: ["id", "name", "raw"],
+    labels: { id: "ID" },
+  });
+  assert.deepEqual(getHeaderTexts(host), ["ID", "name", "raw"]);
+});
+
+test("labels with auto-detected columns", async () => {
+  const { host, io } = await createTable({
+    labels: { x: "Ecks", y: "Why" },
+  });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", x: 10, y: 20 }]);
+  assert.deepEqual(getHeaderTexts(host), ["Ecks", "Why"]);
+});
+
+test("labels without matching columns are ignored", async () => {
+  const { host } = await createTable({
+    columns: ["a", "b"],
+    labels: { a: "Alpha", z: "Zulu" },
+  });
+  assert.deepEqual(getHeaderTexts(host), ["Alpha", "b"]);
+});
+
+test("empty labels object behaves like no labels", async () => {
+  const { host } = await createTable({
+    columns: ["x", "y"],
+    labels: {},
+  });
+  assert.deepEqual(getHeaderTexts(host), ["x", "y"]);
+});
+
+test("pre-configured columns header survives re-render after data arrives", async () => {
+  const { host, io } = await createTable({
+    columns: ["a", "b"],
+    labels: { a: "Alpha", b: "Beta" },
+  });
+  assert.deepEqual(getHeaderTexts(host), ["Alpha", "Beta"]);
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", a: 1, b: 2 },
+    { _mkio_row: "2", a: 3, b: 4 },
+  ]);
+  assert.deepEqual(getHeaderTexts(host), ["Alpha", "Beta"]);
+  assert.equal(getTbody(host)._ch.length, 2);
+});
+
+test("_mkio_ columns are hidden from header", async () => {
+  const { host } = await createTable({
+    columns: ["_mkio_row", "name", "value"],
+  });
+  assert.deepEqual(getHeaderTexts(host), ["name", "value"]);
+});
 
 /* ── Config & maxcount defaults ───────────────────────────────────────── */
 
