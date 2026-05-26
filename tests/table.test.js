@@ -725,6 +725,222 @@ test("mkui-pane-open resets paged stream to page 1", async () => {
   assert.equal(sub.opts.maxcount, 50);
 });
 
+/* ── Stream ref-based resume ─────────────────────────────────────────── */
+
+test("stream: re-subscribe after timeout passes lastRef from snapshot", async () => {
+  const { io } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", _mkio_ref: "ref-A", name: "a" },
+    { _mkio_row: "2", _mkio_ref: "ref-B", name: "b" },
+  ]);
+
+  triggerHidden(io);
+  advanceTimers();
+  triggerVisible(io);
+  const resub = lastSubscribe();
+  assert.equal(resub.opts.ref, "ref-B");
+});
+
+test("stream: re-subscribe after timeout preserves existing rows", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", _mkio_ref: "ref-A", name: "a" },
+    { _mkio_row: "2", _mkio_ref: "ref-B", name: "b" },
+  ]);
+  assert.equal(getTbody(host)._ch.length, 2);
+
+  triggerHidden(io);
+  advanceTimers();
+  triggerVisible(io);
+  assert.equal(getTbody(host)._ch.length, 2, "existing rows preserved");
+});
+
+test("stream: lastRef updated by onUpdate", async () => {
+  const { io } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", _mkio_ref: "ref-A", name: "a" },
+  ]);
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "2", _mkio_ref: "ref-C", name: "c" });
+
+  triggerHidden(io);
+  advanceTimers();
+  triggerVisible(io);
+  assert.equal(lastSubscribe().opts.ref, "ref-C");
+});
+
+test("stream: lastRef updated by onDelta", async () => {
+  const { io } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", _mkio_ref: "ref-A", name: "a" },
+  ]);
+  lastSubscribe().opts.onDelta([
+    { op: "insert", row: { _mkio_row: "2", _mkio_ref: "ref-D", name: "d" } },
+    { op: "insert", row: { _mkio_row: "3", _mkio_ref: "ref-E", name: "e" } },
+  ]);
+
+  triggerHidden(io);
+  advanceTimers();
+  triggerVisible(io);
+  assert.equal(lastSubscribe().opts.ref, "ref-E");
+});
+
+test("stream: first subscribe has no ref", async () => {
+  const { io } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.ref, undefined);
+});
+
+test("stream: pane-open resets lastRef for fresh start", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", _mkio_ref: "ref-A", name: "a" },
+  ]);
+
+  const paneEl = host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+  for (const fn of paneEl._ev["mkui-pane-open"] ?? []) fn();
+  triggerVisible(io);
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.ref, undefined, "ref not passed after pane reopen");
+});
+
+test("stream: goLive resets lastRef", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(
+    [{ _mkio_row: "1", _mkio_ref: "ref-A", name: "a" }],
+    { hasmore: false, ref: "ref-A" },
+  );
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const liveBtn = toolbar._ch[3];
+  liveBtn._ev.click[0]();
+
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.ref, undefined, "goLive starts fresh without ref");
+});
+
+test("stream: exitLive resets lastRef", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeRows(50), { hasmore: true, ref: "r" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const liveBtn = toolbar._ch[3];
+  liveBtn._ev.click[0]();
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", _mkio_ref: "ref-live", name: "live" },
+  ]);
+
+  liveBtn._ev.click[0]();
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.ref, null, "exitLive loads page 1 from beginning");
+});
+
+test("stream: resume adds new rows from server to existing table", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", _mkio_ref: "ref-A", name: "a" },
+    { _mkio_row: "2", _mkio_ref: "ref-B", name: "b" },
+  ]);
+  assert.equal(getTbody(host)._ch.length, 2);
+
+  triggerHidden(io);
+  advanceTimers();
+  triggerVisible(io);
+
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "3", _mkio_ref: "ref-C", name: "c" },
+  ]);
+  assert.equal(getTbody(host)._ch.length, 3, "new row appended to existing");
+});
+
+test("stream: lastRef advances after resume snapshot", async () => {
+  const { io } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", _mkio_ref: "ref-A", name: "a" },
+  ]);
+
+  triggerHidden(io);
+  advanceTimers();
+  triggerVisible(io);
+  assert.equal(lastSubscribe().opts.ref, "ref-A");
+
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "2", _mkio_ref: "ref-B", name: "b" },
+  ]);
+
+  triggerHidden(io);
+  advanceTimers();
+  triggerVisible(io);
+  assert.equal(lastSubscribe().opts.ref, "ref-B", "lastRef advanced to latest");
+});
+
+test("stream: empty snapshot does not change lastRef", async () => {
+  const { io } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", _mkio_ref: "ref-A", name: "a" },
+  ]);
+
+  triggerHidden(io);
+  advanceTimers();
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([]);
+
+  triggerHidden(io);
+  advanceTimers();
+  triggerVisible(io);
+  assert.equal(lastSubscribe().opts.ref, "ref-A", "lastRef unchanged after empty snapshot");
+});
+
+test("stream: brief hide+show does not re-subscribe (preserves connection)", async () => {
+  const { io } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", _mkio_ref: "ref-A", name: "a" },
+  ]);
+  const callsAfterSub = fakeClient.calls.length;
+
+  triggerHidden(io);
+  triggerVisible(io);
+  assert.equal(fakeClient.calls.length, callsAfterSub, "no unsub or resub");
+});
+
+test("query: re-subscribe after timeout does not pass ref", async () => {
+  const { io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", _mkio_ref: "ref-A", name: "a" },
+  ]);
+
+  triggerHidden(io);
+  advanceTimers();
+  triggerVisible(io);
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.ref, undefined, "query never passes ref");
+});
+
+test("query: re-subscribe after timeout clears rows", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(5));
+  assert.equal(getTbody(host)._ch.length, 5);
+
+  triggerHidden(io);
+  advanceTimers();
+  triggerVisible(io);
+  assert.equal(getTbody(host)._ch.length, 0, "query clears rows on re-subscribe");
+});
+
 /* ── Empty / edge cases ───────────────────────────────────────────────── */
 
 test("empty page renders no rows and updates toolbar", async () => {

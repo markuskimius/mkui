@@ -735,13 +735,25 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     });
   }
 
+  let lastRef = null;
+
   const callbacks = {
-    onSnapshot: (snap) => applySnapshot(snap),
+    onSnapshot: (snap) => {
+      applySnapshot(snap);
+      if (protocol === "stream" && snap.length > 0) {
+        const ref = snap[snap.length - 1]._mkio_ref;
+        if (ref) lastRef = ref;
+      }
+    },
     onDelta: (changes) => {
       for (const ch of changes) {
         if (ch.op === "insert") applyInsert(ch.row);
         else if (ch.op === "delete") applyDelete(ch.row);
         else applyReplace(ch.row);
+      }
+      if (protocol === "stream" && changes.length > 0) {
+        const ref = changes[changes.length - 1].row._mkio_ref;
+        if (ref) lastRef = ref;
       }
       maybeRestoreScroll();
     },
@@ -749,6 +761,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (op === "insert") applyInsert(row);
       else if (op === "delete") applyDelete(row);
       else applyReplace(row);
+      if (protocol === "stream" && row._mkio_ref) lastRef = row._mkio_ref;
       maybeRestoreScroll();
     },
   };
@@ -773,13 +786,17 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (closed || subscribed) return;
     subscribed = true;
     ++snapshotGen;
-    restoreScrollTarget = savedScrollTop;
-    rows.clear();
-    rowEls.clear();
-    tbody.innerHTML = "";
-    clearSelection();
+    const resuming = protocol === "stream" && lastRef;
+    if (!resuming) {
+      restoreScrollTarget = savedScrollTop;
+      rows.clear();
+      rowEls.clear();
+      tbody.innerHTML = "";
+      clearSelection();
+    }
     const opts = { subid, topic: spec.topic, filter: spec.filter, ...callbacks };
     if (protocol === "query" && maxcount) opts.maxcount = maxcount;
+    if (resuming) opts.ref = lastRef;
     client.subscribe(spec.service, protocol, opts);
   }
 
@@ -829,6 +846,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     displayOrder = null;
     sortKeys.length = 0;
     filters.clear();
+    lastRef = null;
     unsub();
     sub();
     updatePagingUI();
@@ -836,6 +854,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function exitLive() {
     liveMode = false;
+    lastRef = null;
     unsub();
     columns = spec.columns ?? null;
     displayOrder = null;
@@ -889,6 +908,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     paneEl.addEventListener("mkui-pane-open", () => {
       closed = false;
       subscribed = false;
+      lastRef = null;
       rows.clear();
       rowEls.clear();
       tbody.innerHTML = "";
