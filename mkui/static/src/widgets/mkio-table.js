@@ -624,6 +624,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function applySnapshot(snap) {
     const gen = ++snapshotGen;
+    if (protocol !== "stream") {
+      rows.clear();
+      rowEls.clear();
+      tbody.innerHTML = "";
+      clearSelection();
+    }
     if (snap.length <= CHUNK) {
       for (const row of snap) {
         const key = row[idKey];

@@ -1397,6 +1397,63 @@ test("query: re-subscribe after timeout clears rows", async () => {
   assert.equal(getTbody(host)._ch.length, 0, "query clears rows on re-subscribe");
 });
 
+/* ── Snapshot clearing on reconnect ───────────────────────────────────── */
+
+test("query: reconnect snapshot removes rows deleted on server", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a" },
+    { _mkio_row: "2", name: "b" },
+    { _mkio_row: "3", name: "c" },
+  ]);
+  assert.equal(getTbody(host)._ch.length, 3);
+
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a" },
+    { _mkio_row: "3", name: "c" },
+  ]);
+  assert.equal(getTbody(host)._ch.length, 2, "deleted row removed on reconnect snapshot");
+});
+
+test("query: second onSnapshot fully replaces first", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(5));
+  assert.equal(getTbody(host)._ch.length, 5);
+
+  lastSubscribe().opts.onSnapshot(makeRows(3, 100));
+  assert.equal(getTbody(host)._ch.length, 3, "old rows cleared, only new rows remain");
+});
+
+test("query: large reconnect snapshot clears before chunked render", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(50));
+  assert.equal(getTbody(host)._ch.length, 50);
+
+  lastSubscribe().opts.onSnapshot(makeRows(250, 1000));
+  const tbody = getTbody(host);
+  assert.equal(tbody._ch.length, 100, "old rows cleared before first chunk renders");
+  flushRaf();
+  assert.equal(tbody._ch.length, 250, "all new rows rendered after flush");
+});
+
+test("subpub: snapshot clears stale rows on reconnect", async () => {
+  const { io, host } = await createTable({ protocol: "subpub", topic: "t1" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_topic: "t1", name: "a", value: 1 },
+    { _mkio_topic: "t2", name: "b", value: 2 },
+  ]);
+  assert.equal(getTbody(host)._ch.length, 2);
+
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_topic: "t1", name: "a-updated", value: 10 },
+  ]);
+  assert.equal(getTbody(host)._ch.length, 1, "stale topic row removed on reconnect");
+});
+
 /* ── Empty / edge cases ───────────────────────────────────────────────── */
 
 test("empty page renders no rows and updates toolbar", async () => {

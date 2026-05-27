@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-__version__ = "0.1.31"
+__version__ = "0.1.32"
 
 static_dir = Path(__file__).parent / "static"
 """Path to the directory containing mkui's JS, CSS, and example files.
