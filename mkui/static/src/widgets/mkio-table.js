@@ -767,6 +767,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   };
 
   const subid = `mkui-table-${++_subCounter}`;
+  const pageSubId = subid + "-page";
   let subscribed = false;
   let closed = false;
   let liveMode = !isPaged;
@@ -808,45 +809,67 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   /* ── Paging (stream) ──────────────────────────────────────────────── */
 
-  let pageRefs = [null];
   let currentPage = 0;
   let pageHasMore = false;
+  let pageHasPrev = false;
+  let firstRef = null;
+  let pageLoadRef = null;
+  let pageLoadBefore = false;
+  let savedPageState = null;
+  let pageFetchPending = false;
 
-  function loadPage(n) {
+  function fetchPage(ref, before) {
     if (closed) return;
     unsub();
     subscribed = true;
     rows.clear();
     rowEls.clear();
     tbody.innerHTML = "";
-    client.subscribe(spec.service, "stream", {
+    if (ref == null && !before) currentPage = 1;
+    pageLoadRef = ref;
+    pageLoadBefore = !!before;
+    const opts = {
       subid,
       maxcount,
-      ref: pageRefs[n - 1] ?? null,
+      ref: ref ?? null,
       updates: false,
       topic: spec.topic,
       filter: spec.filter,
       onPage: (pageRows, info) => {
-        pageHasMore = info.hasmore;
-        currentPage = n;
-        if (info.hasmore && pageRefs.length <= n) pageRefs.push(info.ref);
+        if (before) {
+          pageHasPrev = info.hasmore;
+          pageHasMore = true;
+        } else {
+          pageHasMore = info.hasmore;
+          pageHasPrev = ref != null;
+        }
         if (pageRows.length > 0) {
           if (!columns) { columns = Object.keys(pageRows[0]); renderHead(); }
           for (const row of pageRows) insertRow(row);
           if (sortKeys.length) reorder();
+          firstRef = pageRows[0]._mkio_ref;
+          lastRef = pageRows[pageRows.length - 1]._mkio_ref;
+        } else {
+          firstRef = null;
         }
         updatePagingUI();
       },
-    });
+    };
+    if (before) opts.before = true;
+    client.subscribe(spec.service, "stream", opts);
   }
 
   function goLive() {
+    savedPageState = {
+      page: currentPage || 1,
+      pageHasMore,
+      pageHasPrev,
+      firstRef,
+      pageLoadRef,
+      pageLoadBefore,
+      rows: new Map(rows),
+    };
     liveMode = true;
-    columns = spec.columns ?? null;
-    displayOrder = null;
-    sortKeys.length = 0;
-    filters.clear();
-    lastRef = null;
     unsub();
     sub();
     updatePagingUI();
@@ -854,31 +877,87 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function exitLive() {
     liveMode = false;
-    lastRef = null;
     unsub();
-    columns = spec.columns ?? null;
-    displayOrder = null;
-    sortKeys.length = 0;
-    filters.clear();
+    client.unsubscribe(pageSubId);
+    pageFetchPending = false;
     rows.clear();
     rowEls.clear();
     tbody.innerHTML = "";
-    pageRefs = [null];
-    currentPage = 0;
-    pageHasMore = false;
-    loadPage(1);
+    clearSelection();
+
+    if (savedPageState) {
+      currentPage = savedPageState.page;
+      pageHasMore = savedPageState.pageHasMore;
+      pageHasPrev = savedPageState.pageHasPrev;
+      firstRef = savedPageState.firstRef;
+      pageLoadRef = savedPageState.pageLoadRef;
+      pageLoadBefore = savedPageState.pageLoadBefore;
+      for (const [, row] of savedPageState.rows) insertRow(row);
+      if (sortKeys.length) reorder();
+      const savedRows = [...savedPageState.rows.values()];
+      if (savedRows.length > 0) {
+        const ref = savedRows[savedRows.length - 1]._mkio_ref;
+        if (ref != null) lastRef = ref;
+      }
+      savedPageState = null;
+    } else {
+      lastRef = null;
+      firstRef = null;
+      currentPage = 0;
+      pageHasMore = false;
+      pageHasPrev = false;
+      fetchPage(null);
+    }
+
     updatePagingUI();
+  }
+
+  function fetchPrevLive() {
+    if (!pageHasPrev || closed || pageFetchPending) return;
+    pageFetchPending = true;
+    currentPage--;
+    updatePagingUI();
+    client.subscribe(spec.service, "stream", {
+      subid: pageSubId,
+      maxcount,
+      ref: firstRef,
+      before: true,
+      updates: false,
+      topic: spec.topic,
+      filter: spec.filter,
+      onPage: (pageRows, info) => {
+        pageFetchPending = false;
+        pageHasPrev = info.hasmore;
+        if (pageRows.length > 0) {
+          if (!columns) { columns = Object.keys(pageRows[0]); renderHead(); }
+          const frag = document.createDocumentFragment();
+          for (const row of pageRows) {
+            rows.set(row[idKey], row);
+            const tr = buildRow(row);
+            rowEls.set(row[idKey], tr);
+            if (!matchesFilters(row)) tr.style.display = "none";
+            frag.appendChild(tr);
+          }
+          tbody.insertBefore(frag, tbody.firstChild);
+          if (sortKeys.length) reorder();
+          firstRef = pageRows[0]._mkio_ref;
+        }
+        updatePagingUI();
+      },
+    });
   }
 
   function updatePagingUI() {
     if (!pagingToolbar) return;
     if (liveMode) {
-      prevBtn.disabled = true;
+      const savedPage = savedPageState?.page ?? currentPage;
+      prevBtn.disabled = !pageHasPrev || pageFetchPending;
       nextBtn.disabled = true;
-      pageInfo.textContent = "Live";
+      pageInfo.textContent = currentPage < savedPage
+        ? `Page ${currentPage} · Live` : "Live";
       liveBtn.classList.add("active");
     } else {
-      prevBtn.disabled = currentPage <= 1;
+      prevBtn.disabled = !pageHasPrev;
       nextBtn.disabled = !pageHasMore;
       pageInfo.textContent = `Page ${currentPage}`;
       liveBtn.classList.remove("active");
@@ -886,8 +965,15 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   if (isPaged) {
-    prevBtn.addEventListener("click", () => { if (currentPage > 1) loadPage(currentPage - 1); });
-    nextBtn.addEventListener("click", () => { if (pageHasMore) loadPage(currentPage + 1); });
+    prevBtn.addEventListener("click", () => {
+      if (!pageHasPrev) return;
+      if (liveMode) { fetchPrevLive(); return; }
+      currentPage--;
+      fetchPage(firstRef, true);
+    });
+    nextBtn.addEventListener("click", () => {
+      if (pageHasMore) { currentPage++; fetchPage(lastRef); }
+    });
     liveBtn.addEventListener("click", () => liveMode ? exitLive() : goLive());
   }
 
@@ -903,7 +989,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       closed = true;
       io.disconnect();
       subscribed = false;
+      pageFetchPending = false;
       client.unsubscribe(subid);
+      client.unsubscribe(pageSubId);
     });
     paneEl.addEventListener("mkui-pane-open", () => {
       closed = false;
@@ -919,9 +1007,14 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       clearSelection();
       if (isPaged) {
         liveMode = false;
-        pageRefs = [null];
+        savedPageState = null;
+        pageFetchPending = false;
         currentPage = 0;
         pageHasMore = false;
+        pageHasPrev = false;
+        firstRef = null;
+        pageLoadRef = null;
+        pageLoadBefore = false;
       }
       io.observe(host);
     });
@@ -932,7 +1025,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (visible) {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       if (isPaged && !liveMode) {
-        if (!subscribed) loadPage(currentPage || 1);
+        if (!subscribed) fetchPage(pageLoadRef, pageLoadBefore);
       } else {
         sub();
       }

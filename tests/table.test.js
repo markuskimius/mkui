@@ -26,8 +26,9 @@ function mockEl(tag) {
     append(...ns) { for (const n of ns) el._ch.push(n); },
     appendChild(n) { el._ch.push(n); return n; },
     insertBefore(n, ref) {
+      const items = n.tagName === "FRAGMENT" ? n._ch.splice(0) : [n];
       const i = el._ch.indexOf(ref);
-      if (i >= 0) el._ch.splice(i, 0, n); else el._ch.push(n);
+      if (i >= 0) el._ch.splice(i, 0, ...items); else el._ch.push(...items);
       return n;
     },
     remove() {},
@@ -71,6 +72,12 @@ function mockEl(tag) {
 globalThis.document = {
   createElement: (tag) => mockEl(tag),
   createTextNode: (text) => ({ textContent: text, nodeType: 3 }),
+  createDocumentFragment() {
+    const frag = mockEl("fragment");
+    frag.firstChild = null;
+    Object.defineProperty(frag, "firstChild", { get() { return frag._ch[0] ?? null; } });
+    return frag;
+  },
   addEventListener() {},
   removeEventListener() {},
   head: mockEl("head"),
@@ -136,6 +143,9 @@ async function createTable(specOverrides = {}) {
 
 function lastSubscribe() {
   return fakeClient.calls.filter(c => c.type === "subscribe").at(-1);
+}
+function lastSubscribeBySubid(suffix) {
+  return fakeClient.calls.filter(c => c.type === "subscribe" && c.opts.subid?.endsWith(suffix)).at(-1);
 }
 
 function triggerVisible(io) { io([{ intersectionRatio: 1 }]); }
@@ -402,7 +412,7 @@ test("page 1 loads from beginning on first visibility", async () => {
   assert.equal(sub.opts.updates, false);
 });
 
-test("page navigation: next uses ref, prev goes back", async () => {
+test("page navigation: next uses lastRef, prev uses firstRef with before", async () => {
   const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
   triggerVisible(io);
 
@@ -415,26 +425,29 @@ test("page navigation: next uses ref, prev goes back", async () => {
   assert.equal(nextBtn.disabled, false);
 
   nextBtn._ev.click[0]();
-  assert.equal(lastSubscribe().opts.ref, "cursor-A");
+  assert.equal(lastSubscribe().opts.ref, "ref-49", "next uses lastRef from row data");
+  assert.equal(lastSubscribe().opts.before, undefined);
 
   lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: true, ref: "cursor-B" });
   assert.equal(pageInfoEl.textContent, "Page 2");
   assert.equal(prevBtn.disabled, false);
 
   nextBtn._ev.click[0]();
-  assert.equal(lastSubscribe().opts.ref, "cursor-B");
+  assert.equal(lastSubscribe().opts.ref, "ref-99", "next uses lastRef from row data");
 
   lastSubscribe().opts.onPage(makeStreamRows(20, 100), { hasmore: false, ref: "cursor-C" });
   assert.equal(pageInfoEl.textContent, "Page 3");
   assert.equal(nextBtn.disabled, true);
 
   prevBtn._ev.click[0]();
-  assert.equal(lastSubscribe().opts.ref, "cursor-A");
+  assert.equal(lastSubscribe().opts.ref, "ref-100", "prev uses firstRef");
+  assert.equal(lastSubscribe().opts.before, true);
   lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: true, ref: "cursor-B2" });
   assert.equal(pageInfoEl.textContent, "Page 2");
 
   prevBtn._ev.click[0]();
-  assert.equal(lastSubscribe().opts.ref, null);
+  assert.equal(lastSubscribe().opts.ref, "ref-50", "prev uses firstRef");
+  assert.equal(lastSubscribe().opts.before, true);
 });
 
 test("page data is rendered as table rows", async () => {
@@ -468,6 +481,73 @@ test("prev on page 1 is a no-op", async () => {
   const prevBtn = findByClass(host, "mkui-table-paging")._ch[0];
   prevBtn._ev.click[0]();
   assert.equal(fakeClient.calls.length, callsBefore);
+});
+
+test("fetchPage forward with non-null ref enables prev", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const prevBtn = toolbar._ch[0];
+  assert.equal(prevBtn.disabled, true, "prev disabled on page 1");
+
+  toolbar._ch[2]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: true, ref: "r2" });
+  assert.equal(prevBtn.disabled, false, "prev enabled on page 2");
+});
+
+test("fetchPage backward sets pageHasPrev from hasmore and enables next", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const prevBtn = toolbar._ch[0];
+  const nextBtn = toolbar._ch[2];
+
+  toolbar._ch[2]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: true, ref: "r2" });
+
+  toolbar._ch[2]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(20, 100), { hasmore: false, ref: "r3" });
+  assert.equal(nextBtn.disabled, true);
+
+  prevBtn._ev.click[0]();
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.before, true);
+  sub.opts.onPage(makeStreamRows(50, 50), { hasmore: true, ref: "r2b" });
+  assert.equal(prevBtn.disabled, false, "prev enabled from hasmore=true");
+  assert.equal(nextBtn.disabled, false, "next enabled after backward fetch");
+});
+
+test("firstRef tracks first row of fetched page", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50, 10), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[2]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 60), { hasmore: false, ref: "r2" });
+
+  toolbar._ch[0]._ev.click[0]();
+  assert.equal(lastSubscribe().opts.ref, "ref-60", "prev uses firstRef of page 2");
+  assert.equal(lastSubscribe().opts.before, true);
+});
+
+test("empty backward page fetch renders no rows", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[2]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: false, ref: "r2" });
+
+  toolbar._ch[0]._ev.click[0]();
+  lastSubscribe().opts.onPage([], { hasmore: false, ref: null });
+  assert.equal(getTbody(host)._ch.length, 0);
+  assert.equal(toolbar._ch[0].disabled, true, "prev disabled after empty backward fetch");
 });
 
 test("next on last page is a no-op", async () => {
@@ -506,7 +586,101 @@ test("Go Live keeps toolbar visible, disables paging, subscribes live", async ()
   assert.notEqual(sub.opts.onSnapshot, undefined);
 });
 
-test("Go Live renders all snapshot rows", async () => {
+test("Go Live from page > 1 enables prev", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const prevBtn = toolbar._ch[0];
+  const pageInfo = toolbar._ch[1];
+  const nextBtn = toolbar._ch[2];
+  const liveBtn = toolbar._ch[3];
+  nextBtn._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: true, ref: "r2" });
+
+  liveBtn._ev.click[0]();
+  assert.equal(prevBtn.disabled, false, "prev enabled when page has previous");
+  assert.equal(nextBtn.disabled, true, "next always disabled in live mode");
+  assert.equal(pageInfo.textContent, "Live");
+  assert.ok(liveBtn.classList.contains("active"));
+});
+
+test("Prev in live mode adds previous page rows to table", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const prevBtn = toolbar._ch[0];
+  const pageInfo = toolbar._ch[1];
+  const nextBtn = toolbar._ch[2];
+  const liveBtn = toolbar._ch[3];
+  nextBtn._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: false, ref: "r2" });
+  assert.equal(getTbody(host)._ch.length, 50);
+
+  liveBtn._ev.click[0]();
+  const liveSub = lastSubscribe();
+  liveSub.opts.onSnapshot(makeStreamRows(5, 100));
+  assert.equal(getTbody(host)._ch.length, 55, "page rows + live data");
+
+  prevBtn._ev.click[0]();
+  assert.ok(liveBtn.classList.contains("active"), "still in live mode");
+  const pageSub = lastSubscribeBySubid("-page");
+  assert.equal(pageSub.opts.ref, "ref-50", "prev uses firstRef of page 2");
+  assert.equal(pageSub.opts.before, true);
+  assert.notEqual(pageSub.opts.subid, liveSub.opts.subid, "uses separate subid");
+
+  pageSub.opts.onPage(makeStreamRows(50), { hasmore: false, ref: "r1" });
+  assert.equal(getTbody(host)._ch.length, 105, "prev page added to existing rows");
+  assert.equal(pageInfo.textContent, "Page 1 · Live");
+  assert.equal(prevBtn.disabled, true, "prev disabled when no more previous");
+  assert.equal(nextBtn.disabled, true, "next still disabled in live mode");
+});
+
+test("Live updates continue while fetching previous page", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const nextBtn = toolbar._ch[2];
+  nextBtn._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: false, ref: "r2" });
+
+  const liveBtn = toolbar._ch[3];
+  const prevBtn = toolbar._ch[0];
+  liveBtn._ev.click[0]();
+  const liveSub = lastSubscribe();
+
+  prevBtn._ev.click[0]();
+  liveSub.opts.onUpdate("insert", { _mkio_ref: "ref-live-1", name: "live", value: 1 });
+  assert.equal(getTbody(host)._ch.length, 51, "live insert while prev pending");
+
+  lastSubscribeBySubid("-page").opts.onPage(makeStreamRows(50), { hasmore: false });
+  assert.equal(getTbody(host)._ch.length, 101, "prev page added after live insert");
+});
+
+test("Prev in live mode disabled while fetch is pending", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[2]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: false, ref: "r2" });
+
+  const liveBtn = toolbar._ch[3];
+  const prevBtn = toolbar._ch[0];
+  liveBtn._ev.click[0]();
+
+  prevBtn._ev.click[0]();
+  assert.equal(prevBtn.disabled, true, "disabled while fetching");
+
+  lastSubscribeBySubid("-page").opts.onPage(makeStreamRows(50), { hasmore: true });
+  assert.equal(prevBtn.disabled, false, "re-enabled after fetch completes");
+});
+
+test("Go Live keeps page rows and appends resumed snapshot", async () => {
   const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
   triggerVisible(io);
   lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
@@ -515,8 +689,8 @@ test("Go Live renders all snapshot rows", async () => {
   const liveBtn = toolbar._ch[3];
   liveBtn._ev.click[0]();
 
-  lastSubscribe().opts.onSnapshot(makeStreamRows(30));
-  assert.equal(getTbody(host)._ch.length, 30);
+  lastSubscribe().opts.onSnapshot(makeStreamRows(30, 50));
+  assert.equal(getTbody(host)._ch.length, 80, "50 page rows + 30 new rows");
 });
 
 test("Go Live renders large snapshot in chunks", async () => {
@@ -545,17 +719,17 @@ test("Go Live live updates append rows after snapshot", async () => {
   liveBtn._ev.click[0]();
 
   const sub = lastSubscribe();
-  sub.opts.onSnapshot(makeStreamRows(5));
-  assert.equal(getTbody(host)._ch.length, 5);
+  sub.opts.onSnapshot(makeStreamRows(5, 50));
+  assert.equal(getTbody(host)._ch.length, 55, "50 page rows + 5 resumed");
 
   sub.opts.onUpdate("insert", { _mkio_ref: "ref-new-1", name: "live-1", value: 100 });
-  assert.equal(getTbody(host)._ch.length, 6);
+  assert.equal(getTbody(host)._ch.length, 56);
 
   sub.opts.onUpdate("insert", { _mkio_ref: "ref-new-2", name: "live-2", value: 101 });
-  assert.equal(getTbody(host)._ch.length, 7);
+  assert.equal(getTbody(host)._ch.length, 57);
 });
 
-test("Exit Live returns to paged mode and loads page 1", async () => {
+test("Exit Live restores saved page without re-subscribing", async () => {
   const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
   triggerVisible(io);
   lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
@@ -569,22 +743,21 @@ test("Exit Live returns to paged mode and loads page 1", async () => {
   liveBtn._ev.click[0]();
   assert.ok(liveBtn.classList.contains("active"));
 
+  const callsBefore = fakeClient.calls.length;
   liveBtn._ev.click[0]();
   assert.ok(!liveBtn.classList.contains("active"));
 
-  const sub = lastSubscribe();
-  assert.equal(sub.opts.ref, null);
-  assert.equal(sub.opts.maxcount, 50);
-  assert.equal(sub.opts.updates, false);
-  assert.equal(typeof sub.opts.onPage, "function");
+  assert.equal(fakeClient.calls.length, callsBefore + 2, "two unsubscribes (live + page), no new subscribe");
+  assert.equal(fakeClient.calls[callsBefore].type, "unsubscribe");
+  assert.equal(fakeClient.calls[callsBefore + 1].type, "unsubscribe");
 
-  sub.opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r2" });
+  assert.equal(getTbody(host)._ch.length, 50, "page rows restored");
   assert.equal(pageInfo.textContent, "Page 1");
   assert.equal(prevBtn.disabled, true);
   assert.equal(nextBtn.disabled, false);
 });
 
-test("Exit Live clears rows from live mode before loading page", async () => {
+test("Exit Live replaces live rows with saved page rows", async () => {
   const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
   triggerVisible(io);
   lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
@@ -594,10 +767,97 @@ test("Exit Live clears rows from live mode before loading page", async () => {
 
   liveBtn._ev.click[0]();
   lastSubscribe().opts.onSnapshot(makeStreamRows(10, 500));
-  assert.equal(getTbody(host)._ch.length, 10);
+  assert.equal(getTbody(host)._ch.length, 60, "50 page + 10 live rows");
 
   liveBtn._ev.click[0]();
-  assert.equal(getTbody(host)._ch.length, 0);
+  assert.equal(getTbody(host)._ch.length, 50, "restored to saved page rows");
+});
+
+test("Go Live from page 1 disables prev", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const prevBtn = toolbar._ch[0];
+  toolbar._ch[3]._ev.click[0]();
+  assert.equal(prevBtn.disabled, true, "prev disabled when going live from page 1");
+});
+
+test("Prev on page 1 in live mode is a no-op", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[3]._ev.click[0]();
+  const callsBefore = fakeClient.calls.length;
+  toolbar._ch[0]._ev.click[0]();
+  assert.equal(fakeClient.calls.length, callsBefore, "no subscription from disabled prev");
+});
+
+test("Multiple consecutive prev clicks in live mode load successive pages", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const prevBtn = toolbar._ch[0];
+  const pageInfo = toolbar._ch[1];
+  const nextBtn = toolbar._ch[2];
+  const liveBtn = toolbar._ch[3];
+
+  nextBtn._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: true, ref: "r2" });
+  nextBtn._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 100), { hasmore: false, ref: "r3" });
+
+  liveBtn._ev.click[0]();
+  const liveSub = lastSubscribe();
+  liveSub.opts.onSnapshot(makeStreamRows(5, 150));
+
+  prevBtn._ev.click[0]();
+  let pageSub = lastSubscribeBySubid("-page");
+  assert.equal(pageSub.opts.ref, "ref-100", "first prev uses firstRef from page 3");
+  pageSub.opts.onPage(makeStreamRows(50, 50), { hasmore: true, ref: "rp1" });
+  assert.equal(pageInfo.textContent, "Page 2 · Live");
+  assert.equal(getTbody(host)._ch.length, 105, "page 3 rows + live + prev page");
+
+  prevBtn._ev.click[0]();
+  pageSub = lastSubscribeBySubid("-page");
+  assert.equal(pageSub.opts.ref, "ref-50", "second prev uses updated firstRef");
+  pageSub.opts.onPage(makeStreamRows(50), { hasmore: false, ref: "rp2" });
+  assert.equal(pageInfo.textContent, "Page 1 · Live");
+  assert.equal(getTbody(host)._ch.length, 155, "all pages + live rows");
+  assert.equal(prevBtn.disabled, true, "prev disabled after reaching beginning");
+});
+
+test("Exit live after loading prev pages restores original saved page", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const prevBtn = toolbar._ch[0];
+  const pageInfo = toolbar._ch[1];
+  const nextBtn = toolbar._ch[2];
+  const liveBtn = toolbar._ch[3];
+
+  nextBtn._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: false, ref: "r2" });
+
+  liveBtn._ev.click[0]();
+  lastSubscribe().opts.onSnapshot(makeStreamRows(10, 100));
+
+  prevBtn._ev.click[0]();
+  lastSubscribeBySubid("-page").opts.onPage(makeStreamRows(50), { hasmore: false });
+  assert.equal(getTbody(host)._ch.length, 110, "prev page + live + page 2 rows");
+
+  liveBtn._ev.click[0]();
+  assert.equal(getTbody(host)._ch.length, 50, "restored to saved page 2 rows");
+  assert.equal(pageInfo.textContent, "Page 2");
+  assert.equal(nextBtn.disabled, true, "next disabled matches saved state");
+  assert.equal(prevBtn.disabled, false, "prev enabled matches saved state");
 });
 
 test("after Go Live, hide/show cycles use normal sub/unsub", async () => {
@@ -706,6 +966,48 @@ test("paged stream: timeout unsubs and re-show reloads current page", async () =
   assert.equal(resub.protocol, "stream");
 });
 
+test("paged stream: timeout during live mode unsubs and re-show resumes live", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const liveBtn = toolbar._ch[3];
+  liveBtn._ev.click[0]();
+  lastSubscribe().opts.onSnapshot(makeStreamRows(5, 50));
+
+  triggerHidden(io);
+  advanceTimers();
+  const unsubCall = fakeClient.calls.filter(c => c.type === "unsubscribe");
+  assert.ok(unsubCall.length > 0, "unsubscribed on timeout");
+
+  triggerVisible(io);
+  const resub = lastSubscribe();
+  assert.equal(resub.opts.onPage, undefined, "re-subscribes as live (no onPage)");
+  assert.ok(liveBtn.classList.contains("active"), "still in live mode after re-show");
+});
+
+test("paged stream: pageLoadRef/pageLoadBefore restore same page on re-show", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[2]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: true, ref: "r2" });
+
+  toolbar._ch[0]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1b" });
+
+  triggerHidden(io);
+  advanceTimers();
+  triggerVisible(io);
+
+  const resub = lastSubscribe();
+  assert.equal(resub.opts.ref, "ref-50", "re-show uses pageLoadRef (ref passed to backward fetch)");
+  assert.equal(resub.opts.before, true, "re-show preserves backward direction");
+});
+
 test("close event unsubs paged stream immediately", async () => {
   const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
   triggerVisible(io);
@@ -715,6 +1017,41 @@ test("close event unsubs paged stream immediately", async () => {
   const paneEl = host._paneEl;
   for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
   assert.equal(fakeClient.calls[callsBefore].type, "unsubscribe");
+});
+
+test("close event during live mode unsubscribes both subids", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[3]._ev.click[0]();
+
+  const callsBefore = fakeClient.calls.length;
+  const paneEl = host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+
+  const unsubs = fakeClient.calls.slice(callsBefore).filter(c => c.type === "unsubscribe");
+  assert.equal(unsubs.length, 2, "unsubscribes both main and page subids");
+});
+
+test("close event during pageFetchPending cleans up", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[2]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: false, ref: "r2" });
+
+  toolbar._ch[3]._ev.click[0]();
+  toolbar._ch[0]._ev.click[0]();
+
+  const paneEl = host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+
+  const unsubs = fakeClient.calls.filter(c => c.type === "unsubscribe");
+  assert.ok(unsubs.length >= 2, "unsubscribes despite pending fetch");
 });
 
 test("closed flag prevents re-subscription after close", async () => {
@@ -761,6 +1098,32 @@ test("mkui-pane-open clears stale rows", async () => {
   for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
   for (const fn of paneEl._ev["mkui-pane-open"] ?? []) fn();
   assert.equal(getTbody(host)._ch.length, 0);
+});
+
+test("mkui-pane-open resets pageFetchPending and live mode state", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[2]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: false, ref: "r2" });
+
+  toolbar._ch[3]._ev.click[0]();
+  toolbar._ch[0]._ev.click[0]();
+
+  const paneEl = host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+  for (const fn of paneEl._ev["mkui-pane-open"] ?? []) fn();
+  triggerVisible(io);
+
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.ref, null, "ref reset after reopen");
+  assert.equal(sub.opts.maxcount, 50, "back in paged mode");
+  assert.equal(typeof sub.opts.onPage, "function", "uses onPage (not live)");
+
+  sub.opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r-new" });
+  assert.ok(!toolbar._ch[3].classList.contains("active"), "live mode deactivated after page loads");
 });
 
 test("mkui-pane-open resets paged stream to page 1", async () => {
@@ -867,7 +1230,7 @@ test("stream: pane-open resets lastRef for fresh start", async () => {
   assert.equal(sub.opts.ref, undefined, "ref not passed after pane reopen");
 });
 
-test("stream: goLive resets lastRef", async () => {
+test("stream: goLive resumes from lastRef", async () => {
   const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
   triggerVisible(io);
   lastSubscribe().opts.onPage(
@@ -880,10 +1243,10 @@ test("stream: goLive resets lastRef", async () => {
   liveBtn._ev.click[0]();
 
   const sub = lastSubscribe();
-  assert.equal(sub.opts.ref, undefined, "goLive starts fresh without ref");
+  assert.equal(sub.opts.ref, "ref-A", "goLive resumes from page lastRef");
 });
 
-test("stream: exitLive resets lastRef", async () => {
+test("stream: exitLive restores lastRef from saved page", async () => {
   const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
   triggerVisible(io);
   lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
@@ -895,9 +1258,45 @@ test("stream: exitLive resets lastRef", async () => {
     { _mkio_ref: "ref-live", name: "live" },
   ]);
 
+  const callsBefore = fakeClient.calls.length;
   liveBtn._ev.click[0]();
-  const sub = lastSubscribe();
-  assert.equal(sub.opts.ref, null, "exitLive loads page 1 from beginning");
+  assert.equal(fakeClient.calls[callsBefore].type, "unsubscribe", "exitLive unsubscribes live");
+  assert.equal(fakeClient.calls[callsBefore + 1].type, "unsubscribe", "exitLive unsubscribes page");
+  assert.equal(fakeClient.calls.length, callsBefore + 2, "no new subscribe after exitLive");
+});
+
+test("stream: goLive from page 2 resumes from page 2 lastRef", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[2]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: false, ref: "r2" });
+
+  toolbar._ch[3]._ev.click[0]();
+  const liveSub = lastSubscribe();
+  assert.equal(liveSub.opts.ref, "ref-99", "live resumes from page 2 lastRef");
+});
+
+test("stream: exitLive restores firstRef from saved page", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50, 10), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[2]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 60), { hasmore: false, ref: "r2" });
+
+  toolbar._ch[3]._ev.click[0]();
+  lastSubscribe().opts.onSnapshot(makeStreamRows(5, 200));
+
+  toolbar._ch[3]._ev.click[0]();
+  assert.equal(getTbody(host)._ch.length, 50, "restored to page 2");
+
+  toolbar._ch[0]._ev.click[0]();
+  assert.equal(lastSubscribe().opts.ref, "ref-60", "prev uses restored firstRef from page 2");
+  assert.equal(lastSubscribe().opts.before, true);
 });
 
 test("stream: resume adds new rows from server to existing table", async () => {
