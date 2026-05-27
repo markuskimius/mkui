@@ -654,9 +654,9 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   filter: brightness(1.15);
 }
 
-.mkui-dialog-pin { opacity: 0.4; font-size: 11px; }
+.mkui-dialog-pin { opacity: 0.4; font-size: 11px; transition: transform 0.15s ease, opacity 0.15s ease; }
 .mkui-dialog-pin:hover { opacity: 0.7; }
-.mkui-dialog-pin-active { opacity: 1; color: var(--mkui-accent); }
+.mkui-dialog-pin-active { opacity: 1; color: var(--mkui-accent); transform: rotate(-45deg); }
 .mkui-dialog-pin-active:hover { color: var(--mkui-accent); }
 
 .mkui-dialog-loading {

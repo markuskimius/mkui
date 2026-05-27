@@ -130,13 +130,13 @@ export function openDialog(spec, context, app, extra = {}) {
       const btn = document.createElement("div");
       btn.className = "mkui-frame-btn mkui-dialog-pin" + (pinned ? " mkui-dialog-pin-active" : "");
       btn.textContent = "\u{1F4CC}";
-      btn.title = pinned ? "Will stay open after submit" : "Keep open after submit";
+      btn.title = pinned ? "Pinned — will stay open after submit" : "Pin to keep open after submit";
       btn.addEventListener("mousedown", (ev) => ev.stopPropagation());
       btn.addEventListener("click", (ev) => {
         ev.stopPropagation();
         pinned = !pinned;
         btn.classList.toggle("mkui-dialog-pin-active", pinned);
-        btn.title = pinned ? "Will stay open after submit" : "Keep open after submit";
+        btn.title = pinned ? "Pinned — will stay open after submit" : "Pin to keep open after submit";
       });
       return btn;
     }

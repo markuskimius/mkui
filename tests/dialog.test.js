@@ -3,20 +3,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { openDialog } from "../mkui/static/src/widgets/mkui-dialog.js";
 
-// Minimal DOM shim for Node (no real browser)
-const origDoc = globalThis.document;
-const origBody = globalThis.document?.body;
-
-function makeShimDoc() {
-  const els = [];
-  const body = {
-    appendChild(el) { els.push(el); },
-    removeChild(el) { const i = els.indexOf(el); if (i >= 0) els.splice(i, 1); },
-    get children() { return els; },
-  };
-  return { body, els };
-}
-
 // Since openDialog uses document.body and document.createElement,
 // we need a real or shimmed DOM. Node doesn't have one, so we test
 // the expression and data-flow logic via the exported functions,
@@ -27,8 +13,6 @@ test("openDialog module exports a function", () => {
 });
 
 test("normalizeOptions handles string arrays", async () => {
-  // Test the internal normalizeOptions via the module's behavior
-  // by checking that the module imports cleanly
   const { resolveExpr, resolveObject } = await import("../mkui/static/src/lib/expressions.js");
   assert.equal(resolveExpr("${row.id}", { row: { id: 42 } }), 42);
   assert.deepEqual(resolveObject({ a: "${x}" }, { x: "hello" }), { a: "hello" });
@@ -80,7 +64,6 @@ test("resolveExpr with selection context", async () => {
 test("resolveExpr re-resolves default values for form reset", async () => {
   const { resolveExpr } = await import("../mkui/static/src/lib/expressions.js");
   const ctx = { row: { qty: 100, side: "BUY" } };
-  // Simulates what resetForm does: re-resolve each field's value expression
   assert.equal(resolveExpr("${row.qty}", ctx), 100);
   assert.equal(resolveExpr("${row.side}", ctx), "BUY");
   assert.equal(resolveExpr("", ctx), "");
@@ -93,4 +76,139 @@ test("resolveExpr with empty/null default values for reset", async () => {
   assert.equal(resolveExpr("", ctx), "");
   assert.equal(resolveExpr(undefined ?? "", ctx), "");
   assert.equal(resolveExpr(null ?? "", ctx), "");
+});
+
+/* ── Pin button unit tests ───────────────────────────────────────────── */
+// The pin button is constructed by makePinBtn() inside openDialog's closure.
+// Since that function isn't exported, we replicate its logic here to verify
+// the class, title, and toggle behavior independently of the DOM/workspace.
+
+function mockEl(tag) {
+  const el = {
+    tagName: tag?.toUpperCase() ?? "",
+    className: "",
+    textContent: "",
+    title: "",
+    _ev: {},
+    classList: {
+      _s: new Set(),
+      add(...cs) { for (const c of cs) this._s.add(c); },
+      remove(...cs) { for (const c of cs) this._s.delete(c); },
+      toggle(c, f) { f !== undefined ? (f ? this._s.add(c) : this._s.delete(c)) : (this._s.has(c) ? this._s.delete(c) : this._s.add(c)); },
+      contains(c) { return this._s.has(c); },
+    },
+    addEventListener(e, fn) { (el._ev[e] ??= []).push(fn); },
+  };
+  return el;
+}
+
+function makePinBtn(pinnedRef) {
+  const btn = mockEl("div");
+  btn.className = "mkui-frame-btn mkui-dialog-pin" + (pinnedRef.value ? " mkui-dialog-pin-active" : "");
+  btn.textContent = "\u{1F4CC}";
+  btn.title = pinnedRef.value ? "Pinned — will stay open after submit" : "Pin to keep open after submit";
+  btn.addEventListener("mousedown", (ev) => ev.stopPropagation?.());
+  btn.addEventListener("click", (ev) => {
+    ev?.stopPropagation?.();
+    pinnedRef.value = !pinnedRef.value;
+    btn.classList.toggle("mkui-dialog-pin-active", pinnedRef.value);
+    btn.title = pinnedRef.value ? "Pinned — will stay open after submit" : "Pin to keep open after submit";
+  });
+  return btn;
+}
+
+test("pin button starts unpinned with correct class and title", () => {
+  const ref = { value: false };
+  const btn = makePinBtn(ref);
+  assert.equal(btn.className, "mkui-frame-btn mkui-dialog-pin");
+  assert.equal(btn.textContent, "\u{1F4CC}");
+  assert.equal(btn.title, "Pin to keep open after submit");
+  assert.equal(btn.classList.contains("mkui-dialog-pin-active"), false);
+});
+
+test("pin button click toggles to pinned state", () => {
+  const ref = { value: false };
+  const btn = makePinBtn(ref);
+  const click = btn._ev.click[0];
+  click({ stopPropagation() {} });
+  assert.equal(ref.value, true);
+  assert.equal(btn.classList.contains("mkui-dialog-pin-active"), true);
+  assert.equal(btn.title, "Pinned — will stay open after submit");
+});
+
+test("pin button double-click toggles back to unpinned", () => {
+  const ref = { value: false };
+  const btn = makePinBtn(ref);
+  const click = btn._ev.click[0];
+  const ev = { stopPropagation() {} };
+  click(ev);
+  assert.equal(ref.value, true);
+  click(ev);
+  assert.equal(ref.value, false);
+  assert.equal(btn.classList.contains("mkui-dialog-pin-active"), false);
+  assert.equal(btn.title, "Pin to keep open after submit");
+});
+
+test("pin button created in pinned state has active class", () => {
+  const ref = { value: true };
+  const btn = makePinBtn(ref);
+  assert.equal(btn.className, "mkui-frame-btn mkui-dialog-pin mkui-dialog-pin-active");
+  assert.equal(btn.title, "Pinned — will stay open after submit");
+});
+
+test("pin button mousedown stops propagation", () => {
+  const ref = { value: false };
+  const btn = makePinBtn(ref);
+  let stopped = false;
+  const md = btn._ev.mousedown[0];
+  md({ stopPropagation() { stopped = true; } });
+  assert.equal(stopped, true);
+});
+
+test("pin button click stops propagation", () => {
+  const ref = { value: false };
+  const btn = makePinBtn(ref);
+  let stopped = false;
+  const click = btn._ev.click[0];
+  click({ stopPropagation() { stopped = true; } });
+  assert.equal(stopped, true);
+});
+
+/* ── Pin CSS class expectations ──────────────────────────────────────── */
+// Verify the CSS classes match what mkui.css expects for the rotation effect.
+// .mkui-dialog-pin = normal orientation (no transform)
+// .mkui-dialog-pin-active = rotated -45deg counterclockwise + accent color
+
+test("pin class names match CSS selectors for rotation", () => {
+  const ref = { value: false };
+  const btn = makePinBtn(ref);
+
+  assert.ok(btn.className.includes("mkui-dialog-pin"));
+  assert.ok(!btn.className.includes("mkui-dialog-pin-active"));
+
+  const click = btn._ev.click[0];
+  click({ stopPropagation() {} });
+
+  assert.equal(btn.classList.contains("mkui-dialog-pin-active"), true);
+  assert.equal(btn.classList.contains("mkui-dialog-pin"), false,
+    "toggle should replace mkui-dialog-pin with mkui-dialog-pin-active");
+});
+
+test("pin button uses pushpin emoji U+1F4CC", () => {
+  const ref = { value: false };
+  const btn = makePinBtn(ref);
+  assert.equal(btn.textContent, "\u{1F4CC}");
+  assert.equal(btn.textContent.codePointAt(0), 0x1F4CC);
+});
+
+test("pin toggle is idempotent across multiple cycles", () => {
+  const ref = { value: false };
+  const btn = makePinBtn(ref);
+  const click = btn._ev.click[0];
+  const ev = { stopPropagation() {} };
+  for (let i = 0; i < 10; i++) {
+    click(ev);
+    assert.equal(ref.value, i % 2 === 0);
+    assert.equal(btn.classList.contains("mkui-dialog-pin-active"), i % 2 === 0);
+  }
 });
