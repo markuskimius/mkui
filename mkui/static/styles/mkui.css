@@ -508,6 +508,9 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   color: #4f4;
   animation: mkui-live-blink 1.5s ease-in-out infinite;
 }
+.mkui-paging-live.disconnected {
+  color: var(--mkui-fg-mute);
+}
 @keyframes mkui-live-blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }

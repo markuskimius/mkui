@@ -733,14 +733,6 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return;
   }
 
-  if (hasButtons) {
-    mkioConnected = !!app.state.get("mkio.connected");
-    app.state.subscribe("mkio.connected", (v) => {
-      mkioConnected = !!v;
-      updateButtonStates();
-    });
-  }
-
   let lastRef = null;
 
   const callbacks = {
@@ -777,6 +769,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   let subscribed = false;
   let closed = false;
   let liveMode = !isPaged;
+
   let savedScrollTop = 0;
   let restoreScrollTarget = 0;
 
@@ -868,12 +861,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function goLive() {
     savedPageState = {
       page: currentPage || 1,
-      pageHasMore,
-      pageHasPrev,
-      firstRef,
       pageLoadRef,
       pageLoadBefore,
-      rows: new Map(rows),
     };
     liveMode = true;
     unsub();
@@ -886,26 +875,14 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     unsub();
     client.unsubscribe(pageSubId);
     pageFetchPending = false;
-    rows.clear();
-    rowEls.clear();
-    tbody.innerHTML = "";
     clearSelection();
 
     if (savedPageState) {
       currentPage = savedPageState.page;
-      pageHasMore = savedPageState.pageHasMore;
-      pageHasPrev = savedPageState.pageHasPrev;
-      firstRef = savedPageState.firstRef;
-      pageLoadRef = savedPageState.pageLoadRef;
-      pageLoadBefore = savedPageState.pageLoadBefore;
-      for (const [, row] of savedPageState.rows) insertRow(row);
-      if (sortKeys.length) reorder();
-      const savedRows = [...savedPageState.rows.values()];
-      if (savedRows.length > 0) {
-        const ref = savedRows[savedRows.length - 1]._mkio_ref;
-        if (ref != null) lastRef = ref;
-      }
+      const ref = savedPageState.pageLoadRef;
+      const before = savedPageState.pageLoadBefore;
       savedPageState = null;
+      fetchPage(ref, before);
     } else {
       lastRef = null;
       firstRef = null;
@@ -953,20 +930,36 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     });
   }
 
+  mkioConnected = !!app.state.get("mkio.connected");
+  app.state.subscribe("mkio.connected", (v) => {
+    mkioConnected = !!v;
+    if (hasButtons) updateButtonStates();
+    updatePagingUI();
+  });
+
   function updatePagingUI() {
     if (!pagingToolbar) return;
     if (liveMode) {
       const savedPage = savedPageState?.page ?? currentPage;
       prevBtn.disabled = !pageHasPrev || pageFetchPending;
       nextBtn.disabled = true;
-      pageInfo.textContent = currentPage < savedPage
-        ? `Page ${currentPage} · Live` : "Live";
-      liveBtn.classList.add("active");
+      if (mkioConnected) {
+        pageInfo.textContent = currentPage < savedPage
+          ? `Page ${currentPage} · Live` : "Live";
+        liveBtn.classList.add("active");
+        liveBtn.classList.remove("disconnected");
+      } else {
+        pageInfo.textContent = currentPage < savedPage
+          ? `Page ${currentPage} · Disconnected` : "Disconnected";
+        liveBtn.classList.remove("active");
+        liveBtn.classList.add("disconnected");
+      }
     } else {
       prevBtn.disabled = !pageHasPrev;
       nextBtn.disabled = !pageHasMore;
       pageInfo.textContent = `Page ${currentPage}`;
       liveBtn.classList.remove("active");
+      liveBtn.classList.remove("disconnected");
     }
   }
 
