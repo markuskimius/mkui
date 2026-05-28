@@ -493,7 +493,7 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 }
 .mkui-paging-info {
   color: var(--mkui-fg-mute);
-  min-width: 60px;
+  min-width: 140px;
   text-align: center;
 }
 .mkui-paging-btn:disabled,

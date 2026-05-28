@@ -2,6 +2,51 @@ import { registerPaneType } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
 import { resolveExpr, resolveObject } from "../lib/expressions.js";
 
+function midnightRef() {
+  const d = new Date();
+  const m = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const p = (n) => String(n).padStart(2, "0");
+  return `${m.getUTCFullYear()}${p(m.getUTCMonth() + 1)}${p(m.getUTCDate())} ${p(m.getUTCHours())}:${p(m.getUTCMinutes())}:${p(m.getUTCSeconds())}.000000000000`;
+}
+
+function refToLocal(ref) {
+  return new Date(Date.UTC(
+    parseInt(ref.slice(0, 4)), parseInt(ref.slice(4, 6)) - 1, parseInt(ref.slice(6, 8)),
+    parseInt(ref.slice(9, 11)), parseInt(ref.slice(12, 14)), parseInt(ref.slice(15, 17)),
+  ));
+}
+
+function fmtTime(d) {
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function fmtShortDate(d) {
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return `${months[d.getMonth()]} ${d.getDate()}`;
+}
+
+function fmtRefStart(ref) {
+  const d = refToLocal(ref);
+  const today = new Date();
+  const same = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
+  return same ? fmtTime(d) : `${fmtShortDate(d)} ${fmtTime(d)}`;
+}
+
+function formatTimeRange(fRef, lRef) {
+  if (!fRef && !lRef) return "No data";
+  if (!lRef || fRef === lRef) return fmtRefStart(fRef || lRef);
+  const a = refToLocal(fRef);
+  const b = refToLocal(lRef);
+  const today = new Date();
+  const sameDay = (x, y) =>
+    x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
+  if (sameDay(a, b)) {
+    const prefix = sameDay(a, today) ? "" : fmtShortDate(a) + " ";
+    return `${prefix}${fmtTime(a)} – ${fmtTime(b)}`;
+  }
+  return `${fmtShortDate(a)} ${fmtTime(a)} – ${fmtShortDate(b)} ${fmtTime(b)}`;
+}
+
 let _subCounter = 0;
 
 registerPaneType("mkio-table", async (spec, app, host) => {
@@ -15,6 +60,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   const idKey = protocol === "stream" ? "_mkio_ref" : protocol === "subpub" ? "_mkio_topic" : "_mkio_row";
   const maxcount = spec.maxcount !== undefined ? spec.maxcount : 200;
   const isPaged = protocol === "stream" && maxcount > 0;
+  const getStartRef = () => isPaged && (spec.start ?? "today") === "today" ? midnightRef() : null;
 
   const table = document.createElement("table");
   table.className = "mkui-table";
@@ -43,13 +89,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     pagingToolbar.className = "mkui-table-paging";
     prevBtn = document.createElement("button");
     prevBtn.className = "mkui-btn mkui-paging-btn";
-    prevBtn.textContent = "◀ Prev";
+    prevBtn.textContent = "◀ Earlier";
     prevBtn.disabled = true;
     pageInfo = document.createElement("span");
     pageInfo.className = "mkui-paging-info";
     nextBtn = document.createElement("button");
     nextBtn.className = "mkui-btn mkui-paging-btn";
-    nextBtn.textContent = "Next ▶";
+    nextBtn.textContent = "Later ▶";
     nextBtn.disabled = true;
     liveBtn = document.createElement("button");
     liveBtn.className = "mkui-btn mkui-paging-live";
@@ -808,14 +854,18 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   /* ── Paging (stream) ──────────────────────────────────────────────── */
 
-  let currentPage = 0;
   let pageHasMore = false;
   let pageHasPrev = false;
   let firstRef = null;
-  let pageLoadRef = null;
+  let pageLoadRef = getStartRef();
   let pageLoadBefore = false;
   let savedPageState = null;
   let pageFetchPending = false;
+  let hasEarlierPages = false;
+
+  let prevPageLoadRef = null;
+  let prevPageLoadBefore = false;
+  let noPrev = false;
 
   function fetchPage(ref, before) {
     if (closed) return;
@@ -824,7 +874,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     rows.clear();
     rowEls.clear();
     tbody.innerHTML = "";
-    if (ref == null && !before) currentPage = 1;
+    prevPageLoadRef = pageLoadRef;
+    prevPageLoadBefore = pageLoadBefore;
     pageLoadRef = ref;
     pageLoadBefore = !!before;
     const opts = {
@@ -840,7 +891,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
           pageHasMore = true;
         } else {
           pageHasMore = info.hasmore;
-          pageHasPrev = ref != null;
+          if (noPrev) { pageHasPrev = false; noPrev = false; }
+          else pageHasPrev = ref != null;
         }
         if (pageRows.length > 0) {
           if (!columns) { columns = Object.keys(pageRows[0]); renderHead(); }
@@ -848,8 +900,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
           if (sortKeys.length) reorder();
           firstRef = pageRows[0]._mkio_ref;
           lastRef = pageRows[pageRows.length - 1]._mkio_ref;
+        } else if (before && prevPageLoadRef != null) {
+          noPrev = true;
+          fetchPage(prevPageLoadRef, prevPageLoadBefore);
+          return;
         } else {
-          firstRef = null;
+          firstRef = ref;
         }
         updatePagingUI();
       },
@@ -859,12 +915,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function goLive() {
-    savedPageState = {
-      page: currentPage || 1,
-      pageLoadRef,
-      pageLoadBefore,
-    };
+    savedPageState = { pageLoadRef, pageLoadBefore };
     liveMode = true;
+    hasEarlierPages = false;
     unsub();
     sub();
     updatePagingUI();
@@ -872,13 +925,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function exitLive() {
     liveMode = false;
+    hasEarlierPages = false;
     unsub();
     client.unsubscribe(pageSubId);
     pageFetchPending = false;
     clearSelection();
 
     if (savedPageState) {
-      currentPage = savedPageState.page;
       const ref = savedPageState.pageLoadRef;
       const before = savedPageState.pageLoadBefore;
       savedPageState = null;
@@ -886,10 +939,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     } else {
       lastRef = null;
       firstRef = null;
-      currentPage = 0;
       pageHasMore = false;
       pageHasPrev = false;
-      fetchPage(null);
+      fetchPage(getStartRef());
     }
 
     updatePagingUI();
@@ -898,7 +950,6 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function fetchPrevLive() {
     if (!pageHasPrev || closed || pageFetchPending) return;
     pageFetchPending = true;
-    currentPage--;
     updatePagingUI();
     client.subscribe(spec.service, "stream", {
       subid: pageSubId,
@@ -912,6 +963,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         pageFetchPending = false;
         pageHasPrev = info.hasmore;
         if (pageRows.length > 0) {
+          hasEarlierPages = true;
           if (!columns) { columns = Object.keys(pageRows[0]); renderHead(); }
           const frag = document.createDocumentFragment();
           for (const row of pageRows) {
@@ -940,24 +992,18 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function updatePagingUI() {
     if (!pagingToolbar) return;
     if (liveMode) {
-      const savedPage = savedPageState?.page ?? currentPage;
       prevBtn.disabled = !pageHasPrev || pageFetchPending;
       nextBtn.disabled = true;
-      if (mkioConnected) {
-        pageInfo.textContent = currentPage < savedPage
-          ? `Page ${currentPage} · Live` : "Live";
-        liveBtn.classList.add("active");
-        liveBtn.classList.remove("disconnected");
-      } else {
-        pageInfo.textContent = currentPage < savedPage
-          ? `Page ${currentPage} · Disconnected` : "Disconnected";
-        liveBtn.classList.remove("active");
-        liveBtn.classList.add("disconnected");
-      }
+      const suffix = mkioConnected ? "Live" : "Disconnected";
+      pageInfo.textContent = hasEarlierPages && firstRef
+        ? `${fmtRefStart(firstRef)} – ${suffix}` : suffix;
+      liveBtn.classList.toggle("active", mkioConnected);
+      liveBtn.classList.toggle("disconnected", !mkioConnected);
     } else {
       prevBtn.disabled = !pageHasPrev;
       nextBtn.disabled = !pageHasMore;
-      pageInfo.textContent = `Page ${currentPage}`;
+      pageInfo.textContent = rows.size > 0 && firstRef && lastRef
+        ? formatTimeRange(firstRef, lastRef) : "No data";
       liveBtn.classList.remove("active");
       liveBtn.classList.remove("disconnected");
     }
@@ -967,11 +1013,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     prevBtn.addEventListener("click", () => {
       if (!pageHasPrev) return;
       if (liveMode) { fetchPrevLive(); return; }
-      currentPage--;
       fetchPage(firstRef, true);
     });
     nextBtn.addEventListener("click", () => {
-      if (pageHasMore) { currentPage++; fetchPage(lastRef); }
+      if (pageHasMore) fetchPage(lastRef);
     });
     liveBtn.addEventListener("click", () => liveMode ? exitLive() : goLive());
   }
@@ -1008,12 +1053,14 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         liveMode = false;
         savedPageState = null;
         pageFetchPending = false;
-        currentPage = 0;
+        hasEarlierPages = false;
         pageHasMore = false;
         pageHasPrev = false;
         firstRef = null;
-        pageLoadRef = null;
+        pageLoadRef = getStartRef();
         pageLoadBefore = false;
+        prevPageLoadRef = null;
+        prevPageLoadBefore = false;
       }
       io.observe(host);
     });
