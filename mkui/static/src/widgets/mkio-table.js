@@ -25,6 +25,34 @@ function fmtShortDate(d) {
   return `${months[d.getMonth()]} ${d.getDate()}`;
 }
 
+function refSubSec(ref) {
+  const dot = ref.indexOf(".");
+  return dot >= 0 ? ref.slice(dot + 1) : "";
+}
+
+function timePrec(fRef, lRef) {
+  const a = refToLocal(fRef), b = refToLocal(lRef);
+  if (a.getHours() !== b.getHours() || a.getMinutes() !== b.getMinutes()) return 0;
+  if (a.getSeconds() !== b.getSeconds()) return 1;
+  const as = refSubSec(fRef), bs = refSubSec(lRef);
+  for (let t = 0; t < 3; t++) {
+    const i = t * 3;
+    if (as.slice(i, i + 3).padEnd(3, "0") !== bs.slice(i, i + 3).padEnd(3, "0")) return t + 2;
+  }
+  return 4;
+}
+
+function fmtTimePrec(d, ref, prec) {
+  let s = fmtTime(d);
+  if (prec >= 1) s += `:${String(d.getSeconds()).padStart(2, "0")}`;
+  if (prec >= 2) {
+    const sub = refSubSec(ref);
+    const n = (prec - 1) * 3;
+    s += `.${sub.slice(0, n).padEnd(n, "0")}`;
+  }
+  return s;
+}
+
 function fmtRefStart(ref) {
   const d = refToLocal(ref);
   const today = new Date();
@@ -40,11 +68,12 @@ function formatTimeRange(fRef, lRef) {
   const today = new Date();
   const sameDay = (x, y) =>
     x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
+  const prec = timePrec(fRef, lRef);
   if (sameDay(a, b)) {
     const prefix = sameDay(a, today) ? "" : fmtShortDate(a) + " ";
-    return `${prefix}${fmtTime(a)} – ${fmtTime(b)}`;
+    return `${prefix}${fmtTimePrec(a, fRef, prec)} – ${fmtTimePrec(b, lRef, prec)}`;
   }
-  return `${fmtShortDate(a)} ${fmtTime(a)} – ${fmtShortDate(b)} ${fmtTime(b)}`;
+  return `${fmtShortDate(a)} ${fmtTimePrec(a, fRef, prec)} – ${fmtShortDate(b)} ${fmtTimePrec(b, lRef, prec)}`;
 }
 
 let _subCounter = 0;
@@ -72,7 +101,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   let scrollHost = host;
   let pagingToolbar = null;
-  let prevBtn = null, nextBtn = null, pageInfo = null, liveBtn = null;
+  let prevBtn = null, nextBtn = null, pageInfo = null, liveBtn = null, refreshBtn = null;
 
   if (isPaged) {
     host.style.overflow = "hidden";
@@ -100,7 +129,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     liveBtn = document.createElement("button");
     liveBtn.className = "mkui-btn mkui-paging-live";
     liveBtn.textContent = "● Live";
-    pagingToolbar.append(prevBtn, pageInfo, nextBtn, liveBtn);
+    refreshBtn = document.createElement("button");
+    refreshBtn.className = "mkui-btn mkui-paging-btn";
+    refreshBtn.textContent = "⟳";
+    refreshBtn.title = "Refresh page";
+    pagingToolbar.append(prevBtn, pageInfo, nextBtn, liveBtn, refreshBtn);
 
     host.append(scrollArea, pagingToolbar);
   } else {
@@ -994,6 +1027,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (liveMode) {
       prevBtn.disabled = !pageHasPrev || pageFetchPending;
       nextBtn.disabled = true;
+      refreshBtn.disabled = true;
       const suffix = mkioConnected ? "Live" : "Disconnected";
       pageInfo.textContent = hasEarlierPages && firstRef
         ? `${fmtRefStart(firstRef)} – ${suffix}` : suffix;
@@ -1002,8 +1036,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     } else {
       prevBtn.disabled = !pageHasPrev;
       nextBtn.disabled = !pageHasMore;
-      pageInfo.textContent = rows.size > 0 && firstRef && lastRef
-        ? formatTimeRange(firstRef, lastRef) : "No data";
+      refreshBtn.disabled = false;
+      if (rows.size > 0 && firstRef && lastRef) {
+        let text = formatTimeRange(firstRef, lastRef);
+        if (!pageHasPrev && !pageHasMore) text += " (all)";
+        else if (!pageHasPrev) text += " (start)";
+        else if (!pageHasMore) text += " (end)";
+        pageInfo.textContent = text;
+      } else {
+        pageInfo.textContent = "No data";
+      }
       liveBtn.classList.remove("active");
       liveBtn.classList.remove("disconnected");
     }
@@ -1019,6 +1061,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (pageHasMore) fetchPage(lastRef);
     });
     liveBtn.addEventListener("click", () => liveMode ? exitLive() : goLive());
+    refreshBtn.addEventListener("click", () => {
+      if (!liveMode) fetchPage(pageLoadRef, pageLoadBefore);
+    });
   }
 
   /* ── Visibility-aware sub/unsub ─────────────────────────────────── */

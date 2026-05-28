@@ -420,10 +420,11 @@ test("paged stream creates toolbar with prev/next/live", async () => {
   const { host } = await createTable({ protocol: "stream", maxcount: 50 });
   const toolbar = findByClass(host, "mkui-table-paging");
   assert.ok(toolbar);
-  assert.equal(toolbar._ch.length, 4);
+  assert.equal(toolbar._ch.length, 5);
   assert.ok(toolbar._ch[0].textContent.includes("Earlier"));
   assert.ok(toolbar._ch[2].textContent.includes("Later"));
   assert.ok(toolbar._ch[3].textContent.includes("Live"));
+  assert.equal(toolbar._ch[4].textContent, "⟳");
 });
 
 test("non-paged stream has no toolbar", async () => {
@@ -1744,4 +1745,239 @@ test("multi-row same-day page shows HH:mm – HH:mm range", async () => {
   assert.equal(parts.length, 2, "two parts around the dash");
   assert.ok(parts[0].includes(":"), "first part has time");
   assert.ok(parts[1].includes(":"), "second part has time");
+});
+
+/* ── Adaptive time precision ─────────────────────────────────────────── */
+
+function streamRefSub(h, m, s, sub) {
+  const hh = String(h).padStart(2, "0");
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  return `20260527 ${hh}:${mm}:${ss}.${sub}`;
+}
+
+test("different minutes shows HH:mm precision only", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage([
+    { _mkio_ref: streamRefSub(9, 15, 0, "000000000000"), name: "a", value: 1 },
+    { _mkio_ref: streamRefSub(9, 30, 0, "000000000000"), name: "b", value: 2 },
+  ], { hasmore: true, ref: "r" });
+  const text = findByClass(host, "mkui-table-paging")._ch[1].textContent;
+  const parts = text.split("–").map(s => s.trim());
+  assert.ok(!parts[0].includes("."), "no sub-seconds");
+  assert.equal(parts[0].split(":").length, 2, "HH:mm only");
+  assert.equal(parts[1].split(":").length, 2, "HH:mm only");
+});
+
+test("same minute different seconds shows HH:mm:ss", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage([
+    { _mkio_ref: streamRefSub(9, 15, 3, "000000000000"), name: "a", value: 1 },
+    { _mkio_ref: streamRefSub(9, 15, 47, "000000000000"), name: "b", value: 2 },
+  ], { hasmore: true, ref: "r" });
+  const text = findByClass(host, "mkui-table-paging")._ch[1].textContent;
+  const parts = text.split("–").map(s => s.trim());
+  assert.ok(!parts[0].includes("."), "no sub-seconds");
+  assert.equal(parts[0].split(":").length, 3, "HH:mm:ss");
+  assert.equal(parts[1].split(":").length, 3, "HH:mm:ss");
+});
+
+test("same second different milliseconds shows HH:mm:ss.NNN", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage([
+    { _mkio_ref: streamRefSub(9, 15, 3, "123000000000"), name: "a", value: 1 },
+    { _mkio_ref: streamRefSub(9, 15, 3, "456000000000"), name: "b", value: 2 },
+  ], { hasmore: true, ref: "r" });
+  const text = findByClass(host, "mkui-table-paging")._ch[1].textContent;
+  const parts = text.split("–").map(s => s.trim());
+  assert.ok(parts[0].includes("."), "has sub-seconds");
+  const sub0 = parts[0].split(".")[1];
+  const sub1 = parts[1].split(".")[1];
+  assert.equal(sub0.length, 3, "3 sub-second digits (ms)");
+  assert.equal(sub1.length, 3, "3 sub-second digits (ms)");
+  assert.equal(sub0, "123");
+  assert.equal(sub1, "456");
+});
+
+test("same millisecond different microseconds shows HH:mm:ss.NNNNNN", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage([
+    { _mkio_ref: streamRefSub(9, 15, 3, "123456000000"), name: "a", value: 1 },
+    { _mkio_ref: streamRefSub(9, 15, 3, "123789000000"), name: "b", value: 2 },
+  ], { hasmore: true, ref: "r" });
+  const text = findByClass(host, "mkui-table-paging")._ch[1].textContent;
+  const parts = text.split("–").map(s => s.trim());
+  const sub0 = parts[0].split(".")[1];
+  const sub1 = parts[1].split(".")[1];
+  assert.equal(sub0.length, 6, "6 sub-second digits (us)");
+  assert.equal(sub1.length, 6, "6 sub-second digits (us)");
+  assert.equal(sub0, "123456");
+  assert.equal(sub1, "123789");
+});
+
+test("same microsecond different nanoseconds shows HH:mm:ss.NNNNNNNNN", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage([
+    { _mkio_ref: streamRefSub(9, 15, 3, "123456001000"), name: "a", value: 1 },
+    { _mkio_ref: streamRefSub(9, 15, 3, "123456009000"), name: "b", value: 2 },
+  ], { hasmore: true, ref: "r" });
+  const text = findByClass(host, "mkui-table-paging")._ch[1].textContent;
+  const parts = text.split("–").map(s => s.trim());
+  const sub0 = parts[0].split(".")[1];
+  const sub1 = parts[1].split(".")[1];
+  assert.equal(sub0.length, 9, "9 sub-second digits (ns)");
+  assert.equal(sub1.length, 9, "9 sub-second digits (ns)");
+  assert.equal(sub0, "123456001");
+  assert.equal(sub1, "123456009");
+});
+
+test("identical refs shows single time (no range)", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  const ref = streamRefSub(9, 15, 3, "123456789000");
+  lastSubscribe().opts.onPage([
+    { _mkio_ref: ref, name: "a", value: 1 },
+    { _mkio_ref: ref, name: "b", value: 2 },
+  ], { hasmore: true, ref: "r" });
+  const text = findByClass(host, "mkui-table-paging")._ch[1].textContent;
+  assert.ok(!text.includes("–"), "identical refs produce single time, not range");
+});
+
+test("nearly identical refs at nanosecond level shows max precision", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage([
+    { _mkio_ref: streamRefSub(9, 15, 3, "123456789000"), name: "a", value: 1 },
+    { _mkio_ref: streamRefSub(9, 15, 3, "123456790000"), name: "b", value: 2 },
+  ], { hasmore: true, ref: "r" });
+  const text = findByClass(host, "mkui-table-paging")._ch[1].textContent;
+  const parts = text.split("–").map(s => s.trim());
+  const sub0 = parts[0].split(".")[1];
+  const sub1 = parts[1].split(".")[1];
+  assert.equal(sub0.length, 9, "9 sub-second digits (ns) for close refs");
+  assert.equal(sub0, "123456789");
+  assert.equal(sub1, "123456790");
+});
+
+/* ── Boundary indicators ─────────────────────────────────────────────── */
+
+test("last page shows (end) indicator", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: false, ref: "r" });
+  const text = findByClass(host, "mkui-table-paging")._ch[1].textContent;
+  assert.ok(text.endsWith("(end)"), `expected (end) suffix, got: ${text}`);
+});
+
+test("first page shows (start) indicator when Earlier disabled", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const prevBtn = toolbar._ch[0];
+  prevBtn._ev.click[0]();
+  lastSubscribe().opts.onPage([], { hasmore: false, ref: null });
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1b" });
+  const text = toolbar._ch[1].textContent;
+  assert.ok(text.endsWith("(start)"), `expected (start) suffix, got: ${text}`);
+  assert.ok(!text.includes("(end)"), "should not include (end)");
+});
+
+test("single page dataset shows (all) indicator", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50, start: "" });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(10), { hasmore: false, ref: "r" });
+  const toolbar = findByClass(host, "mkui-table-paging");
+  assert.equal(toolbar._ch[0].disabled, true, "Earlier disabled");
+  assert.equal(toolbar._ch[2].disabled, true, "Later disabled");
+  const text = toolbar._ch[1].textContent;
+  assert.ok(text.endsWith("(all)"), `expected (all) suffix, got: ${text}`);
+});
+
+test("middle page shows no boundary indicator", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const nextBtn = toolbar._ch[2];
+  nextBtn._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: true, ref: "r2" });
+  const text = toolbar._ch[1].textContent;
+  assert.ok(!text.includes("(start)"), "no start indicator");
+  assert.ok(!text.includes("(end)"), "no end indicator");
+  assert.ok(!text.includes("(all)"), "no all indicator");
+});
+
+test("boundary indicators not shown in live mode", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: false, ref: "r" });
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const liveBtn = toolbar._ch[3];
+  liveBtn._ev.click[0]();
+  const text = toolbar._ch[1].textContent;
+  assert.ok(!text.includes("(end)"), "no boundary indicator in live mode");
+  assert.ok(!text.includes("(start)"), "no boundary indicator in live mode");
+});
+
+/* ── Refresh button ──────────────────────────────────────────────────── */
+
+test("refresh button re-fetches current page", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const refreshBtn = toolbar._ch[4];
+  assert.equal(refreshBtn.textContent, "⟳");
+  assert.equal(refreshBtn.disabled, false, "enabled in paged mode");
+  const subsBefore = fakeClient.calls.filter(c => c.type === "subscribe").length;
+  refreshBtn._ev.click[0]();
+  const subsAfter = fakeClient.calls.filter(c => c.type === "subscribe").length;
+  assert.ok(subsAfter > subsBefore, "refresh triggered a new subscribe");
+});
+
+test("refresh button disabled in live mode", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const refreshBtn = toolbar._ch[4];
+  const liveBtn = toolbar._ch[3];
+  assert.equal(refreshBtn.disabled, false, "enabled before live");
+  liveBtn._ev.click[0]();
+  assert.equal(refreshBtn.disabled, true, "disabled in live mode");
+});
+
+test("refresh button re-enabled after exiting live mode", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const refreshBtn = toolbar._ch[4];
+  const liveBtn = toolbar._ch[3];
+  liveBtn._ev.click[0]();
+  assert.equal(refreshBtn.disabled, true, "disabled in live mode");
+  liveBtn._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r2" });
+  assert.equal(refreshBtn.disabled, false, "re-enabled after exit live");
+});
+
+test("refresh re-fetches with saved pageLoadRef and pageLoadBefore", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const nextBtn = toolbar._ch[2];
+  nextBtn._ev.click[0]();
+  const nextSub = lastSubscribe();
+  nextSub.opts.onPage(makeStreamRows(50, 50), { hasmore: false, ref: "r2" });
+  const refreshBtn = toolbar._ch[4];
+  refreshBtn._ev.click[0]();
+  const refreshSub = lastSubscribe();
+  assert.equal(refreshSub.opts.ref, nextSub.opts.ref, "refresh uses same ref as the page it's refreshing");
 });

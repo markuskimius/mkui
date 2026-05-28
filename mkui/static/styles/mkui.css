@@ -504,6 +504,17 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-paging-live {
   margin-left: auto;
 }
+.mkui-paging-live + .mkui-paging-btn {
+  margin-left: 4px;
+  font-size: 20px;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
 .mkui-paging-live.active {
   color: #4f4;
   animation: mkui-live-blink 1.5s ease-in-out infinite;
