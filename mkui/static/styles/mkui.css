@@ -207,7 +207,6 @@ mkui-pane {
   position: absolute;
   inset: 0;
   overflow: auto;
-  padding: 10px 12px;
   line-height: 1.45;
 }
 
@@ -478,7 +477,6 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 10px 12px;
 }
 .mkui-table-paging {
   flex-shrink: 0;
