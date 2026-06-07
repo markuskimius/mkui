@@ -90,6 +90,86 @@ class TestInit(unittest.TestCase):
         self.assertIn("frames", config)
         self.assertIn("mkio", config)
 
+    def test_client_toml_has_auth_section(self):
+        target = os.path.join(self.tmpdir, "myapp")
+        subprocess.run(["python", "-m", "mkui", "init", target], capture_output=True)
+
+        with open(os.path.join(target, "config", "client.toml"), "rb") as f:
+            config = tomllib.load(f)
+        self.assertIn("auth", config)
+        self.assertEqual(config["auth"]["method"], "mkio")
+
+    def test_client_toml_auth_has_state_maps(self):
+        target = os.path.join(self.tmpdir, "myapp")
+        subprocess.run(["python", "-m", "mkui", "init", target], capture_output=True)
+
+        with open(os.path.join(target, "config", "client.toml"), "rb") as f:
+            config = tomllib.load(f)
+        self.assertIn("connected", config["auth"])
+        self.assertIn("disconnected", config["auth"])
+        self.assertIn("status.message", config["auth"]["connected"])
+        self.assertIn("status.message", config["auth"]["disconnected"])
+
+    def test_client_toml_has_account_menu(self):
+        target = os.path.join(self.tmpdir, "myapp")
+        subprocess.run(["python", "-m", "mkui", "init", target], capture_output=True)
+
+        with open(os.path.join(target, "config", "client.toml"), "rb") as f:
+            config = tomllib.load(f)
+        menus = config.get("menubar", [])
+        account_menus = [m for m in menus if m.get("label") == "Account"]
+        self.assertEqual(len(account_menus), 1)
+        items = account_menus[0].get("items", [])
+        logout_items = [i for i in items if i.get("action") == "auth.logout"]
+        self.assertEqual(len(logout_items), 1)
+
+    def test_client_toml_statusbar_has_auth_user_widget(self):
+        target = os.path.join(self.tmpdir, "myapp")
+        subprocess.run(["python", "-m", "mkui", "init", target], capture_output=True)
+
+        with open(os.path.join(target, "config", "client.toml"), "rb") as f:
+            config = tomllib.load(f)
+        right = config.get("statusbar", {}).get("right", [])
+        auth_user_widgets = [w for w in right if w.get("bind") == "auth.user"]
+        self.assertEqual(len(auth_user_widgets), 1)
+
+    def test_client_toml_no_mkio_expect(self):
+        """Auth-enabled template should not have mkio.expect (auth replaces verification)."""
+        target = os.path.join(self.tmpdir, "myapp")
+        subprocess.run(["python", "-m", "mkui", "init", target], capture_output=True)
+
+        with open(os.path.join(target, "config", "client.toml"), "rb") as f:
+            config = tomllib.load(f)
+        self.assertNotIn("expect", config.get("mkio", {}))
+
+    def test_client_toml_no_mkio_incompatible(self):
+        """Auth-enabled template should not have mkio.incompatible."""
+        target = os.path.join(self.tmpdir, "myapp")
+        subprocess.run(["python", "-m", "mkui", "init", target], capture_output=True)
+
+        with open(os.path.join(target, "config", "client.toml"), "rb") as f:
+            config = tomllib.load(f)
+        self.assertNotIn("incompatible", config.get("mkio", {}))
+
+    def test_client_toml_no_mkio_disconnected(self):
+        """Auth-enabled template should not have mkio.disconnected (uses auth.disconnected)."""
+        target = os.path.join(self.tmpdir, "myapp")
+        subprocess.run(["python", "-m", "mkui", "init", target], capture_output=True)
+
+        with open(os.path.join(target, "config", "client.toml"), "rb") as f:
+            config = tomllib.load(f)
+        self.assertNotIn("disconnected", config.get("mkio", {}))
+
+    def test_client_toml_has_mkio_connected(self):
+        """mkio.connected should exist to clear initial grey styling on WebSocket connect."""
+        target = os.path.join(self.tmpdir, "myapp")
+        subprocess.run(["python", "-m", "mkui", "init", target], capture_output=True)
+
+        with open(os.path.join(target, "config", "client.toml"), "rb") as f:
+            config = tomllib.load(f)
+        self.assertIn("connected", config.get("mkio", {}))
+        self.assertEqual(config["mkio"]["connected"]["status.message"], "Connected")
+
     def test_client_toml_references_mkio_services(self):
         target = os.path.join(self.tmpdir, "myapp")
         subprocess.run(["python", "-m", "mkui", "init", target], capture_output=True)
@@ -255,17 +335,17 @@ class TestTemplateConsistency(unittest.TestCase):
                 self.assertIn(service, services,
                     f"pane '{pane_id}' references service '{service}' not in server.toml")
 
-    def test_client_toml_mkio_expect_matches_server(self):
-        """client.toml mkio.expect.name should match server.toml name."""
+    def test_client_toml_auth_method_matches_server_auth(self):
+        """When auth is enabled, server should have auth tables (created by mkio init)."""
         with open(os.path.join(self.target, "server.toml"), "rb") as f:
             server = tomllib.load(f)
         with open(os.path.join(self.target, "config", "client.toml"), "rb") as f:
             client = tomllib.load(f)
 
-        expect_name = client.get("mkio", {}).get("expect", {}).get("name")
-        server_name = server.get("name")
-        if expect_name and server_name:
-            self.assertEqual(expect_name, server_name)
+        if client.get("auth", {}).get("method") == "mkio":
+            tables = server.get("tables", {})
+            self.assertIn("_mkio_users", tables)
+            self.assertIn("_mkio_rights", tables)
 
     def test_client_toml_mkio_url_port_matches_server(self):
         """client.toml mkio.url port should match server.toml port."""

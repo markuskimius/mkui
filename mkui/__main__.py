@@ -55,6 +55,24 @@ message = "Connecting..."
 color = "#000000"
 background = "#b8b8b8"
 
+# ─── Authentication ───────────────────────────────────────────────────
+# Shows a login dialog before the app loads. Uses mkio's built-in auth
+# (username/password against the _mkio_users table).
+# Remove or comment this section to disable authentication entirely.
+
+[auth]
+method = "mkio"
+
+[auth.connected]
+"status.message" = "Connected"
+"status.color" = ""
+"status.background" = ""
+
+[auth.disconnected]
+"status.message" = "Disconnected"
+"status.color" = "#000000"
+"status.background" = "#b8b8b8"
+
 # ─── Menubar ──────────────────────────────────────────────────────────
 
 [[menubar]]
@@ -80,11 +98,20 @@ items = [
   ]},
 ]
 
+[[menubar]]
+label = "Account"
+items = [
+  { label = "Log Out", action = "auth.logout" },
+]
+
 # ─── Statusbar ─────────────────────────────────────────────────────────
 
 [statusbar]
 left = [{ type = "text", bind = "status.message" }]
-right = [{ type = "text", text = "my-app" }]
+right = [
+  { type = "text", bind = "auth.user" },
+  { type = "text", text = "my-app" },
+]
 
 [statusbar.bindStyle]
 color = "status.color"
@@ -168,23 +195,10 @@ layout = { type = "tabs", active = 0, children = ["feed"] }
 [mkio]
 url = "ws://localhost:8080/ws"
 
-[mkio.expect]
-name = "my-app"
-
 [mkio.connected]
 "status.message" = "Connected"
 "status.color" = ""
 "status.background" = ""
-
-[mkio.incompatible]
-"status.message" = "Incompatible server"
-"status.color" = "#ffffff"
-"status.background" = "#cc0000"
-
-[mkio.disconnected]
-"status.message" = "Disconnected"
-"status.color" = "#000000"
-"status.background" = "#b8b8b8"
 """
 
 

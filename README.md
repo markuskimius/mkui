@@ -181,6 +181,33 @@ State maps default to `{ "status.message": "Connected" }`,
 `statusbar.bindStyle` to change the statusbar appearance on disconnect or
 server mismatch.
 
+## Authentication
+
+When `config.auth` is present, a login dialog gates the app — no frames
+appear until the user authenticates. Three modes:
+
+1. **mkio built-in** (`method: "mkio"`) — calls `client.auth()` against
+   mkio's `_mkio_users` table. Config-only, no code needed.
+2. **Custom** (`method: "custom"`) — register a handler with
+   `app.registerAuthHandler({ authenticate({username, password}) })`.
+3. **Disabled** — omit the `auth` section entirely.
+
+```json
+"auth": {
+  "method": "mkio",
+  "connected":    { "status.message": "Connected", "status.background": null },
+  "disconnected": { "status.message": "Disconnected", "status.background": "#858585" }
+}
+```
+
+The login dialog is unclosable (no close button). After login,
+`auth.authenticated`, `auth.user`, and `auth.role` state paths are set.
+The built-in `auth.logout` action reloads the page.
+
+mkio's scaffold creates default users: `admin`/`password` (admin role)
+and `user`/`password` (user role). Customize the dialog labels with
+`auth.dialog`: `title`, `usernameLabel`, `passwordLabel`, `submitLabel`.
+
 ## Menubar
 
 `menubar` is a top-level array. Each element is a dropdown menu with a
@@ -418,6 +445,7 @@ mkui/                    Python package (pip install mkui)
         frame.js         <mkui-frame> + <mkui-pane>
       widgets/
         text.js  button.js  mkio-table.js  mkui-dialog.js
+      auth.js            Config-driven login dialog
       mkio-bridge.js     Lazy-loads mkio's /mkio.js client
     styles/mkui.css      Default theme (CSS custom properties)
     examples/
@@ -430,5 +458,6 @@ tests/
   state.test.js          State + connection lifecycle tests (node:test)
   table.test.js          mkio-table pane tests (node:test)
   dialog.test.js         Dialog expression + submission tests (node:test)
+  auth.test.js           Authentication module + state lifecycle tests (node:test)
   test_cli.py            CLI init/serve tests (unittest)
 ```

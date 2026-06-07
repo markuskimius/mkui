@@ -28,6 +28,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 - `mkui/static/src/core.js` — `App`, `State` (reactive store), widget/pane-type registries
 - `mkui/static/src/widgets/mkio-table.js` — built-in `mkio-table` pane type: subscribes to mkio services, renders live tables
 - `mkui/static/src/widgets/mkui-dialog.js` — `openDialog()`: config-driven modal dialogs with validation, RPC submission, and pin-to-keep-open
+- `mkui/static/src/auth.js` — config-driven login dialog; `showLogin()` authenticates before the app loads
 - `mkui/static/src/mkio-bridge.js` — lazy-loads mkio's `/mkio.js` client from the server origin
 - `mkui/static/styles/mkui.css` — default theme via CSS custom properties
 
@@ -35,7 +36,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 
 - `mkui init [dir]` — scaffold a new project (server.toml + config/client.toml + static/index.html)
 - `mkui serve [dir] [-p PORT]` — serve a project using mkio's server API
-- `node --test tests/layout.test.js tests/state.test.js tests/table.test.js tests/dialog.test.js` — run JS unit tests (node:test, no deps needed)
+- `node --test tests/layout.test.js tests/state.test.js tests/table.test.js tests/dialog.test.js tests/auth.test.js` — run JS unit tests (node:test, no deps needed)
 - `python -m pytest tests/test_cli.py` — run CLI tests (unittest)
 - `python -m build && twine upload dist/*` — build and publish to PyPI
 - `cd mkui/static && python3 -m http.server 8000` — serve examples locally (standalone/library only)
@@ -51,7 +52,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 
 Runtime input is JSON. `mkui serve` uses mkio's `[config]` routing — requests for `/config/client.json` are served from `config/client.toml` (parsed with `tomllib`). The browser never needs a TOML parser. TOML configs use empty string `""` where JSON would use `null` (TOML has no null literal).
 
-Top-level keys: `app`, `state`, `menubar`, `statusbar`, `panes` (id→spec), `frames` (ordered array with position + layout tree), `mkio` (optional).
+Top-level keys: `app`, `state`, `auth` (optional), `menubar`, `statusbar`, `panes` (id→spec), `frames` (ordered array with position + layout tree), `mkio` (optional).
 
 ## Menubar
 
@@ -87,6 +88,35 @@ State paths set by the connection lifecycle:
 - `mkio.server.version` — server's application version
 - `mkio.server.protocol` — server's protocol version
 - `mkio.server.mkio` — server's mkio package version
+
+## Authentication
+
+When `config.auth` is present, `<mkui-app>` shows a login dialog before loading frames. The workspace is initialized empty (no frames), and frames are created only after successful authentication. This prevents any flash of unauthorized content.
+
+Three flavors:
+
+1. **mkio built-in** (`method: "mkio"`) — config-only. Calls `client.auth({username, password})` against mkio's `_mkio_users` table. Default seed users: `admin`/`password` (admin role), `user`/`password` (user role).
+2. **Custom backend** (`method: "custom"`) — register a handler with `app.registerAuthHandler({ authenticate({username, password}) })` before the app loads. The handler returns `{ user, role }`.
+3. **No auth** — omit the `[auth]` section entirely. The app loads directly with no login prompt.
+
+Config keys (under `auth`):
+- `method` — `"mkio"` (default) or `"custom"`
+- `dialog` — optional object: `title`, `width`, `usernameLabel`, `passwordLabel`, `submitLabel` to customize the login dialog
+- `connected` — state map applied after successful authentication and on reconnect (e.g. `{ "status.message": "Connected" }`)
+- `disconnected` — state map applied on WebSocket disconnect when auth is enabled (falls back to `mkio.disconnected`)
+
+State paths set by auth:
+- `auth.authenticated` — boolean, true after successful login
+- `auth.user` — username of the authenticated user
+- `auth.role` — role of the authenticated user
+
+Built-in action: `auth.logout` — reloads the page (clears auth state).
+
+When auth is enabled, `_mkio` server verification is skipped — authentication itself proves the server is valid. The `mkio.connected` state map is still applied on WebSocket connect (to clear the "Connecting..." initial styling), and `auth.connected` is applied after login and on reconnect when already authenticated.
+
+Login dialog: displayed as a floating frame (`stayOnTop`, `noDock`) with `_hideClose = true` (no close button) to prevent dismissal. The frame's `_extraControls` is set to `() => []` to remove any extra buttons. Username and password fields use existing `mkui-dialog-*` CSS classes. Empty field validation shows red borders via `mkui-dialog-invalid`. Failed auth shows the error in a status span and clears the password field.
+
+Reconnect: mkio's client stores `_authData` and auto-re-authenticates on reconnect. The `onConnect` handler checks `auth.authenticated` — if already true (reconnect), it applies `auth.connected`; if false (initial connect before login), it applies `mkio.connected`.
 
 ## mkio-table pane type
 

@@ -274,16 +274,18 @@ class MkuiFrame extends HTMLElement {
     });
     actions.appendChild(maxBtn);
 
-    const closeBtn = document.createElement("div");
-    closeBtn.className = "mkui-frame-btn mkui-frame-close";
-    closeBtn.textContent = "\u00d7";
-    closeBtn.title = "Close";
-    closeBtn.addEventListener("mousedown", (ev) => ev.stopPropagation());
-    closeBtn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      this._workspace?.closeFrame(this._id);
-    });
-    actions.appendChild(closeBtn);
+    if (!this._hideClose) {
+      const closeBtn = document.createElement("div");
+      closeBtn.className = "mkui-frame-btn mkui-frame-close";
+      closeBtn.textContent = "\u00d7";
+      closeBtn.title = "Close";
+      closeBtn.addEventListener("mousedown", (ev) => ev.stopPropagation());
+      closeBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        this._workspace?.closeFrame(this._id);
+      });
+      actions.appendChild(closeBtn);
+    }
 
     return actions;
   }

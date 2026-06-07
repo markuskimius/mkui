@@ -59,16 +59,24 @@ class MkuiApp extends HTMLElement {
     this._app.registerAction("window.cascade",  () => ws.arrangeCascade());
     this._app.registerAction("pane.show",       (app, id) => ws.showPane(id));
 
-    if (config.mkio?.url) {
-      const st = this._app.state;
-      const apply = (map) => {
-        for (const [path, value] of Object.entries(map))
-          st.set(path, value);
-      };
+    const hasAuth = !!config.auth;
+    const st = this._app.state;
+    const apply = (map) => {
+      for (const [path, value] of Object.entries(map))
+        st.set(path, value);
+    };
 
+    if (hasAuth) {
+      st.set("auth.authenticated", false);
+      st.set("auth.user", "");
+      st.set("auth.role", "");
+      this._app.registerAction("auth.logout", () => location.reload());
+    }
+
+    if (config.mkio?.url) {
       let verifyGen = 0;
 
-      const verify = async (client) => {
+      this._verify = async (client) => {
         const gen = ++verifyGen;
         st.set("mkio.verified", false);
         st.set("mkio.server", {});
@@ -116,27 +124,67 @@ class MkuiApp extends HTMLElement {
       ensureMkio(config.mkio.url, {
         onConnect: (client) => {
           st.set("mkio.connected", true);
-          apply(config.mkio.connected ?? { "status.message": "Connected" });
-          verify(client);
+          if (hasAuth) {
+            if (st.get("auth.authenticated")) {
+              apply(config.auth.connected ?? config.mkio.connected ?? { "status.message": "Connected" });
+            } else {
+              apply(config.mkio.connected ?? { "status.message": "Connected" });
+            }
+          } else {
+            apply(config.mkio.connected ?? { "status.message": "Connected" });
+          }
+          if (!hasAuth) this._verify(client);
         },
         onDisconnect: () => {
           st.set("mkio.connected", false);
           st.set("mkio.verified", false);
-          apply(config.mkio.disconnected ?? { "status.message": "Disconnected" });
+          if (hasAuth) {
+            apply(config.auth.disconnected ?? config.mkio.disconnected ?? { "status.message": "Disconnected" });
+          } else {
+            apply(config.mkio.disconnected ?? { "status.message": "Disconnected" });
+          }
         },
       });
     }
 
     this._menubar.setApp(this._app);
-    this._workspace.setApp(this._app);
     this._statusbar.setApp(this._app);
+
+    if (hasAuth) {
+      const savedFrames = config.frames;
+      config.frames = [];
+      this._workspace.setApp(this._app);
+      config.frames = savedFrames;
+      this._authenticate(config);
+    } else {
+      this._workspace.setApp(this._app);
+    }
   }
 
-  // Apply a named theme. Built-in names ("dark", "light") are styled by
-  // mkui.css via the [theme] attribute. Custom themes come from
-  // config.app.themes[name] — a flat object of CSS custom property
-  // overrides (e.g. { "--mkui-bg": "#101820", "--mkui-accent": "#ff6b35" }),
-  // applied as inline styles so they cascade into every descendant.
+  async _authenticate(config) {
+    const ws = this._workspace;
+    const method = config.auth.method ?? "mkio";
+
+    let client = null;
+    if (method === "mkio" && config.mkio?.url) {
+      client = await ensureMkio(config.mkio.url);
+    }
+
+    const { showLogin } = await import("../auth.js");
+    await showLogin(config, this._app, client);
+
+    const st = this._app.state;
+    const apply = (map) => {
+      for (const [path, value] of Object.entries(map))
+        st.set(path, value);
+    };
+    apply(config.auth.connected ?? config.mkio?.connected ?? { "status.message": "Connected" });
+
+    for (const f of config.frames ?? []) {
+      ws.addFrame(f);
+    }
+  }
+
   setTheme(name) {
     if (this._themeVars) {
       for (const k of this._themeVars) this.style.removeProperty(k);
