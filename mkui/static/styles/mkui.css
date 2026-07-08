@@ -50,6 +50,7 @@ mkui-menubar {
   display: flex;
   align-items: center;
   height: var(--mkui-menubar-h);
+  box-sizing: border-box;
   background: var(--mkui-bg-alt);
   border-bottom: 1px solid var(--mkui-border);
   padding: 0 4px;
@@ -94,6 +95,7 @@ mkui-statusbar {
   align-items: center;
   justify-content: space-between;
   height: var(--mkui-statusbar-h);
+  box-sizing: border-box;
   background: var(--mkui-accent);
   color: var(--mkui-accent-fg);
   border-top: 1px solid var(--mkui-border);

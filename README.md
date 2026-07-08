@@ -459,5 +459,7 @@ tests/
   table.test.js          mkio-table pane tests (node:test)
   dialog.test.js         Dialog expression + submission tests (node:test)
   auth.test.js           Authentication module + state lifecycle tests (node:test)
+  expressions.test.js    ${...} expression resolver tests (node:test)
+  styles.test.js         mkui.css layout invariants (node:test)
   test_cli.py            CLI init/serve tests (unittest)
 ```

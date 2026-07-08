@@ -36,7 +36,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 
 - `mkui init [dir]` — scaffold a new project (server.toml + config/client.toml + static/index.html)
 - `mkui serve [dir] [-p PORT]` — serve a project using mkio's server API
-- `node --test tests/layout.test.js tests/state.test.js tests/table.test.js tests/dialog.test.js tests/auth.test.js` — run JS unit tests (node:test, no deps needed)
+- `node --test tests/*.test.js` — run JS unit tests (node:test, no deps needed)
 - `python -m pytest tests/test_cli.py` — run CLI tests (unittest)
 - `python -m build && twine upload dist/*` — build and publish to PyPI
 - `cd mkui/static && python3 -m http.server 8000` — serve examples locally (standalone/library only)
@@ -177,4 +177,5 @@ Pin button: a 📌 toggle in the dialog's titlebar (frame controls area, before 
 - `registerPaneType(name, factory)` for custom content; `registerWidget(name, factory)` for lightweight inline widgets
 - Built-in actions prefixed `pane.*` (show), `window.*` (tileH, tileV, grid, cascade), and `app.*` (quit)
 - Layout tree invariant: every leaf sits inside a `{ type: "tabs", children: [...] }` — never bare strings after normalize
+- CSS invariant: `mkui-menubar` and `mkui-statusbar` are `box-sizing: border-box` so their rendered height equals `--mkui-menubar-h`/`--mkui-statusbar-h` exactly — the workspace is positioned by those variables, and a 1px overhang paints over the border of frames snapped to the top/bottom edge (guarded by `tests/styles.test.js`)
 - Tests use `node:test` + `node:assert/strict`; no test framework dependency
