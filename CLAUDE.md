@@ -14,6 +14,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 - Every frame move/resize passes through `clampToDock` — nothing escapes the viewport
 - Keyboard focus model: the top frame gets `[data-focused]` (set by `_applyZOrder`); each frame tracks an `_activeTabGroup` updated on any interaction within a tab bar or pane. Hotkeys act on that frame + group.
 - Tab drag: pointer events (mouse + touch) on tabs. Dragging within a bar shows a ghost label locked to the bar's Y axis with an accent drop indicator; reorder commits on release. Dragging outside the bar tears the pane out into a new frame. `touch-action: none` on `.mkui-tab` prevents scroll interference.
+- Tab rename: ctrl+click or cmd+click on a tab swaps the label for an inline text input (`.mkui-tab-rename`). Enter/blur commits via `workspace.renamePane(id, title)` (updates the pane spec's `title`, so tab bars and the Window menu pick it up); Escape cancels. Trigger paths: `pointerdown` with `ctrlKey || metaKey` and button 0, plus `contextmenu` with `ctrlKey` (macOS delivers ctrl+click as a context-menu gesture). Meta+click is unreliable on Windows/Linux (Start menu / window-manager grabs), so ctrl is the cross-platform trigger and cmd the macOS-native one.
 - Theming: `dark` and `light` are styled by `mkui.css` via `[theme=...]`. Custom themes go in `config.app.themes[name]` as `{ "--mkui-*": value }` overrides; `MkuiApp.setTheme(name)` applies them as inline styles on the host.
 
 ## Key files
@@ -64,6 +65,7 @@ Item keys:
 - `args` — optional argument passed to action handler
 - `items` — child array; presence makes it a nested submenu (opens on hover, nests arbitrarily)
 - `sep` — `true` renders a separator line
+- `windows` — `true` expands into one `pane.show` leaf per currently-open pane (title from the pane spec), so a Window menu can list open windows dynamically. Popups are rebuilt on each open, keeping the list live. noDock frames (dialogs, login) are excluded; the list comes from `workspace.openPanes()`.
 
 Leaf items fire `app.fireAction(action, args)` on mouseup. Built-in actions: `app.quit`, `pane.show` (takes pane ID — switches to its tab and raises the frame, or opens a new frame if parked), `window.tileH`, `window.tileV`, `window.grid`, `window.cascade`. Custom actions registered with `app.registerAction(name, fn)`.
 

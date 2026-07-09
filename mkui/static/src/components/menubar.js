@@ -13,6 +13,10 @@
 //
 // Any item with an `items` array renders as an expandable submenu that
 // opens to the right on hover; otherwise it's a leaf that fires `action`.
+//
+// An item of `{ windows = true }` expands into one `pane.show` leaf per
+// currently-open pane — popups are rebuilt on every open, so the list
+// always reflects the live workspace.
 
 class MkuiMenubar extends HTMLElement {
   constructor() {
@@ -81,10 +85,24 @@ class MkuiMenubar extends HTMLElement {
     this._openStack.push({ popup, parentAnchor: anchor, depth: 0 });
   }
 
+  // Replace dynamic markers with concrete leaf items at popup-build time.
+  _expandItems(items) {
+    const out = [];
+    for (const item of items) {
+      if (item.windows) {
+        const panes = this._app?._element?.workspace?.openPanes?.() ?? [];
+        for (const p of panes) out.push({ label: p.title, action: "pane.show", args: p.id });
+      } else {
+        out.push(item);
+      }
+    }
+    return out;
+  }
+
   _buildPopup(items, depth) {
     const popup = document.createElement("div");
     popup.className = "mkui-menu-popup";
-    for (const item of items) {
+    for (const item of this._expandItems(items)) {
       if (item.sep) {
         const s = document.createElement("div");
         s.className = "mkui-menu-sep";

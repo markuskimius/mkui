@@ -228,7 +228,23 @@ class MkuiFrame extends HTMLElement {
       if (!this._noDock) {
         tab.addEventListener("pointerdown", (ev) => {
           if (ev.button !== 0) return;
+          // Ctrl+click (Windows/Linux) or cmd+click (macOS) renames.
+          if (ev.ctrlKey || ev.metaKey) {
+            // Cancel so the compatibility mousedown doesn't steal focus
+            // from the rename input we're about to show.
+            ev.preventDefault();
+            this._beginTabRename(id, tabGroup);
+            return;
+          }
           this._workspace?._beginPaneDrag(ev, this, id, tabGroup, bar);
+        });
+        // On macOS a ctrl+click arrives as a context-menu gesture instead
+        // of a ctrl-modified primary click, so ctrl works there too.
+        tab.addEventListener("contextmenu", (ev) => {
+          if (!ev.ctrlKey) return;
+          ev.preventDefault();
+          ev.stopPropagation();
+          this._beginTabRename(id, tabGroup);
         });
       }
       tabs.appendChild(tab);
@@ -239,6 +255,53 @@ class MkuiFrame extends HTMLElement {
     if (withControls) bar.appendChild(this._makeControls());
 
     return bar;
+  }
+
+  // Inline tab rename (ctrl+click or cmd+click). Swaps the tab label for a
+  // text input;
+  // Enter/blur commits via workspace.renamePane, Escape cancels. Activating
+  // the tab group may re-render the chrome, so the live tab is looked up
+  // afterwards rather than captured from the event.
+  _beginTabRename(paneId, tabGroup) {
+    this._workspace?._raiseFrame(this);
+    this._setActiveTabGroup(tabGroup);
+    let bar = null;
+    for (const child of this._bodyEl.children) {
+      if (child.classList?.contains("mkui-tabbar") && child._tabGroup === tabGroup) { bar = child; break; }
+    }
+    const idx = tabGroup.children.indexOf(paneId);
+    const tab = bar?.querySelectorAll(".mkui-tab")[idx];
+    const labelEl = tab?.querySelector(".mkui-tab-label");
+    if (!labelEl || tab.querySelector(".mkui-tab-rename")) return;
+
+    const current = this._workspace?.getPaneSpec(paneId)?.title ?? paneId;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "mkui-tab-rename";
+    input.value = current;
+    input.style.width = Math.max(60, labelEl.offsetWidth + 12) + "px";
+    labelEl.style.display = "none";
+    labelEl.after(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      const v = input.value.trim();
+      if (commit && v && v !== current) this._workspace?.renamePane(paneId, v);
+      else this._renderInternal();
+    };
+    // Keep clicks inside the input from starting a tab drag or re-raising.
+    for (const name of ["pointerdown", "mousedown", "click", "dblclick", "contextmenu"])
+      input.addEventListener(name, (e) => e.stopPropagation());
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") finish(true);
+      else if (e.key === "Escape") finish(false);
+    });
+    input.addEventListener("blur", () => finish(true));
   }
 
   _makeDragRegion() {

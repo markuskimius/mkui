@@ -251,6 +251,7 @@ Item keys:
 | `args` | any | Optional argument passed to the action handler |
 | `items` | array | Child items — makes this a submenu (opens on hover) |
 | `sep` | boolean | `true` renders a horizontal separator line |
+| `windows` | boolean | `true` expands into one `pane.show` entry per open pane |
 
 Any item with an `items` array is a submenu; submenus nest arbitrarily.
 Leaf items (no `items`) fire `action` on click via `app.fireAction()`.
@@ -261,16 +262,28 @@ new frame if the pane is parked/closed), `window.tileH`, `window.tileV`,
 `window.grid`, `window.cascade`. Register custom actions with
 `app.registerAction(name, fn)`.
 
-A typical Window menu lists each pane for quick access:
+A typical Window menu lists the arrangement commands first, then the
+open windows dynamically:
 
 ```json
 { "label": "Window", "items": [
-  { "label": "Explorer",  "action": "pane.show", "args": "explorer" },
-  { "label": "Console",   "action": "pane.show", "args": "console" },
+  { "label": "Cascade", "action": "window.cascade" },
   { "sep": true },
-  { "label": "Cascade",   "action": "window.cascade" }
+  { "windows": true }
 ]}
 ```
+
+`{ "windows": true }` expands — every time the menu opens — into one
+entry per pane currently hosted in a frame, labeled with the pane's
+title. Selecting an entry raises the frame that contains the pane and
+switches to its tab (dialogs and other noDock frames are excluded).
+Static `pane.show` entries are still useful for reopening panes whose
+frame has been closed.
+
+Tabs can be renamed in place: ctrl+click (or cmd+click on macOS) a tab,
+edit the title, and press Enter (Escape cancels). The new title is
+stored on the pane spec, so tab bars and the Window menu both reflect
+it.
 
 ## Themes
 

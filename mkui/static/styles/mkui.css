@@ -258,6 +258,20 @@ mkui-pane {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Inline rename editor shown in place of the label on ctrl+click. */
+.mkui-tab-rename {
+  font: inherit;
+  color: var(--mkui-fg);
+  background: var(--mkui-bg);
+  border: 1px solid var(--mkui-focus);
+  border-radius: 2px;
+  padding: 0 4px;
+  margin: 0;
+  min-width: 60px;
+  align-self: center;
+  box-sizing: border-box;
+  outline: none;
+}
 .mkui-tab:hover { background: var(--mkui-bg-hover); color: var(--mkui-fg); }
 .mkui-tab.active {
   background: var(--mkui-bg);

@@ -15,7 +15,7 @@
 import "./frame.js";
 import { getPaneType, getWidget } from "../core.js";
 import { clampToDock, rectToFrac, fracToRect, dropZoneFor, previewRect, snapMove, snapResize, cascadePosition } from "../layout/drag.js";
-import { layout, insertPane, removePane, findPane, firstTabGroup } from "../layout/tree.js";
+import { layout, insertPane, removePane, findPane, firstTabGroup, listPanes } from "../layout/tree.js";
 
 class MkuiWorkspace extends HTMLElement {
   constructor() {
@@ -290,6 +290,7 @@ class MkuiWorkspace extends HTMLElement {
       const hit = findPane(el.getTree(), paneId);
       if (hit) {
         hit.tabGroup.active = hit.tabIndex;
+        el._activeTabGroup = hit.tabGroup;
         el._renderInternal();
         this._raiseFrame(el);
         return;
@@ -304,6 +305,31 @@ class MkuiWorkspace extends HTMLElement {
     });
     const paneEl = this._paneEls.get(paneId);
     if (paneEl) paneEl.dispatchEvent(new CustomEvent("mkui-pane-open"));
+  }
+
+  // All panes currently hosted in a frame ("open windows"), in frame
+  // z-order then tree order. noDock frames (dialogs, login) are excluded.
+  openPanes() {
+    const out = [];
+    for (const spec of this._frames) {
+      if (spec.noDock) continue;
+      const tree = this._frameEls.get(spec.id)?.getTree();
+      if (!tree) continue;
+      for (const id of listPanes(tree)) {
+        out.push({ id, title: this._panes.get(id)?.title ?? id });
+      }
+    }
+    return out;
+  }
+
+  renamePane(id, title) {
+    const spec = this._panes.get(id);
+    if (spec) spec.title = title;
+    else this._panes.set(id, { title });
+    for (const el of this._frameEls.values()) {
+      const tree = el.getTree();
+      if (tree && findPane(tree, id)) el._renderInternal();
+    }
   }
 
   // Window arrangement ─────────────────────────────────────────────────────

@@ -96,6 +96,8 @@ items = [
     { label = "Vertical",   action = "window.tileV" },
     { label = "Grid",       action = "window.grid" },
   ]},
+  { sep = true },
+  { windows = true },
 ]
 
 [[menubar]]

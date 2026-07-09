@@ -25,10 +25,12 @@ items = [
 [[menubar]]
 label = "Window"
 items = [
-  { label = "Tile Horizontal", action = "window.tileH" },
-  { label = "Tile Vertical", action = "window.tileV" },
+  { label = "Tile Horizontally", action = "window.tileH" },
+  { label = "Tile Vertically", action = "window.tileV" },
   { label = "Grid", action = "window.grid" },
   { label = "Cascade", action = "window.cascade" },
+  { sep = true },
+  { windows = true },
 ]
 
 # ─── Statusbar ─────────────────────────────────────────────────────────
