@@ -1,6 +1,7 @@
 import { registerPaneType } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
 import { resolveExpr, resolveObject } from "../lib/expressions.js";
+import { icon } from "../lib/icons.js";
 
 function midnightRef() {
   const d = new Date();
@@ -118,20 +119,20 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     pagingToolbar.className = "mkui-table-paging";
     prevBtn = document.createElement("button");
     prevBtn.className = "mkui-btn mkui-paging-btn";
-    prevBtn.textContent = "◀ Earlier";
+    prevBtn.append(icon("chevron-left"), "Earlier");
     prevBtn.disabled = true;
     pageInfo = document.createElement("span");
     pageInfo.className = "mkui-paging-info";
     nextBtn = document.createElement("button");
     nextBtn.className = "mkui-btn mkui-paging-btn";
-    nextBtn.textContent = "Later ▶";
+    nextBtn.append("Later", icon("chevron-right"));
     nextBtn.disabled = true;
     liveBtn = document.createElement("button");
     liveBtn.className = "mkui-btn mkui-paging-live";
-    liveBtn.textContent = "● Live";
+    liveBtn.append(icon("dot"), "Live");
     refreshBtn = document.createElement("button");
     refreshBtn.className = "mkui-btn mkui-paging-btn";
-    refreshBtn.textContent = "⟳";
+    refreshBtn.appendChild(icon("refresh"));
     refreshBtn.title = "Refresh page";
     pagingToolbar.append(prevBtn, pageInfo, nextBtn, liveBtn, refreshBtn);
 
@@ -401,7 +402,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
       const filterBtn = document.createElement("span");
       filterBtn.className = "mkui-filter-btn";
-      filterBtn.textContent = "▾";
+      filterBtn.appendChild(icon("caret-down"));
 
       const sortInd = document.createElement("span");
       sortInd.className = "mkui-sort-indicator";
@@ -458,13 +459,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const col = th.dataset.col;
       const ind = th.querySelector(".mkui-sort-indicator");
       const si = sortKeys.findIndex((k) => k.col === col);
+      ind.textContent = "";
       if (si >= 0) {
-        const arrow = sortKeys[si].dir === "asc" ? "▲" : "▼";
-        ind.textContent = sortKeys.length > 1
-          ? ` ${arrow}${SUPER[si] || si + 1}`
-          : ` ${arrow}`;
-      } else {
-        ind.textContent = "";
+        ind.appendChild(icon(sortKeys[si].dir === "asc" ? "caret-up" : "caret-down"));
+        if (sortKeys.length > 1) ind.append(SUPER[si] || String(si + 1));
       }
       const btn = th.querySelector(".mkui-filter-btn");
       btn.classList.toggle("active", filters.has(col));

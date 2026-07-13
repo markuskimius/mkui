@@ -18,6 +18,7 @@
 import {
   normalize, listPanes, layout, setSplitRatio, firstTabGroup, findPane,
 } from "../layout/tree.js";
+import { icon } from "../lib/icons.js";
 
 class MkuiPane extends HTMLElement {
   constructor() {
@@ -256,7 +257,7 @@ class MkuiFrame extends HTMLElement {
     const makeArrow = (dir) => {
       const a = document.createElement("div");
       a.className = "mkui-tab-scroll mkui-tab-scroll-" + (dir < 0 ? "left" : "right");
-      a.textContent = dir < 0 ? "‹" : "›";
+      a.appendChild(icon(dir < 0 ? "chevron-left" : "chevron-right"));
       a.addEventListener("click", (ev) => {
         ev.stopPropagation();
         const amount = Math.max(60, Math.round(tabs.clientWidth * 0.6)) * dir;
@@ -375,7 +376,7 @@ class MkuiFrame extends HTMLElement {
 
     const maxBtn = document.createElement("div");
     maxBtn.className = "mkui-frame-btn mkui-frame-maximize";
-    maxBtn.innerHTML = "&#9723;";
+    maxBtn.appendChild(icon("maximize"));
     maxBtn.title = "Maximize";
     maxBtn.addEventListener("mousedown", (ev) => ev.stopPropagation());
     maxBtn.addEventListener("click", (ev) => {
@@ -387,7 +388,7 @@ class MkuiFrame extends HTMLElement {
     if (!this._hideClose) {
       const closeBtn = document.createElement("div");
       closeBtn.className = "mkui-frame-btn mkui-frame-close";
-      closeBtn.textContent = "\u00d7";
+      closeBtn.appendChild(icon("close"));
       closeBtn.title = "Close";
       closeBtn.addEventListener("mousedown", (ev) => ev.stopPropagation());
       closeBtn.addEventListener("click", (ev) => {

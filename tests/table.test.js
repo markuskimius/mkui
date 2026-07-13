@@ -33,6 +33,7 @@ function mockEl(tag) {
     },
     remove() {},
     replaceWith() {},
+    setAttribute(name, v) { if (name === "class") el.className = String(v); },
     addEventListener(e, fn) { (el._ev[e] ??= []).push(fn); },
     removeEventListener() {},
     querySelector(sel) {
@@ -71,6 +72,7 @@ function mockEl(tag) {
 
 globalThis.document = {
   createElement: (tag) => mockEl(tag),
+  createElementNS: (_ns, tag) => mockEl(tag),
   createTextNode: (text) => ({ textContent: text, nodeType: 3 }),
   createDocumentFragment() {
     const frag = mockEl("fragment");
@@ -422,10 +424,13 @@ test("paged stream creates toolbar with prev/next/live", async () => {
   const toolbar = findByClass(host, "mkui-table-paging");
   assert.ok(toolbar);
   assert.equal(toolbar._ch.length, 5);
-  assert.ok(toolbar._ch[0].textContent.includes("Earlier"));
-  assert.ok(toolbar._ch[2].textContent.includes("Later"));
-  assert.ok(toolbar._ch[3].textContent.includes("Live"));
-  assert.equal(toolbar._ch[4].textContent, "⟳");
+  assert.ok(toolbar._ch[0]._ch.includes("Earlier"));
+  assert.ok(toolbar._ch[0]._ch[0].className.includes("mkui-icon-chevron-left"));
+  assert.ok(toolbar._ch[2]._ch.includes("Later"));
+  assert.ok(toolbar._ch[2]._ch[1].className.includes("mkui-icon-chevron-right"));
+  assert.ok(toolbar._ch[3]._ch.includes("Live"));
+  assert.ok(toolbar._ch[3]._ch[0].className.includes("mkui-icon-dot"));
+  assert.ok(toolbar._ch[4]._ch[0].className.includes("mkui-icon-refresh"));
 });
 
 test("non-paged stream has no toolbar", async () => {
@@ -1934,7 +1939,7 @@ test("refresh button re-fetches current page", async () => {
   lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
   const toolbar = findByClass(host, "mkui-table-paging");
   const refreshBtn = toolbar._ch[4];
-  assert.equal(refreshBtn.textContent, "⟳");
+  assert.ok(refreshBtn._ch[0].className.includes("mkui-icon-refresh"));
   assert.equal(refreshBtn.disabled, false, "enabled in paged mode");
   const subsBefore = fakeClient.calls.filter(c => c.type === "subscribe").length;
   refreshBtn._ev.click[0]();

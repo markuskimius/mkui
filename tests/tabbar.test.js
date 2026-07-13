@@ -26,6 +26,7 @@ function makeEl(tag) {
     scrollWidth: 0,
     clientWidth: 0,
     appendChild(c) { el._ch.push(c); return c; },
+    setAttribute(name, v) { if (name === "class") el.className = String(v); },
     addEventListener(name, fn) { (el._listeners[name] ??= []).push(fn); },
     querySelector() { return null; },
     classList: {
@@ -43,7 +44,10 @@ function makeEl(tag) {
   };
   return el;
 }
-globalThis.document = { createElement: makeEl };
+globalThis.document = {
+  createElement: makeEl,
+  createElementNS: (_ns, tag) => makeEl(tag),
+};
 
 const { MkuiFrame } = await import("../mkui/static/src/components/frame.js");
 
@@ -72,8 +76,8 @@ test("bar is built as ‹ [tabs] › with arrows outside the strip", () => {
   assert.equal(tabs.className, "mkui-tabs");
   assert.match(left.className, /mkui-tab-scroll-left/);
   assert.match(right.className, /mkui-tab-scroll-right/);
-  assert.equal(left.textContent, "‹");
-  assert.equal(right.textContent, "›");
+  assert.ok(left._ch[0].className.includes("mkui-icon-chevron-left"));
+  assert.ok(right._ch[0].className.includes("mkui-icon-chevron-right"));
 });
 
 test("tabs render spec titles and mark the active index", () => {

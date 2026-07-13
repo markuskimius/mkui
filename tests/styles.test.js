@@ -188,3 +188,11 @@ test("header cells lay out as a flex row, filter button un-floated", () => {
   assert.ok(!/float/.test(rule(".mkui-filter-btn")),
     "a floated filter button overlaps nowrap header text when squeezed");
 });
+
+// SVG icons must never intercept pointer events: click/drag handlers
+// hit-test against the hosting button (e.g. closest(".mkui-filter-btn")
+// works, but tab-drag and column-drag target checks assume the button
+// element itself is the event target).
+test("icons are transparent to pointer events", () => {
+  assert.equal(declaration(".mkui-icon", "pointer-events"), "none");
+});

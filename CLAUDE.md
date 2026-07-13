@@ -29,6 +29,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 - `mkui/static/src/components/frame.js` — frame chrome, internal tree rendering, splitter drag; also defines `<mkui-pane>`
 - `mkui/static/src/components/app.js` — shell: menubar + workspace + statusbar
 - `mkui/static/src/core.js` — `App`, `State` (reactive store), widget/pane-type registries
+- `mkui/static/src/lib/icons.js` — SVG icon library: `icon(name)` returns a currentColor `<svg>` built from vendored path data (Lucide outlines + custom filled carets/dot) — no icon font, no external fetch; sized per context via `.mkui-icon` CSS rules
 - `mkui/static/src/widgets/mkio-table.js` — built-in `mkio-table` pane type: subscribes to mkio services, renders live tables
 - `mkui/static/src/widgets/mkui-dialog.js` — `openDialog()`: config-driven modal dialogs with validation, RPC submission, and pin-to-keep-open
 - `mkui/static/src/auth.js` — config-driven login dialog; `showLogin()` authenticates before the app loads
@@ -173,11 +174,12 @@ Layout: fields are listed in `spec.fields`. Items can be `{ group: "Header" }` f
 
 Submission: when `spec.submit.service` is set, the dialog sends form data via `client.send()` with a configurable timeout (default 5s). `submitPerRow` mode sends one request per selected row. Transaction errors are shown inline and the form stays open for retry. Without a service, the dialog resolves immediately with form data.
 
-Pin button: a 📌 toggle in the dialog's titlebar (frame controls area, before maximize/close). When active, the pin rotates 45° counterclockwise and turns accent-colored (CSS transition, 150ms ease). Successful submission resets the form to its default values instead of closing the dialog. The form is only reset after the server confirms success — errors leave the form intact for retry. The pin button is injected via `frameEl._extraControls`, a callback that `_makeControls()` in frame.js calls to prepend custom elements before the standard window controls. Since `_makeControls` runs on every `_renderInternal`, the callback re-creates the button each render; the `pinned` state is held in a closure shared with the submit handler.
+Pin button: an SVG pin-icon toggle (`icon("pin")`) in the dialog's titlebar (frame controls area, before maximize/close). When active, the pin rotates 45° counterclockwise and turns accent-colored (CSS transition, 150ms ease). Successful submission resets the form to its default values instead of closing the dialog. The form is only reset after the server confirms success — errors leave the form intact for retry. The pin button is injected via `frameEl._extraControls`, a callback that `_makeControls()` in frame.js calls to prepend custom elements before the standard window controls. Since `_makeControls` runs on every `_renderInternal`, the callback re-creates the button each render; the `pinned` state is held in a closure shared with the submit handler.
 
 ## Conventions
 
 - Zero runtime dependencies; Web Components for framework-agnostic use
+- Icons are inline SVGs from `lib/icons.js` (`icon(name)`), never text glyphs — they inherit color via `currentColor` and are sized per context by `.mkui-icon` CSS rules. `.mkui-icon` keeps `pointer-events: none` so hit-testing lands on the hosting button (guarded by `tests/styles.test.js`)
 - `registerPaneType(name, factory)` for custom content; `registerWidget(name, factory)` for lightweight inline widgets
 - Built-in actions prefixed `pane.*` (show), `window.*` (tileH, tileV, grid, cascade), and `app.*` (quit)
 - Layout tree invariant: every leaf sits inside a `{ type: "tabs", children: [...] }` — never bare strings after normalize

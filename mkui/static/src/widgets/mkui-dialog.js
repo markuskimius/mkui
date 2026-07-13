@@ -1,4 +1,5 @@
 import { resolveExpr, resolveObject } from "../lib/expressions.js";
+import { icon } from "../lib/icons.js";
 
 let dialogSeq = 0;
 
@@ -129,7 +130,7 @@ export function openDialog(spec, context, app, extra = {}) {
     function makePinBtn() {
       const btn = document.createElement("div");
       btn.className = "mkui-frame-btn mkui-dialog-pin" + (pinned ? " mkui-dialog-pin-active" : "");
-      btn.textContent = "\u{1F4CC}";
+      btn.appendChild(icon("pin"));
       btn.title = pinned ? "Pinned — will stay open after submit" : "Pin to keep open after submit";
       btn.addEventListener("mousedown", (ev) => ev.stopPropagation());
       btn.addEventListener("click", (ev) => {

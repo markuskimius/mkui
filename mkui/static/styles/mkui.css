@@ -86,9 +86,11 @@ mkui-menubar {
 .mkui-menu-item:hover { background: var(--mkui-accent); color: var(--mkui-accent-fg); }
 .mkui-menu-item-arrow {
   margin-left: 16px;
-  font-size: 10px;
+  display: flex;
+  align-items: center;
   color: var(--mkui-fg-mute);
 }
+.mkui-menu-item-arrow .mkui-icon { width: 12px; height: 12px; }
 .mkui-menu-item:hover .mkui-menu-item-arrow { color: var(--mkui-accent-fg); }
 .mkui-menu-sep { height: 1px; background: var(--mkui-border); margin: 4px 0; }
 
@@ -164,12 +166,21 @@ mkui-frame[data-focused] {
   cursor: pointer;
   color: var(--mkui-fg-mute);
   border-radius: 3px;
-  font-size: 14px;
-  line-height: 1;
 }
 .mkui-frame-btn:hover { background: var(--mkui-bg-hover); color: var(--mkui-fg); }
 .mkui-frame-close:hover { background: #c0392b; color: #fff; }
-.mkui-frame-maximize { font-size: 11px; }
+.mkui-frame-maximize .mkui-icon { width: 11px; height: 11px; }
+
+/* SVG icons (src/lib/icons.js). Ink is drawn nearly edge-to-edge in the
+   24-box, so a 16px icon shows ~16px of glyph — the text glyphs these
+   replaced showed roughly half their font-size as ink. pointer-events
+   off so hit-testing always lands on the hosting button. */
+.mkui-icon {
+  width: 16px; height: 16px;
+  display: block;
+  flex: 0 0 auto;
+  pointer-events: none;
+}
 
 /* Animated frame transitions for arrangement commands */
 mkui-frame.mkui-arranging {
@@ -263,12 +274,12 @@ mkui-pane {
   display: none;
   align-items: center;
   flex: 0 0 auto;
-  padding: 0 4px;
+  padding: 0 2px;
   color: var(--mkui-fg-mute);
-  font-size: 14px;
   cursor: pointer;
   user-select: none;
 }
+.mkui-tab-scroll .mkui-icon { width: 15px; height: 15px; }
 .mkui-tabbar-overflow > .mkui-tab-scroll { display: flex; }
 .mkui-tab-scroll:hover { color: var(--mkui-fg); background: var(--mkui-bg-hover); }
 .mkui-tab-scroll.mkui-disabled {
@@ -430,7 +441,10 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 }
 .mkui-table th, .mkui-table td {
   text-align: left;
-  padding: 4px 8px;
+  /* Bottom padding = top padding minus the font descent (~3px @12px),
+     so the glyph mass above the baseline is what's vertically centered,
+     not the full em box (whose descender space is mostly empty). */
+  padding: 4px 8px 1px;
   border-bottom: 1px solid var(--mkui-border);
   white-space: nowrap;
 }
@@ -449,15 +463,21 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   align-items: center;
   gap: 1px;
 }
-.mkui-sort-indicator { font-size: 10px; }
+.mkui-sort-indicator {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px; /* multi-sort priority superscript next to the caret */
+}
+.mkui-sort-indicator .mkui-icon { width: 10px; height: 10px; }
 .mkui-filter-btn {
+  display: inline-flex;
+  align-items: center;
   color: var(--mkui-fg-mute);
-  font-size: 10px;
-  padding: 0 3px;
+  padding: 2px 3px;
   border-radius: 2px;
   cursor: pointer;
-  line-height: inherit;
 }
+.mkui-filter-btn .mkui-icon { width: 10px; height: 10px; }
 .mkui-filter-btn:hover { color: var(--mkui-fg); background: var(--mkui-bg-hover); }
 .mkui-filter-btn.active { color: var(--mkui-accent); }
 
@@ -603,6 +623,13 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   min-width: 140px;
   text-align: center;
 }
+.mkui-paging-btn, .mkui-paging-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.mkui-paging-btn .mkui-icon { width: 13px; height: 13px; }
+.mkui-paging-live .mkui-icon { width: 10px; height: 10px; }
 .mkui-paging-btn:disabled,
 .mkui-paging-live:disabled {
   opacity: 0.4;
@@ -613,15 +640,13 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 }
 .mkui-paging-live + .mkui-paging-btn {
   margin-left: 4px;
-  font-size: 20px;
   padding: 0;
   width: 24px;
   height: 24px;
-  display: inline-flex;
-  align-items: center;
   justify-content: center;
   box-sizing: border-box;
 }
+.mkui-paging-live + .mkui-paging-btn .mkui-icon { width: 15px; height: 15px; }
 .mkui-paging-live.active {
   color: #4f4;
   animation: mkui-live-blink 1.5s ease-in-out infinite;
@@ -775,7 +800,8 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   filter: brightness(1.15);
 }
 
-.mkui-dialog-pin { opacity: 0.4; font-size: 11px; transition: transform 0.15s ease, opacity 0.15s ease; }
+.mkui-dialog-pin { opacity: 0.4; transition: transform 0.15s ease, opacity 0.15s ease; }
+.mkui-dialog-pin .mkui-icon { width: 13px; height: 13px; }
 .mkui-dialog-pin:hover { opacity: 0.7; }
 .mkui-dialog-pin-active { opacity: 1; color: var(--mkui-accent); transform: rotate(-45deg); }
 .mkui-dialog-pin-active:hover { color: var(--mkui-accent); }

@@ -18,6 +18,8 @@
 // currently-open pane — popups are rebuilt on every open, so the list
 // always reflects the live workspace.
 
+import { icon } from "../lib/icons.js";
+
 class MkuiMenubar extends HTMLElement {
   constructor() {
     super();
@@ -117,7 +119,7 @@ class MkuiMenubar extends HTMLElement {
       if (hasSubmenu) {
         const arrow = document.createElement("span");
         arrow.className = "mkui-menu-item-arrow";
-        arrow.textContent = "\u25B8"; // ▸
+        arrow.appendChild(icon("chevron-right"));
         it.appendChild(arrow);
       }
       it.addEventListener("mouseenter", () => {
