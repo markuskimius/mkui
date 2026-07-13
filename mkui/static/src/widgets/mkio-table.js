@@ -406,7 +406,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const sortInd = document.createElement("span");
       sortInd.className = "mkui-sort-indicator";
 
-      th.append(filterBtn, document.createTextNode(label(c)), sortInd);
+      const inner = document.createElement("div");
+      inner.className = "mkui-th-inner";
+      inner.append(document.createTextNode(label(c)), sortInd, filterBtn);
+      th.appendChild(inner);
 
       th.addEventListener("click", (e) => {
         if (suppressClick) { suppressClick = false; return; }

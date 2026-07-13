@@ -125,3 +125,66 @@ test("nodock (dialog) tab bars opt out of the tab silhouette", () => {
   assert.match(body, /display:\s*none/);
   assert.equal(declaration(".mkui-tabbar-nodock .mkui-tab", "margin"), "0");
 });
+
+// ── Tab overflow (shrink → arrows) ────────────────────────────────────────
+// Tabs shrink to fit their bar before anything overflows; past the 3em
+// label minimum the strip clips with no scrollbar and the ‹ › scroll
+// arrows are the only way to reach off-screen tabs.
+
+test("tabs shrink to fit, floored at 3em of label", () => {
+  assert.equal(declaration(".mkui-tab", "flex-shrink"), "1");
+  assert.equal(declaration(".mkui-tab", "min-width"), "3em");
+  // Content-box: box-sizing would make the 3em include the 28px padding,
+  // leaving ~8px of label.
+  assert.ok(!/box-sizing/.test(rule(".mkui-tab")),
+    "tab min-width must apply to the label area (content-box)");
+});
+
+test("tab strip clips overflow with no scrollbar", () => {
+  assert.equal(declaration(".mkui-tabs", "overflow-x"), "hidden");
+  assert.ok(!/\.mkui-tabs[^{]*scrollbar/.test(css),
+    "the strip must not style a scrollbar it no longer shows");
+});
+
+test("strip always keeps one min-width tab visible", () => {
+  // 3em label @12px (36) + 28px tab padding + 12px strip padding.
+  assert.equal(declaration(".mkui-tabs", "min-width"), "76px");
+});
+
+test("scroll arrows appear only while the bar overflows", () => {
+  assert.equal(declaration(".mkui-tab-scroll", "display"), "none");
+  assert.equal(
+    declaration(".mkui-tabbar-overflow > .mkui-tab-scroll", "display"), "flex");
+});
+
+test("arrows never shrink and ignore clicks when at their end", () => {
+  assert.equal(declaration(".mkui-tab-scroll", "flex"), "0 0 auto");
+  const body = rule(".mkui-tab-scroll.mkui-disabled");
+  assert.match(body, /pointer-events:\s*none/);
+});
+
+test("overflowing bar trades drag whitespace for tab room", () => {
+  assert.equal(declaration(".mkui-frame-drag", "min-width"), "40px");
+  assert.equal(
+    declaration(".mkui-tabbar-overflow > .mkui-frame-drag", "min-width"), "12px");
+});
+
+// ── No-wrap chrome ────────────────────────────────────────────────────────
+// Buttons and table cells keep their content on one line; header cells
+// use a flex row (not a float) so the filter button can't overlap the
+// label when columns are squeezed.
+
+test("buttons never wrap their labels", () => {
+  assert.equal(declaration(".mkui-btn", "white-space"), "nowrap");
+});
+
+test("table cells never wrap", () => {
+  assert.equal(
+    declaration(".mkui-table th, .mkui-table td", "white-space"), "nowrap");
+});
+
+test("header cells lay out as a flex row, filter button un-floated", () => {
+  assert.equal(declaration(".mkui-th-inner", "display"), "flex");
+  assert.ok(!/float/.test(rule(".mkui-filter-btn")),
+    "a floated filter button overlaps nowrap header text when squeezed");
+});

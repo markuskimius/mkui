@@ -57,7 +57,7 @@ entirely inside frames.
 
 - **Top tab row** → drag the whitespace next to the tabs to move the
   frame (clamped). **Double-click** the same region to toggle maximize.
-  **Frame edges/corners** → 8-way resize (clamped, min 160×80).
+  **Frame edges/corners** → 8-way resize (clamped, min 180×80).
 - **Dragging a tiled or maximized frame** restores it to its pre-tile
   size under the cursor on first motion. Resize handles or explicit
   maximize-toggle also clear the restore state.
@@ -69,6 +69,12 @@ entirely inside frames.
 - **Tab drag within the bar** → reorders the tab in its group. If the
   cursor leaves the tab bar by more than a few pixels, the pane is
   **torn out** into a new frame at the cursor.
+- **Tab overflow** → tabs shrink to fit the bar, down to 3em of label
+  each. If they still don't fit, the strip clips with no scrollbar and
+  ‹ › scroll arrows appear on either side of it; arrows dim at their
+  end of the strip. The bar always keeps at least one tab plus the
+  arrows visible, and the active tab is scrolled back into view
+  whenever the bar re-renders.
 - **Alt+Shift+Left / Alt+Shift+Right** → move the active tab left or
   right within its group (acts on the top-most frame).
 - **Dragging a torn-out (or any single-pane) frame over another frame**

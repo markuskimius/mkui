@@ -146,6 +146,10 @@ mkui-frame[data-focused] {
   min-width: 40px;
   cursor: move;
 }
+/* When the strip overflows, its one-tab minimum plus the arrows take
+   priority over drag whitespace — keep just a small grab area so the
+   window controls still fit at the frame's minimum width. */
+.mkui-tabbar-overflow > .mkui-frame-drag { min-width: 12px; }
 
 .mkui-frame-actions {
   display: flex;
@@ -235,21 +239,42 @@ mkui-pane {
    right-most bar, the window controls. The tabs container must be free
    to shrink so the drag/controls stay visible when there are many tabs. */
 
-/* Scrollable tabs container. In the top bar it shares the row with a
-   drag region + window controls; elsewhere it fills the whole bar. */
+/* Tabs container. In the top bar it shares the row with a drag region +
+   window controls; elsewhere it fills the whole bar. Tabs shrink to fit
+   (down to 3em of label each); past that the strip overflows with no
+   scrollbar and the flanking scroll arrows appear. */
 .mkui-tabs {
   display: flex;
   align-items: stretch;
-  overflow-x: auto;
+  overflow-x: hidden;
   overflow-y: hidden;
   flex: 1 1 auto;
-  min-width: 0;
+  /* Never squeezed below one min-width tab: 3em label (@12px = 36px)
+     + 28px tab padding + 12px strip padding. The flanking scroll arrows
+     are flex 0 0 auto siblings, so they stay visible on top of this. */
+  min-width: 76px;
   padding: 0 6px; /* room for the first/last tab's bottom flare */
-  scrollbar-width: thin;
 }
 .mkui-tabbar-top > .mkui-tabs { flex: 0 1 auto; }
-.mkui-tabs::-webkit-scrollbar { height: 4px; }
-.mkui-tabs::-webkit-scrollbar-thumb { background: var(--mkui-border); }
+
+/* Scroll arrows on either side of the strip; shown only while the tabs
+   overflow (class toggled by updateArrows in frame.js). */
+.mkui-tab-scroll {
+  display: none;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 0 4px;
+  color: var(--mkui-fg-mute);
+  font-size: 14px;
+  cursor: pointer;
+  user-select: none;
+}
+.mkui-tabbar-overflow > .mkui-tab-scroll { display: flex; }
+.mkui-tab-scroll:hover { color: var(--mkui-fg); background: var(--mkui-bg-hover); }
+.mkui-tab-scroll.mkui-disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
 
 /* Registered so the flare gradients animate along with the tab body. */
 @property --mkui-tab-bg {
@@ -270,7 +295,8 @@ mkui-pane {
   color: var(--mkui-fg-mute);
   font-size: 12px;
   max-width: 220px;
-  flex-shrink: 0;
+  min-width: 3em; /* content-box: at least 3em of label stays visible */
+  flex-shrink: 1;
   touch-action: none;
   transition: --mkui-tab-bg 80ms ease, color 80ms ease;
 }
@@ -384,6 +410,7 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-btn {
   display: inline-block;
   padding: 4px 12px;
+  white-space: nowrap;
   background: var(--mkui-bg-alt);
   border: 1px solid var(--mkui-border);
   color: var(--mkui-fg);
@@ -405,6 +432,7 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   text-align: left;
   padding: 4px 8px;
   border-bottom: 1px solid var(--mkui-border);
+  white-space: nowrap;
 }
 .mkui-table th {
   background: var(--mkui-bg-alt);
@@ -416,13 +444,16 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   touch-action: none;
   z-index: 1;
 }
+.mkui-th-inner {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
 .mkui-sort-indicator { font-size: 10px; }
 .mkui-filter-btn {
-  float: right;
   color: var(--mkui-fg-mute);
   font-size: 10px;
   padding: 0 3px;
-  margin-left: 4px;
   border-radius: 2px;
   cursor: pointer;
   line-height: inherit;

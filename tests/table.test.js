@@ -232,7 +232,8 @@ function getHeaderTexts(host) {
   if (!thead || !thead._ch.length) return [];
   const tr = thead._ch[0];
   return tr._ch.map(th => {
-    const textNodes = th._ch.filter(n => n.nodeType === 3);
+    const inner = th._ch.find(n => n.className === "mkui-th-inner") ?? th;
+    const textNodes = inner._ch.filter(n => n.nodeType === 3);
     return textNodes.map(n => n.textContent).join("");
   });
 }

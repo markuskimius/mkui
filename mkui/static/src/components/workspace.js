@@ -573,7 +573,9 @@ class MkuiWorkspace extends HTMLElement {
     const sx = ev.clientX, sy = ev.clientY;
     const hasN = dir.includes("n"), hasS = dir.includes("s");
     const hasE = dir.includes("e"), hasW = dir.includes("w");
-    const minW = 160, minH = 80;
+    // 180 keeps the top bar's minimum row intact: scroll arrows + one
+    // min-width tab + reduced drag grab area + window controls.
+    const minW = 180, minH = 80;
     const { vLines, hLines } = this._getSnapLines(spec.id);
     const move = (e) => {
       let x = start.x, y = start.y, w = start.w, h = start.h;

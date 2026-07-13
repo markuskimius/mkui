@@ -249,7 +249,54 @@ class MkuiFrame extends HTMLElement {
       }
       tabs.appendChild(tab);
     }
+
+    // Scroll arrows flanking the strip; visible only when the tabs
+    // (squeezed to their min width) still overflow. The strip has no
+    // scrollbar, so the arrows are how you reach off-screen tabs.
+    const makeArrow = (dir) => {
+      const a = document.createElement("div");
+      a.className = "mkui-tab-scroll mkui-tab-scroll-" + (dir < 0 ? "left" : "right");
+      a.textContent = dir < 0 ? "‹" : "›";
+      a.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const amount = Math.max(60, Math.round(tabs.clientWidth * 0.6)) * dir;
+        if (tabs.scrollBy) tabs.scrollBy({ left: amount, behavior: "smooth" });
+        else tabs.scrollLeft += amount;
+      });
+      return a;
+    };
+    const leftArrow = makeArrow(-1);
+    const rightArrow = makeArrow(1);
+    bar.appendChild(leftArrow);
     bar.appendChild(tabs);
+    bar.appendChild(rightArrow);
+
+    const updateArrows = () => {
+      const overflow = tabs.scrollWidth > tabs.clientWidth + 1;
+      bar.classList.toggle("mkui-tabbar-overflow", overflow);
+      if (!overflow) return;
+      leftArrow.classList.toggle("mkui-disabled", tabs.scrollLeft <= 0);
+      rightArrow.classList.toggle("mkui-disabled",
+        tabs.scrollLeft + tabs.clientWidth >= tabs.scrollWidth - 1);
+    };
+    tabs.addEventListener("scroll", updateArrows);
+
+    // Rebuilding the bar resets its scroll to 0, so bring the active tab
+    // back into view once the bar has been laid out, then reveal the
+    // arrows if the strip overflows.
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => {
+        const active = tabs.querySelector(".mkui-tab.active");
+        if (active && tabs.scrollWidth > tabs.clientWidth) {
+          const left = active.offsetLeft - tabs.offsetLeft;
+          const right = left + active.offsetWidth;
+          if (left < tabs.scrollLeft) tabs.scrollLeft = left;
+          else if (right > tabs.scrollLeft + tabs.clientWidth)
+            tabs.scrollLeft = right - tabs.clientWidth;
+        }
+        updateArrows();
+      });
+    }
 
     if (withDrag || withControls) bar.appendChild(this._makeDragRegion());
     if (withControls) bar.appendChild(this._makeControls());
