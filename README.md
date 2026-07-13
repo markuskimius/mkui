@@ -63,7 +63,9 @@ entirely inside frames.
   maximize-toggle also clear the restore state.
 - **Frame close button** → closes the frame; panes inside are parked in
   the pool (state preserved) and can be brought back by code.
-- **Tab click** → switch active pane in that tab group.
+- **Tab click** → switch active pane in that tab group. Clicking a tab
+  or pane content also makes that group the keyboard-focus target;
+  clicking the bar's empty area only raises the frame.
 - **Tab drag within the bar** → reorders the tab in its group. If the
   cursor leaves the tab bar by more than a few pixels, the pane is
   **torn out** into a new frame at the cursor.
@@ -74,8 +76,9 @@ entirely inside frames.
 - **Splitter drag** → resize the ratio between two children of a split.
 - **Any mousedown inside a frame** raises it to the top of the z-order.
   The top frame gets an accent border; within it, the last-clicked tab
-  group's active-tab underline stays at full accent while others dim —
-  that's the bar keyboard hotkeys act on.
+  group's selected tab is raised in the selected-tab color, while
+  selected tabs of other groups (and of unfocused frames) flatten to the
+  idle tab color — the raised tab marks the bar keyboard hotkeys act on.
 
 ## Configs
 
@@ -303,6 +306,7 @@ applied as inline styles on `<mkui-app>` so every descendant inherits them:
         "--mkui-fg":        "#93a1a1",
         "--mkui-fg-mute":   "#586e75",
         "--mkui-border":    "#0a4350",
+        "--mkui-tab-active": "#0e4d5e",
         "--mkui-accent":    "#268bd2",
         "--mkui-accent-fg": "#fdf6e3",
         "--mkui-focus":     "#eee8d5"

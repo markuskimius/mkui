@@ -354,12 +354,20 @@ class MkuiFrame extends HTMLElement {
   }
 
   // Walk up from the event target until we hit a tab bar (tagged with
-  // _tabGroup) or a pane (whose id lets us look up its tab group). Splitters,
-  // resize handles, and frame chrome not inside a pane leave it unchanged.
+  // _tabGroup) or a pane (whose id lets us look up its tab group). A bar
+  // hit only counts if the click landed on an actual tab — the bar's empty
+  // area (right of the tabs, the drag region) raises the frame without
+  // stealing keyboard focus for its group. Splitters, resize handles, and
+  // frame chrome not inside a pane leave it unchanged.
   _activateTabGroupFromEvent(ev) {
     let node = ev.target;
+    let onTab = false;
     while (node && node !== this && node !== this._bodyEl) {
-      if (node._tabGroup) return this._setActiveTabGroup(node._tabGroup);
+      if (node.classList?.contains("mkui-tab")) onTab = true;
+      if (node._tabGroup) {
+        if (onTab) this._setActiveTabGroup(node._tabGroup);
+        return;
+      }
       if (node.tagName === "MKUI-PANE" && this._tree) {
         const id = node.getAttribute("data-id");
         const hit = findPane(this._tree, id);

@@ -5,6 +5,7 @@
   --mkui-fg:        #d4d4d4;
   --mkui-fg-mute:   #858585;
   --mkui-border:    #3c3c3c;
+  --mkui-tab-active: #2d2d2e;
   --mkui-accent:    #0e639c;
   --mkui-accent-fg: #ffffff;
   --mkui-focus:     #ffffff;
@@ -24,6 +25,7 @@ mkui-app[theme="light"] {
   --mkui-fg:        #1f1f1f;
   --mkui-fg-mute:   #6b6b6b;
   --mkui-border:    #d0d0d0;
+  --mkui-tab-active: #e9e9e9;
   --mkui-accent:    #0066b8;
   --mkui-accent-fg: #ffffff;
   --mkui-focus:     #000000;
@@ -216,9 +218,18 @@ mkui-pane {
   display: flex;
   align-items: stretch;
   background: var(--mkui-bg-alt);
-  border-bottom: 1px solid var(--mkui-border);
   box-sizing: border-box;
   overflow: hidden;
+}
+/* Bottom edge drawn as an overlay (not a border) so the active tab can
+   stack above it and merge seamlessly with the pane content below. */
+.mkui-tabbar::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 1px;
+  background: var(--mkui-border);
+  pointer-events: none;
 }
 /* Top tab bars (at y=0) share their row with a drag region and, for the
    right-most bar, the window controls. The tabs container must be free
@@ -233,25 +244,68 @@ mkui-pane {
   overflow-y: hidden;
   flex: 1 1 auto;
   min-width: 0;
+  padding: 0 6px; /* room for the first/last tab's bottom flare */
   scrollbar-width: thin;
 }
 .mkui-tabbar-top > .mkui-tabs { flex: 0 1 auto; }
 .mkui-tabs::-webkit-scrollbar { height: 4px; }
 .mkui-tabs::-webkit-scrollbar-thumb { background: var(--mkui-border); }
 
+/* Registered so the flare gradients animate along with the tab body. */
+@property --mkui-tab-bg {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
 .mkui-tab {
+  position: relative;
   display: flex;
   align-items: center;
   padding: 0 14px;
-  border-right: 1px solid var(--mkui-border);
+  margin-top: 4px;
+  --mkui-tab-bg: var(--mkui-bg);
+  background: var(--mkui-tab-bg);
+  border-radius: 6px 6px 0 0;
   cursor: default;
   color: var(--mkui-fg-mute);
   font-size: 12px;
   max-width: 220px;
   flex-shrink: 0;
   touch-action: none;
-  transition: background 80ms ease, color 80ms ease;
+  transition: --mkui-tab-bg 80ms ease, color 80ms ease;
 }
+/* Bottom corners curve outward: a quarter-circle notch is cut from a
+   tab-colored square on each side of the tab's base (color matches the
+   body via --mkui-tab-bg). Tabs sit flush, so the flares overlap the
+   neighbors — invisible between same-colored idle tabs, visible at the
+   strip's ends and around the active/hovered tab. */
+.mkui-tab::after {
+  content: "";
+  position: absolute;
+  left: -6px;
+  right: -6px;
+  bottom: 0;
+  height: 6px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at top left, transparent 5.5px, var(--mkui-tab-bg) 6px) left bottom / 6px 6px no-repeat,
+    radial-gradient(circle at top right, transparent 5.5px, var(--mkui-tab-bg) 6px) right bottom / 6px 6px no-repeat;
+}
+/* Thin divider between flush idle tabs; dropped around the active and
+   hovered tab so their silhouettes (and flares) stay clean. */
+.mkui-tab + .mkui-tab::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 1px;
+  background: var(--mkui-border);
+}
+.mkui-tab.active::before,
+.mkui-tab.active + .mkui-tab::before,
+.mkui-tab:hover::before,
+.mkui-tab:hover + .mkui-tab::before { display: none; }
 .mkui-tab.dragging { opacity: 0.4; }
 .mkui-tab-label {
   overflow: hidden;
@@ -272,30 +326,38 @@ mkui-pane {
   box-sizing: border-box;
   outline: none;
 }
-.mkui-tab:hover { background: var(--mkui-bg-hover); color: var(--mkui-fg); }
-.mkui-tab.active {
-  background: var(--mkui-bg);
+.mkui-tab:hover {
+  --mkui-tab-bg: color-mix(in srgb, var(--mkui-bg) 50%, var(--mkui-tab-active));
   color: var(--mkui-fg);
-  box-shadow: inset 0 -2px 0 0 var(--mkui-focus);
 }
-/* Dim the active-tab underline outside the keyboard-focused tab group, so
-   the "loud" bar stands out as the one that'll receive hotkeys. */
+/* z-index lifts the active tab (and its flares) above the bar's bottom
+   line, so the selected tab has no line under it. */
+.mkui-tab.active {
+  --mkui-tab-bg: var(--mkui-tab-active);
+  color: var(--mkui-fg);
+  z-index: 1;
+}
+/* Outside the keyboard-focused tab group — unfocused frame, or unfocused
+   group within the focused frame — the selected tab flattens to the idle
+   tab color with a muted label; only the missing line under it still marks
+   it as selected. The "loud" bar is the one that'll receive hotkeys. */
 mkui-frame:not([data-focused]) .mkui-tab.active,
 mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active {
-  box-shadow: inset 0 -2px 0 0 var(--mkui-fg-mute);
+  --mkui-tab-bg: var(--mkui-bg);
   color: var(--mkui-fg-mute);
 }
 
 .mkui-tabbar-nodock .mkui-tab {
-  background: transparent;
-  border-right: none;
-  box-shadow: none;
+  --mkui-tab-bg: transparent;
+  margin: 0;
+  border-radius: 0;
   color: var(--mkui-fg);
   font-weight: 600;
   pointer-events: none;
 }
-.mkui-tabbar-nodock .mkui-tab:hover { background: transparent; }
-.mkui-tabbar-nodock .mkui-tab.active { box-shadow: none; }
+.mkui-tabbar-nodock .mkui-tab::before,
+.mkui-tabbar-nodock .mkui-tab::after { display: none; }
+.mkui-tabbar-nodock .mkui-tab:hover { --mkui-tab-bg: transparent; }
 
 .mkui-splitter {
   position: absolute;
