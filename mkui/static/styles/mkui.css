@@ -446,7 +446,18 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
      not the full em box (whose descender space is mostly empty). */
   padding: 4px 8px 1px;
   border-bottom: 1px solid var(--mkui-border);
+  /* Subtle column dividers — a half-strength border color so they read
+     as texture, not grid lines. */
+  border-right: 1px solid color-mix(in srgb, var(--mkui-border) 50%, transparent);
   white-space: nowrap;
+}
+/* Numeric cells: right-aligned, padded so decimal points line up down the
+   column. --mkui-num-pad = (column's widest fraction - this cell's) in ch,
+   set per cell by mkio-table; exact because the table font is monospace.
+   The 8px matches the base cell padding above. */
+.mkui-table td.mkui-num {
+  text-align: right;
+  padding-right: calc(8px + var(--mkui-num-pad, 0ch));
 }
 .mkui-table th {
   background: var(--mkui-bg-alt);
@@ -462,6 +473,57 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   display: flex;
   align-items: center;
   gap: 1px;
+}
+/* Fixed column widths, applied once the initial snapshot is measured (or
+   after a manual resize). Widths live on <colgroup> cols and the table
+   keeps the base width:100%: under fixed layout the used width is
+   max(pane, sum of col widths), so data columns always keep their exact
+   widths — a wider pane only grows the auto-width filler column
+   (.mkui-th-filler), which extends the header row to the right edge.
+   Overflowing cell text is clipped with an ellipsis. */
+.mkui-table-fixed {
+  table-layout: fixed;
+}
+.mkui-th-filler {
+  cursor: default;
+  border-right: none;
+}
+/* Virtual-scroll spacer rows: pure height, no cell chrome. */
+.mkui-table .mkui-vspacer td {
+  padding: 0;
+  border: 0;
+}
+/* Clip on td and on the header's inner wrapper — NOT on th itself: the
+   resize grips overhang the th box to straddle the column divider, and an
+   overflow-hidden th would clip them off. */
+.mkui-table-fixed td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mkui-table-fixed .mkui-th-inner {
+  overflow: hidden;
+}
+/* overflow:hidden lets the label shrink below its content (flex min-size
+   rule) so the sort/filter buttons stay visible in a narrow column. */
+.mkui-th-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Column resize grip, centered on the divider it resizes: it lives on the
+   left edge of the FOLLOWING header cell (th is sticky, so it anchors the
+   absolute positioning) and overhangs 3.5px each side of the boundary. */
+.mkui-col-resizer {
+  position: absolute;
+  top: 0; bottom: 0;
+  left: -3.5px;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 1;
+}
+.mkui-col-resizer:hover {
+  /* 2px accent line centered on the divider */
+  background: linear-gradient(to right,
+    transparent 2.5px, var(--mkui-accent) 2.5px 4.5px, transparent 4.5px);
 }
 .mkui-sort-indicator {
   display: inline-flex;
@@ -516,6 +578,13 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   color: var(--mkui-accent);
   cursor: pointer;
   font-size: 11px;
+}
+/* Numeric columns: dropdown values in the table's mono font, left-padded
+   (--mkui-num-pad = max integer width minus this value's, in ch) so the
+   decimal points line up like they do in the cells. */
+.mkui-filter-item .mkui-filter-num {
+  font-family: var(--mkui-font-mono);
+  padding-left: var(--mkui-num-pad, 0ch);
 }
 .mkui-filter-action:hover { text-decoration: underline; }
 .mkui-filter-list {

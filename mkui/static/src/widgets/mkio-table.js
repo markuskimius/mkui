@@ -94,9 +94,27 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   const table = document.createElement("table");
   table.className = "mkui-table";
+  const colgroup = document.createElement("colgroup");
   const thead = document.createElement("thead");
   const tbody = document.createElement("tbody");
-  table.append(thead, tbody);
+  table.append(colgroup, thead, tbody);
+
+  // Spacer rows above/below the rendered slice fake the full scroll height
+  // so only visible rows need DOM elements (see "Virtualized rows" below).
+  // The spacer colspan must equal the real column count (kept in sync by
+  // renderHead): a larger colspan would add that many phantom columns to
+  // the fixed layout, and they — not the filler column — would swallow the
+  // pane-width leftover, ~0px each.
+  const makeSpacer = () => {
+    const tr = document.createElement("tr");
+    tr.className = "mkui-vspacer";
+    const td = document.createElement("td");
+    tr.appendChild(td);
+    return [tr, td];
+  };
+  const [topSpacer, topSpacerTd] = makeSpacer();
+  const [botSpacer, botSpacerTd] = makeSpacer();
+  tbody.append(topSpacer, botSpacer);
 
   /* ── DOM structure ───────────────────────────────────────────────── */
 
@@ -183,14 +201,200 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     host.insertBefore(toolbar, host.firstChild);
   }
 
-  const rows = new Map();
-  const rowEls = new Map();
+  const rows = new Map();          // key -> row, all data
+  const rowEls = new Map();        // key -> tr, rendered slice only
+  let baseOrder = [];              // keys in display (insertion) order
+  let view = [];                   // keys filtered + sorted, drives rendering
+  let viewDirty = false;           // view needs a full rebuild from baseOrder
+  let viewRev = 0;                 // bumped on any change that affects the view
   let columns = spec.columns ?? null;
   let displayOrder = null;
+  const colWidths = new Map();
+  let widthsInited = false;
+  const MIN_COL_W = 40;
   const labels = spec.labels ?? {};
   const label = (col) => labels[col] ?? col;
   const visibleColumns = () =>
     displayOrder || columns.filter((c) => !c.startsWith("_mkio_"));
+
+  /* ── Numeric column alignment ─────────────────────────────────────── */
+
+  // Columns whose every non-empty value is numeric are right-aligned with
+  // per-cell right padding so decimal points line up down the column. The
+  // pad is (column's widest fraction - this cell's fraction) in ch, which
+  // is exact in the table's monospace font. maxFrac is a one-way ratchet
+  // (deletes don't shrink it), reset when the data is cleared.
+  const colStats = new Map(); // col -> { numeric, maxFrac }
+
+  // Length of the "." + fraction-digits suffix, 0 for integers.
+  const fracLen = (s) => {
+    const i = s.indexOf(".");
+    return i < 0 ? 0 : s.length - i;
+  };
+
+  function styleCell(td, col) {
+    const st = colStats.get(col);
+    const s = td.textContent;
+    if (st && st.numeric && s !== "") {
+      td.classList.add("mkui-num");
+      const pad = st.maxFrac - fracLen(s);
+      if (pad > 0) td.style.setProperty("--mkui-num-pad", pad + "ch");
+      else td.style.removeProperty("--mkui-num-pad");
+    } else {
+      td.classList.remove("mkui-num");
+      td.style.removeProperty("--mkui-num-pad");
+    }
+  }
+
+  function restyleColumn(col) {
+    for (const tr of rowEls.values()) {
+      const td = tr.querySelector(`td[data-col="${CSS.escape(col)}"]`);
+      if (td) styleCell(td, col);
+    }
+  }
+
+  function bumpStats(row) {
+    for (const k in row) {
+      if (k.startsWith("_mkio_")) continue;
+      const v = row[k];
+      if (v == null || v === "") continue;
+      let st = colStats.get(k);
+      if (!st) { st = { numeric: true, maxFrac: 0 }; colStats.set(k, st); }
+      if (!st.numeric) continue;
+      const s = String(v);
+      let changed = false;
+      if (isNaN(Number(s))) {
+        st.numeric = false;
+        changed = true;
+      } else {
+        const f = fracLen(s);
+        if (f > st.maxFrac) { st.maxFrac = f; changed = true; }
+      }
+      if (changed) restyleColumn(k);
+    }
+  }
+
+  /* ── Virtualized rows ─────────────────────────────────────────────── */
+
+  // Only the rows overlapping the viewport (plus OVERSCAN each side) exist
+  // in the DOM; the spacer rows carry the height of everything else. Data
+  // lives in `rows`/`baseOrder`, display order in `view` (keys). This keeps
+  // scrolling, pane resizing, and frame moves O(visible), independent of
+  // row count.
+  const OVERSCAN = 10;
+  let rowH = 21;
+  let rowHMeasured = false;
+  let renderedStart = -1, renderedEnd = -1, renderedRev = -1;
+
+  function markViewDirty() { viewDirty = true; viewRev++; }
+
+  function rebuildView() {
+    view = [];
+    for (const key of baseOrder) {
+      const r = rows.get(key);
+      if (r && matchesFilters(r)) view.push(key);
+    }
+    if (sortKeys.length) view.sort((a, b) => compareRows(rows.get(a), rows.get(b)));
+    viewDirty = false;
+  }
+
+  // Binary-search insert position for `row` in the sorted view.
+  function viewInsertPos(row) {
+    if (!sortKeys.length) return view.length;
+    let lo = 0, hi = view.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (compareRows(rows.get(view[mid]), row) <= 0) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  function viewIndexOf(row) {
+    const key = row[idKey];
+    if (!sortKeys.length) return view.indexOf(key);
+    // binary search to the start of the equal-compare range, then scan it
+    let lo = 0, hi = view.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (compareRows(rows.get(view[mid]), row) < 0) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo; i < view.length && compareRows(rows.get(view[i]), row) === 0; i++)
+      if (view[i] === key) return i;
+    return view.indexOf(key); // row no longer matches its view slot — linear fallback
+  }
+
+  // Data-level insert; the DOM row appears via render().
+  function insertRow(row) {
+    bumpStats(row);
+    const key = row[idKey];
+    rows.set(key, row);
+    baseOrder.push(key);
+    if (matchesFilters(row)) {
+      if (sortKeys.length) view.splice(viewInsertPos(row), 0, key);
+      else view.push(key);
+    }
+    viewRev++;
+  }
+
+  function clearData() {
+    rows.clear();
+    rowEls.clear();
+    colStats.clear();
+    baseOrder = [];
+    view = [];
+    viewDirty = false;
+    viewRev++;
+    renderedStart = renderedEnd = renderedRev = -1;
+    tbody.innerHTML = "";
+    topSpacerTd.style.height = "0px";
+    botSpacerTd.style.height = "0px";
+    tbody.append(topSpacer, botSpacer);
+  }
+
+  function render() {
+    if (viewDirty) rebuildView();
+    const total = view.length;
+    const vh = scrollHost.clientHeight || 400;
+    const st = scrollHost.scrollTop || 0;
+    const start = Math.max(0, Math.floor(st / rowH) - OVERSCAN);
+    const end = Math.min(total, Math.ceil((st + vh) / rowH) + OVERSCAN);
+    if (start === renderedStart && end === renderedEnd && viewRev === renderedRev) return;
+    renderedStart = start; renderedEnd = end; renderedRev = viewRev;
+
+    topSpacerTd.style.height = (start * rowH) + "px";
+    botSpacerTd.style.height = ((total - end) * rowH) + "px";
+
+    // Walk the slice in order, moving/creating only rows that are out of
+    // place — untouched rows keep their running CSS flash animations.
+    let cursor = topSpacer;
+    for (let i = start; i < end; i++) {
+      const key = view[i];
+      let tr = rowEls.get(key);
+      if (!tr) {
+        tr = buildRow(rows.get(key));
+        rowEls.set(key, tr);
+      }
+      if (cursor.nextSibling !== tr) tbody.insertBefore(tr, cursor.nextSibling);
+      cursor = tr;
+    }
+    if (rowEls.size > end - start) {
+      const want = new Set();
+      for (let i = start; i < end; i++) want.add(view[i]);
+      for (const [key, tr] of rowEls) {
+        if (!want.has(key)) { tr.remove(); rowEls.delete(key); }
+      }
+    }
+
+    if (!rowHMeasured && end > start) {
+      const h = rowEls.get(view[start])?.getBoundingClientRect().height;
+      if (h) {
+        rowHMeasured = true;
+        if (h !== rowH) { rowH = h; renderedStart = -2; render(); }
+      }
+    }
+  }
 
   /* ── Sort & filter state ──────────────────────────────────────────── */
 
@@ -234,14 +438,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (e.target.closest(".mkui-filter-btn")) return;
     const metaKey = e.ctrlKey || e.metaKey;
     if (e.shiftKey && selectedAnchor != null) {
-      const trList = [...tbody.children].filter((tr) => tr.style.display !== "none");
-      const anchorIdx = trList.findIndex((tr) => tr.dataset.ref === String(selectedAnchor));
-      const targetIdx = trList.findIndex((tr) => tr.dataset.ref === String(key));
+      const anchorIdx = view.indexOf(selectedAnchor);
+      const targetIdx = view.indexOf(key);
       if (anchorIdx >= 0 && targetIdx >= 0) {
         if (!metaKey) clearSelection();
         const lo = Math.min(anchorIdx, targetIdx);
         const hi = Math.max(anchorIdx, targetIdx);
-        for (let i = lo; i <= hi; i++) setRowSelected(trList[i].dataset.ref, true);
+        for (let i = lo; i <= hi; i++) setRowSelected(view[i], true);
       }
     } else if (metaKey) {
       setRowSelected(key, !selectedKeys.has(key));
@@ -349,39 +552,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return true;
   }
 
-  function applyVisibility() {
-    for (const [key, row] of rows) {
-      const tr = rowEls.get(key);
-      if (tr) tr.style.display = matchesFilters(row) ? "" : "none";
-    }
-  }
+  function applyVisibility() { markViewDirty(); render(); }
 
-  function reorder() {
-    if (!sortKeys.length) return;
-    const sorted = [...rows.values()].sort(compareRows);
-    for (const r of sorted) {
-      const tr = rowEls.get(r[idKey]);
-      if (tr) tbody.appendChild(tr);
-    }
-  }
+  function reorder() { markViewDirty(); render(); }
 
-  function resetOrder() {
-    for (const key of rows.keys()) {
-      const tr = rowEls.get(key);
-      if (tr) tbody.appendChild(tr);
-    }
-  }
-
-  function sortedInsertPos(row) {
-    if (!sortKeys.length) return -1;
-    const ch = tbody.children;
-    for (let i = 0; i < ch.length; i++) {
-      const other = rows.get(ch[i].dataset.ref);
-      if (!other) continue;
-      if (compareRows(row, other) < 0) return i;
-    }
-    return -1;
-  }
+  function resetOrder() { markViewDirty(); render(); }
 
   function getUniqueValues(col) {
     const s = new Set();
@@ -389,7 +564,122 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return [...s].sort(compareValues);
   }
 
+  /* ── Column widths ────────────────────────────────────────────────── */
+
+  // Widths are keyed by column name in colWidths so they survive reorder,
+  // resubscribe, and paging-mode switches. Until widthsInited the table
+  // auto-lays-out; after init a <colgroup> + table-layout:fixed pins each
+  // column and overflowing cell text is clipped with an ellipsis.
+
+  function renderColgroup() {
+    colgroup.innerHTML = "";
+    if (!widthsInited || !columns) {
+      table.classList.remove("mkui-table-fixed");
+      table.style.width = "";
+      return;
+    }
+    for (const c of visibleColumns()) {
+      const col = document.createElement("col");
+      col.style.width = (colWidths.get(c) ?? MIN_COL_W * 2) + "px";
+      colgroup.appendChild(col);
+    }
+    // Auto-width filler col. With table-layout:fixed and width:100%, the
+    // used table width is max(pane width, sum of col widths): data columns
+    // always keep their exact <col> widths and the filler takes whatever
+    // is left, extending the header row to the pane's right edge. (An
+    // inline pixel width here would pin the distribution to that width —
+    // min-width can stretch the table box afterwards but never re-runs
+    // the distribution, leaving the filler at 0 and dead space beyond
+    // the last column.)
+    colgroup.appendChild(document.createElement("col"));
+    table.classList.add("mkui-table-fixed");
+    table.style.width = ""; // width:100% from .mkui-table; also undoes the max-content measuring width
+  }
+
+  // Default width = the column's natural width from the initial snapshot
+  // (auto layout puts the widest cell's width on the th), capped at half
+  // the pane's visible width. Runs once, on the first data that renders.
+  function maybeInitWidths() {
+    if (widthsInited || rows.size === 0) return;
+    const ths = thead.querySelectorAll("th");
+    if (!ths.length) return;
+    const hostW = scrollHost.clientWidth || window.innerWidth || 0;
+    const maxW = hostW > 0 ? Math.max(MIN_COL_W, hostW / 2) : Infinity;
+    // Measure natural content widths — max-content overrides the default
+    // width:100% so columns aren't stretched to fill the pane first.
+    const prevWidth = table.style.width;
+    table.style.width = "max-content";
+    let measured = false;
+    for (const th of ths) {
+      if (!th.dataset.col) continue; // filler cell
+      const w = th.getBoundingClientRect().width;
+      if (w > 0) {
+        colWidths.set(th.dataset.col, Math.min(Math.max(w, MIN_COL_W), maxW));
+        measured = true;
+      }
+    }
+    if (!measured) { table.style.width = prevWidth; return; } // pane hidden — retry on next data
+    widthsInited = true;
+    renderColgroup();
+  }
+
+  function resetColWidths() {
+    colWidths.clear();
+    widthsInited = false;
+    colgroup.innerHTML = "";
+    table.classList.remove("mkui-table-fixed");
+    table.style.width = "";
+  }
+
+  function initColResize(col, e) {
+    closeDropdown();
+    // Sync stored widths to what's actually rendered, so the drag starts
+    // from the on-screen width (a drag may precede the first measurement,
+    // where columns are still auto-laid-out).
+    for (const th of thead.querySelectorAll("th")) {
+      if (!th.dataset.col) continue; // filler cell
+      const w = th.getBoundingClientRect().width;
+      if (w > 0) colWidths.set(th.dataset.col, w);
+    }
+    widthsInited = true;
+    renderColgroup();
+
+    const pid = e.pointerId;
+    const startX = e.clientX;
+    const startW = colWidths.get(col) ?? MIN_COL_W;
+
+    function onMove(e2) {
+      if (e2.pointerId !== pid) return;
+      colWidths.set(col, Math.max(MIN_COL_W, startW + (e2.clientX - startX)));
+      renderColgroup();
+    }
+    function onUp(e2) {
+      if (e2.pointerId !== pid) return;
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
+      suppressClick = true;
+      setTimeout(() => { suppressClick = false; }, 200);
+    }
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+  }
+
   /* ── Header rendering ─────────────────────────────────────────────── */
+
+  function makeResizer(col) {
+    const r = document.createElement("div");
+    r.className = "mkui-col-resizer";
+    r.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      initColResize(col, e);
+    });
+    r.addEventListener("click", (e) => e.stopPropagation());
+    return r;
+  }
 
   function renderHead() {
     thead.innerHTML = "";
@@ -407,10 +697,21 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const sortInd = document.createElement("span");
       sortInd.className = "mkui-sort-indicator";
 
+      const labelEl = document.createElement("span");
+      labelEl.className = "mkui-th-label";
+      labelEl.textContent = label(c);
+
       const inner = document.createElement("div");
       inner.className = "mkui-th-inner";
-      inner.append(document.createTextNode(label(c)), sortInd, filterBtn);
+      inner.append(labelEl, sortInd, filterBtn);
       th.appendChild(inner);
+
+      // The grip that resizes column N straddles the divider at N's right
+      // edge, so it lives on the LEFT edge of cell N+1 (the divider's other
+      // side): later cells paint above earlier ones, keeping the overhang
+      // clickable, whereas a right-edge overhang would be covered by the
+      // next cell.
+      if (vi > 0) th.appendChild(makeResizer(visCols[vi - 1]));
 
       th.addEventListener("click", (e) => {
         if (suppressClick) { suppressClick = false; return; }
@@ -451,12 +752,22 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
       tr.appendChild(th);
     }
+    // Filler cell: absorbs pane width beyond the data columns so the header
+    // background/border run the full pane width without stretching columns.
+    const filler = document.createElement("th");
+    filler.className = "mkui-th-filler";
+    if (visCols.length) filler.appendChild(makeResizer(visCols[visCols.length - 1]));
+    tr.appendChild(filler);
     thead.appendChild(tr);
+    topSpacerTd.colSpan = visCols.length + 1;
+    botSpacerTd.colSpan = visCols.length + 1;
+    renderColgroup();
   }
 
   function updateHeaderState() {
     for (const th of thead.querySelectorAll("th")) {
       const col = th.dataset.col;
+      if (!col) continue; // filler cell
       const ind = th.querySelector(".mkui-sort-indicator");
       const si = sortKeys.findIndex((k) => k.col === col);
       ind.textContent = "";
@@ -547,14 +858,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function rebuildAllRows() {
-    for (const [key, row] of rows) {
-      const old = rowEls.get(key);
-      if (!old) continue;
-      const hidden = old.style.display === "none";
-      const tr = buildRow(row);
-      if (hidden) tr.style.display = "none";
-      old.replaceWith(tr);
-      rowEls.set(key, tr);
+    for (const [key, tr] of rowEls) {
+      const row = rows.get(key);
+      if (!row) continue;
+      const fresh = buildRow(row);
+      tr.replaceWith(fresh);
+      rowEls.set(key, fresh);
     }
   }
 
@@ -599,6 +908,19 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const cur = filters.get(col);
     const cbs = [];
 
+    // Decimal-align numeric values, matching the column's cells: values are
+    // left-anchored next to their checkboxes, so left-pad by the integer-
+    // width deficit (in ch, mono font) to line the decimal points up.
+    const st = colStats.get(col);
+    const intLen = (s) => {
+      const i = s.indexOf(".");
+      return i < 0 ? s.length : i;
+    };
+    let maxInt = 0;
+    if (st?.numeric) {
+      for (const v of vals) if (v !== "") maxInt = Math.max(maxInt, intLen(v));
+    }
+
     for (const v of vals) {
       const lbl = document.createElement("label");
       lbl.className = "mkui-filter-item";
@@ -608,6 +930,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       cb.dataset.val = v;
       const txt = document.createElement("span");
       txt.textContent = v === "" ? "(empty)" : v;
+      if (st?.numeric && v !== "") {
+        txt.classList.add("mkui-filter-num");
+        const pad = maxInt - intLen(v);
+        if (pad > 0) txt.style.setProperty("--mkui-num-pad", pad + "ch");
+      }
       lbl.append(cb, txt);
       list.appendChild(lbl);
       cbs.push(cb);
@@ -672,6 +999,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       td.dataset.col = c;
       const v = row[c];
       td.textContent = v == null ? "" : String(v);
+      styleCell(td, c);
       tr.appendChild(td);
     }
     if (selectedKeys.has(key)) tr.classList.add("mkui-selected");
@@ -686,18 +1014,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     el.addEventListener("animationend", () => el.classList.remove(cls), { once: true });
   }
 
-  function insertRow(row) {
-    rows.set(row[idKey], row);
-    const tr = buildRow(row);
-    rowEls.set(row[idKey], tr);
-    const idx = sortedInsertPos(row);
-    if (idx >= 0) tbody.insertBefore(tr, tbody.children[idx]);
-    else tbody.appendChild(tr);
-    if (!matchesFilters(row)) tr.style.display = "none";
-    return tr;
-  }
-
-  /* ── Snapshot rendering (chunked for large datasets) ────────────── */
+  /* ── Snapshot ingestion (chunked for large datasets) ─────────────── */
 
   let snapshotGen = 0;
   const CHUNK = 100;
@@ -705,53 +1022,45 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function applySnapshot(snap) {
     const gen = ++snapshotGen;
     if (protocol !== "stream") {
-      rows.clear();
-      rowEls.clear();
-      tbody.innerHTML = "";
+      clearData();
       clearSelection();
     }
-    if (snap.length <= CHUNK) {
-      for (const row of snap) {
-        const key = row[idKey];
-        if (rows.has(key)) {
-          applyReplace(row);
-        } else {
-          if (!columns) {
-            columns = Object.keys(row);
-            renderHead();
-          }
-          insertRow(row);
-        }
-      }
-      if (sortKeys.length) reorder();
-      maybeRestoreScroll();
-      return;
-    }
-
-    let i = 0;
     if (!columns && snap.length > 0) {
       columns = Object.keys(snap[0]);
       renderHead();
     }
+    // At least CHUNK per frame, but never more than ~50 frames total —
+    // a million-row snapshot ingests in 20k-row chunks, not 10k frames.
+    const chunkSize = Math.max(CHUNK, Math.ceil(snap.length / 50));
+    let i = 0;
+    const ingest = (until) => {
+      for (; i < until; i++) {
+        const row = snap[i];
+        if (rows.has(row[idKey])) applyReplace(row);
+        else insertRow(row);
+      }
+      render();
+    };
+    if (snap.length <= chunkSize) {
+      ingest(snap.length);
+      maybeRestoreScroll();
+      maybeInitWidths();
+      return;
+    }
+
     progress.textContent = `Loading 0 / ${snap.length}…`;
     progress.style.display = "";
 
     function renderChunk() {
       if (gen !== snapshotGen) return;
-      const end = Math.min(i + CHUNK, snap.length);
-      for (; i < end; i++) {
-        const row = snap[i];
-        const key = row[idKey];
-        if (rows.has(key)) applyReplace(row);
-        else insertRow(row);
-      }
+      ingest(Math.min(i + chunkSize, snap.length));
       if (i < snap.length) {
         progress.textContent = `Loading ${i} / ${snap.length}…`;
         requestAnimationFrame(renderChunk);
       } else {
         progress.style.display = "none";
-        if (sortKeys.length) reorder();
         maybeRestoreScroll();
+        maybeInitWidths();
       }
     }
     renderChunk();
@@ -762,45 +1071,79 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       columns = Object.keys(row);
       renderHead();
     }
-    const tr = insertRow(row);
-    if (matchesFilters(row)) flash(tr, "mkui-flash-in");
+    insertRow(row);
+    render();
+    const tr = rowEls.get(row[idKey]);
+    if (tr) flash(tr, "mkui-flash-in");
+    maybeInitWidths();
   }
 
   function applyDelete(row) {
     const key = row[idKey];
+    const prev = rows.get(key);
+    const vi = viewIndexOf(prev ?? row);
+    if (vi >= 0) view.splice(vi, 1);
+    const bi = baseOrder.indexOf(key);
+    if (bi >= 0) baseOrder.splice(bi, 1);
     rows.delete(key);
     selectedKeys.delete(key);
+    viewRev++;
     const tr = rowEls.get(key);
-    if (!tr) return;
-    rowEls.delete(key);
-    flash(tr, "mkui-flash-out");
-    tr.addEventListener("animationend", () => tr.remove(), { once: true });
+    if (tr) {
+      // Fade out in place; render() no longer tracks this element, so it
+      // is removed for real when the animation ends.
+      rowEls.delete(key);
+      flash(tr, "mkui-flash-out");
+      tr.addEventListener("animationend", () => tr.remove(), { once: true });
+    }
+    render();
   }
 
   function applyReplace(row) {
     const key = row[idKey];
     const prev = rows.get(key);
-    rows.set(key, row);
-    const tr = rowEls.get(key);
-    if (!tr) {
+    if (!prev) {
       applyInsert(row);
       return;
     }
+    bumpStats(row);
     let sortChanged = false;
+    const changed = [];
     for (const c of visibleColumns()) {
       const newVal = row[c] == null ? "" : String(row[c]);
-      const oldVal = prev?.[c] == null ? "" : String(prev[c]);
+      const oldVal = prev[c] == null ? "" : String(prev[c]);
       if (newVal !== oldVal) {
-        const td = tr.querySelector(`td[data-col="${CSS.escape(c)}"]`);
-        if (td) {
-          td.textContent = newVal;
-          flash(td, "mkui-flash-update");
-        }
+        changed.push([c, newVal]);
         if (sortKeys.some((k) => k.col === c)) sortChanged = true;
       }
     }
-    tr.style.display = matchesFilters(row) ? "" : "none";
-    if (sortChanged) reorder();
+    const wasVis = matchesFilters(prev);
+    const isVis = matchesFilters(row);
+    if (sortChanged || wasVis !== isVis) {
+      // Reposition: remove at the old view slot (found via prev, still in
+      // rows), then re-insert at the slot the new values sort into.
+      if (wasVis) {
+        const vi = viewIndexOf(prev);
+        if (vi >= 0) view.splice(vi, 1);
+      }
+      rows.set(key, row);
+      if (isVis) view.splice(viewInsertPos(row), 0, key);
+      viewRev++;
+      render();
+    } else {
+      rows.set(key, row);
+    }
+    const tr = rowEls.get(key);
+    if (tr) {
+      for (const [c, newVal] of changed) {
+        const td = tr.querySelector(`td[data-col="${CSS.escape(c)}"]`);
+        if (td) {
+          td.textContent = newVal;
+          styleCell(td, c);
+          flash(td, "mkui-flash-update");
+        }
+      }
+    }
   }
 
   /* ── Subscription ─────────────────────────────────────────────────── */
@@ -853,13 +1196,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   let savedScrollTop = 0;
   let restoreScrollTarget = 0;
 
-  scrollHost.addEventListener("scroll", () => { savedScrollTop = scrollHost.scrollTop; });
+  scrollHost.addEventListener("scroll", () => {
+    savedScrollTop = scrollHost.scrollTop;
+    render();
+  });
 
   function maybeRestoreScroll() {
     if (!restoreScrollTarget) return;
     const target = restoreScrollTarget;
     restoreScrollTarget = 0;
-    requestAnimationFrame(() => { scrollHost.scrollTop = target; });
+    requestAnimationFrame(() => { scrollHost.scrollTop = target; render(); });
   }
 
   function sub() {
@@ -869,9 +1215,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const resuming = protocol === "stream" && lastRef;
     if (!resuming) {
       restoreScrollTarget = savedScrollTop;
-      rows.clear();
-      rowEls.clear();
-      tbody.innerHTML = "";
+      clearData();
       clearSelection();
     }
     const opts = { subid, topic: spec.topic, filter: spec.filter, ...callbacks };
@@ -905,9 +1249,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (closed) return;
     unsub();
     subscribed = true;
-    rows.clear();
-    rowEls.clear();
-    tbody.innerHTML = "";
+    clearData();
     prevPageLoadRef = pageLoadRef;
     prevPageLoadBefore = pageLoadBefore;
     pageLoadRef = ref;
@@ -931,9 +1273,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         if (pageRows.length > 0) {
           if (!columns) { columns = Object.keys(pageRows[0]); renderHead(); }
           for (const row of pageRows) insertRow(row);
-          if (sortKeys.length) reorder();
+          render();
           firstRef = pageRows[0]._mkio_ref;
           lastRef = pageRows[pageRows.length - 1]._mkio_ref;
+          maybeInitWidths();
         } else if (before && prevPageLoadRef != null) {
           noPrev = true;
           fetchPage(prevPageLoadRef, prevPageLoadBefore);
@@ -999,17 +1342,20 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         if (pageRows.length > 0) {
           hasEarlierPages = true;
           if (!columns) { columns = Object.keys(pageRows[0]); renderHead(); }
-          const frag = document.createDocumentFragment();
+          // Prepend the earlier page in display order without disturbing
+          // the live rows below it.
+          const keys = [];
           for (const row of pageRows) {
-            rows.set(row[idKey], row);
-            const tr = buildRow(row);
-            rowEls.set(row[idKey], tr);
-            if (!matchesFilters(row)) tr.style.display = "none";
-            frag.appendChild(tr);
+            bumpStats(row);
+            const key = row[idKey];
+            if (!rows.has(key)) keys.push(key);
+            rows.set(key, row);
           }
-          tbody.insertBefore(frag, tbody.firstChild);
-          if (sortKeys.length) reorder();
+          baseOrder = keys.concat(baseOrder);
+          markViewDirty();
+          render();
           firstRef = pageRows[0]._mkio_ref;
+          maybeInitWidths();
         }
         updatePagingUI();
       },
@@ -1078,6 +1424,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       closed = true;
       io.disconnect();
+      ro.disconnect();
       subscribed = false;
       pageFetchPending = false;
       client.unsubscribe(subid);
@@ -1087,13 +1434,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       closed = false;
       subscribed = false;
       lastRef = null;
-      rows.clear();
-      rowEls.clear();
-      tbody.innerHTML = "";
+      clearData();
       columns = spec.columns ?? null;
       displayOrder = null;
       sortKeys.length = 0;
       filters.clear();
+      resetColWidths();
       clearSelection();
       if (isPaged) {
         liveMode = false;
@@ -1109,6 +1455,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         prevPageLoadBefore = false;
       }
       io.observe(host);
+      ro.observe(scrollHost);
     });
   }
 
@@ -1116,6 +1463,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const visible = entries[0].intersectionRatio > 0;
     if (visible) {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+      render(); // viewport may have appeared/changed while hidden
       if (isPaged && !liveMode) {
         if (!subscribed) fetchPage(pageLoadRef, pageLoadBefore);
       } else {
@@ -1132,4 +1480,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
   });
   io.observe(host);
+
+  // Re-slice when the pane is resized: the visible row window changes but
+  // no data does, so this is O(visible rows).
+  const ro = new ResizeObserver(() => render());
+  ro.observe(scrollHost);
 });

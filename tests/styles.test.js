@@ -183,6 +183,41 @@ test("table cells never wrap", () => {
     declaration(".mkui-table th, .mkui-table td", "white-space"), "nowrap");
 });
 
+test("fixed-width table stretches via the filler column only", () => {
+  // Column widths are locked from the initial snapshot and live on the
+  // <colgroup> cols. The table must lay out at width:100% (from
+  // .mkui-table) under table-layout:fixed: the used width is then
+  // max(pane, sum of cols), so data columns keep their exact widths and a
+  // wider pane only grows the auto-width filler column (which is what
+  // extends the header to the pane edge). A pixel width or min-width here
+  // would pin the column distribution and leave the filler at zero.
+  assert.equal(declaration(".mkui-table", "width"), "100%");
+  assert.equal(declaration(".mkui-table-fixed", "table-layout"), "fixed");
+  assert.ok(!/min-width|(?:^|;)\s*width\s*:/.test(rule(".mkui-table-fixed")),
+    "mkui-table-fixed must not declare width/min-width — width:100% + fixed layout does the work");
+});
+
+test("numeric cells right-align and pad to the decimal point", () => {
+  assert.equal(declaration(".mkui-table td.mkui-num", "text-align"), "right");
+  assert.match(declaration(".mkui-table td.mkui-num", "padding-right"),
+    /var\(--mkui-num-pad/, "per-cell ch padding aligns the decimal points");
+});
+
+test("filter dropdown numeric values align like the cells", () => {
+  // ch padding is only exact in a monospace font, so the value spans must
+  // opt into the table's mono font.
+  assert.equal(declaration(".mkui-filter-item .mkui-filter-num", "font-family"),
+    "var(--mkui-font-mono)");
+  assert.match(declaration(".mkui-filter-item .mkui-filter-num", "padding-left"),
+    /var\(--mkui-num-pad/);
+});
+
+test("columns are separated by subtle dividers", () => {
+  const div = declaration(".mkui-table th, .mkui-table td", "border-right");
+  assert.match(div, /1px solid/);
+  assert.match(div, /color-mix|rgba/, "divider should be softer than the full border color");
+});
+
 test("header cells lay out as a flex row, filter button un-floated", () => {
   assert.equal(declaration(".mkui-th-inner", "display"), "flex");
   assert.ok(!/float/.test(rule(".mkui-filter-btn")),

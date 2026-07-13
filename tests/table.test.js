@@ -7,12 +7,33 @@ import assert from "node:assert/strict";
 
 /* ── Minimal browser globals ──────────────────────────────────────────── */
 
+function detach(n) {
+  if (!n || typeof n !== "object") return;
+  const p = n._parent;
+  if (p) {
+    const i = p._ch.indexOf(n);
+    if (i >= 0) p._ch.splice(i, 1);
+  }
+  n._parent = null;
+}
+
+function adopt(n, parent) {
+  if (n && typeof n === "object") n._parent = parent;
+}
+
 function mockEl(tag) {
   const el = {
     tagName: tag?.toUpperCase() ?? "",
     className: "", textContent: "", disabled: false,
     type: "", placeholder: "",
-    style: new Proxy({}, { set(t, p, v) { t[p] = v; return true; }, get(t, p) { return t[p] ?? ""; } }),
+    style: new Proxy({}, {
+      set(t, p, v) { t[p] = v; return true; },
+      get(t, p) {
+        if (p === "setProperty") return (k, v) => { t[k] = v; };
+        if (p === "removeProperty") return (k) => { delete t[k]; };
+        return t[p] ?? "";
+      },
+    }),
     dataset: {},
     _ch: [],
     _ev: {},
@@ -23,29 +44,64 @@ function mockEl(tag) {
       toggle(c, f) { f !== undefined ? (f ? this._s.add(c) : this._s.delete(c)) : (this._s.has(c) ? this._s.delete(c) : this._s.add(c)); },
       contains(c) { return this._s.has(c); },
     },
-    append(...ns) { for (const n of ns) el._ch.push(n); },
-    appendChild(n) { el._ch.push(n); return n; },
+    append(...ns) { for (const n of ns) el.appendChild(n); },
+    appendChild(n) { detach(n); adopt(n, el); el._ch.push(n); return n; },
     insertBefore(n, ref) {
       const items = n.tagName === "FRAGMENT" ? n._ch.splice(0) : [n];
+      for (const it of items) detach(it);
       const i = el._ch.indexOf(ref);
       if (i >= 0) el._ch.splice(i, 0, ...items); else el._ch.push(...items);
+      for (const it of items) adopt(it, el);
       return n;
     },
-    remove() {},
-    replaceWith() {},
+    remove() { detach(el); },
+    replaceWith(n) {
+      const p = el._parent;
+      if (!p) return;
+      const i = p._ch.indexOf(el);
+      detach(n);
+      p._ch[i] = n;
+      adopt(n, p);
+      el._parent = null;
+    },
+    get nextSibling() {
+      const p = el._parent;
+      if (!p) return null;
+      const i = p._ch.indexOf(el);
+      return i >= 0 ? p._ch[i + 1] ?? null : null;
+    },
     setAttribute(name, v) { if (name === "class") el.className = String(v); },
     addEventListener(e, fn) { (el._ev[e] ??= []).push(fn); },
     removeEventListener() {},
     querySelector(sel) {
       const m = sel.match(/\[data-col="([^"]+)"\]/);
-      if (m) return el._ch.find(c => c.dataset?.col === m[1]) ?? null;
-      if (sel.startsWith(".")) {
-        const cls = sel.slice(1);
-        return el._ch.find(c => c.className?.includes(cls)) ?? null;
-      }
-      return null;
+      const match = m ? (c) => c.dataset?.col === m[1]
+        : sel.startsWith(".") ? (c) => c.className?.includes(sel.slice(1))
+        : (c) => c.tagName === sel.toUpperCase();
+      const walk = (n) => {
+        for (const c of n._ch ?? []) {
+          if (match(c)) return c;
+          const r = walk(c);
+          if (r) return r;
+        }
+        return null;
+      };
+      return walk(el);
     },
-    querySelectorAll() { return []; },
+    querySelectorAll(sel) {
+      const match = sel.startsWith(".")
+        ? (c) => c.className?.includes(sel.slice(1))
+        : (c) => c.tagName === sel.toUpperCase();
+      const out = [];
+      const walk = (n) => {
+        for (const c of n._ch ?? []) {
+          if (match(c)) out.push(c);
+          walk(c);
+        }
+      };
+      walk(el);
+      return out;
+    },
     closest() { return null; },
     contains() { return false; },
     getBoundingClientRect() { return { left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20 }; },
@@ -53,12 +109,20 @@ function mockEl(tag) {
     focus() {},
     get children() { return el._ch; },
     get offsetWidth() { return 100; },
+    get clientWidth() { return el._clientWidth ?? 400; },
+    get clientHeight() { return el._clientHeight ?? 10000; },
   };
 
   let _ih = "";
   Object.defineProperty(el, "innerHTML", {
     get() { return _ih; },
-    set(v) { _ih = v; if (v === "") el._ch.length = 0; },
+    set(v) {
+      _ih = v;
+      if (v === "") {
+        for (const c of el._ch) if (c && typeof c === "object") c._parent = null;
+        el._ch.length = 0;
+      }
+    },
   });
 
   let _st = 0;
@@ -80,8 +144,12 @@ globalThis.document = {
     Object.defineProperty(frag, "firstChild", { get() { return frag._ch[0] ?? null; } });
     return frag;
   },
-  addEventListener() {},
-  removeEventListener() {},
+  _ev: {},
+  addEventListener(e, fn) { (this._ev[e] ??= []).push(fn); },
+  removeEventListener(e, fn) {
+    const a = this._ev[e];
+    if (a) { const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); }
+  },
   head: mockEl("head"),
 };
 globalThis.window = globalThis;
@@ -100,6 +168,11 @@ function advanceTimers() { for (const { fn } of pendingTimers.values()) fn(); pe
 let ioCallbacks = [];
 globalThis.IntersectionObserver = class {
   constructor(cb) { this._cb = cb; ioCallbacks.push(cb); }
+  observe() {}
+  disconnect() {}
+};
+
+globalThis.ResizeObserver = class {
   observe() {}
   disconnect() {}
 };
@@ -221,8 +294,23 @@ function getTable(host) {
   return table;
 }
 
-function getTbody(host) {
+function getRawTbody(host) {
   return getTable(host)?._ch.find(c => c.tagName === "TBODY") ?? null;
+}
+
+// Facade that hides the virtual-scroll spacer rows so tests can keep
+// asserting on data-row counts and order.
+function getTbody(host) {
+  const tb = getRawTbody(host);
+  if (!tb) return null;
+  return {
+    get _ch() { return tb._ch.filter(c => !String(c.className).includes("mkui-vspacer")); },
+  };
+}
+
+function spacerHeights(host) {
+  const sp = getRawTbody(host)._ch.filter(c => String(c.className).includes("mkui-vspacer"));
+  return sp.map(s => s._ch[0].style.height);
 }
 
 function getThead(host) {
@@ -233,8 +321,10 @@ function getHeaderTexts(host) {
   const thead = getThead(host);
   if (!thead || !thead._ch.length) return [];
   const tr = thead._ch[0];
-  return tr._ch.map(th => {
+  return tr._ch.filter(th => !String(th.className).includes("mkui-th-filler")).map(th => {
     const inner = th._ch.find(n => n.className === "mkui-th-inner") ?? th;
+    const lbl = inner._ch.find(n => n.className === "mkui-th-label");
+    if (lbl) return lbl.textContent;
     const textNodes = inner._ch.filter(n => n.nodeType === 3);
     return textNodes.map(n => n.textContent).join("");
   });
@@ -1971,6 +2061,322 @@ test("refresh button re-enabled after exiting live mode", async () => {
   liveBtn._ev.click[0]();
   lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r2" });
   assert.equal(refreshBtn.disabled, false, "re-enabled after exit live");
+});
+
+/* ── Column widths & resize ──────────────────────────────────────────── */
+
+function getColgroup(host) {
+  return getTable(host)?._ch.find(c => c.tagName === "COLGROUP") ?? null;
+}
+
+function getThs(host) {
+  return (getThead(host)?._ch[0]?._ch ?? []).filter(th => th.dataset?.col);
+}
+
+// Grips straddle dividers: column N's grip is on the left edge of cell
+// N+1 (the filler carries the last column's grip). getGrips(host)[i]
+// resizes column i.
+function getGrips(host) {
+  const tr = getThead(host)?._ch[0];
+  if (!tr) return [];
+  return tr._ch.flatMap(th =>
+    th._ch.filter(c => String(c.className).includes("mkui-col-resizer")));
+}
+
+test("each column divider carries a resize grip on its following cell", async () => {
+  const { host } = await createTable({ columns: ["a", "b"] });
+  const ths = getThead(host)._ch[0]._ch;
+  assert.ok(!ths[0]._ch.some(c => c.className === "mkui-col-resizer"),
+    "first cell has no grip — there is no divider on its left");
+  assert.ok(ths[1]._ch.some(c => c.className === "mkui-col-resizer"),
+    "second cell carries the grip for column a");
+  assert.ok(ths[2]._ch.some(c => c.className === "mkui-col-resizer"),
+    "filler carries the grip for the last column");
+  assert.equal(getGrips(host).length, 2, "one grip per data column");
+});
+
+test("initial snapshot locks column widths into the colgroup", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const table = getTable(host);
+  assert.ok(!table.classList.contains("mkui-table-fixed"), "auto layout before data");
+
+  lastSubscribe().opts.onSnapshot(makeRows(5));
+  assert.ok(table.classList.contains("mkui-table-fixed"), "fixed layout after snapshot");
+  const cols = getColgroup(host)._ch;
+  assert.equal(cols.length, 3, "one col per visible column plus the filler");
+  assert.equal(cols[0].style.width, "100px", "width from measured header");
+  assert.equal(cols[1].style.width, "100px");
+  assert.equal(cols[2].style.width, "", "filler col is auto-width");
+  assert.equal(table.style.width, "", "no inline width — width:100% lets the filler absorb pane growth");
+});
+
+test("default column width is capped at 50% of the pane width", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  host._clientWidth = 150;
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(5));
+  const cols = getColgroup(host)._ch;
+  assert.equal(cols[0].style.width, "75px", "measured 100px clamped to half of 150px pane");
+  assert.equal(cols[1].style.width, "75px");
+});
+
+test("dragging a resize grip changes that column's width", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(5));
+
+  const resizer = getGrips(host)[0]; // grip for column 0, on the second cell
+  resizer._ev.pointerdown[0]({
+    button: 0, pointerId: 7, clientX: 100,
+    stopPropagation() {}, preventDefault() {},
+  });
+  document._ev.pointermove.at(-1)({ pointerId: 7, clientX: 140 });
+  const cols = getColgroup(host)._ch;
+  assert.equal(cols[0].style.width, "140px", "dragged column widened by 40px");
+  assert.equal(cols[1].style.width, "100px", "other column unchanged");
+  document._ev.pointerup.at(-1)({ pointerId: 7 });
+});
+
+test("resize enforces a minimum column width", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(5));
+
+  const resizer = getGrips(host)[0];
+  resizer._ev.pointerdown[0]({
+    button: 0, pointerId: 8, clientX: 100,
+    stopPropagation() {}, preventDefault() {},
+  });
+  document._ev.pointermove.at(-1)({ pointerId: 8, clientX: -500 });
+  assert.equal(getColgroup(host)._ch[0].style.width, "40px", "clamped to minimum");
+  document._ev.pointerup.at(-1)({ pointerId: 8 });
+});
+
+test("column widths persist across re-subscribe", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(5));
+
+  const resizer = getGrips(host)[0];
+  resizer._ev.pointerdown[0]({
+    button: 0, pointerId: 9, clientX: 100,
+    stopPropagation() {}, preventDefault() {},
+  });
+  document._ev.pointermove.at(-1)({ pointerId: 9, clientX: 160 });
+  document._ev.pointerup.at(-1)({ pointerId: 9 });
+  assert.equal(getColgroup(host)._ch[0].style.width, "160px");
+
+  triggerHidden(io);
+  advanceTimers();
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(5));
+  assert.equal(getColgroup(host)._ch[0].style.width, "160px", "width kept after resubscribe");
+});
+
+test("pane reopen resets column widths for re-measurement", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(5));
+  assert.ok(getTable(host).classList.contains("mkui-table-fixed"));
+
+  const paneEl = host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+  for (const fn of paneEl._ev["mkui-pane-open"] ?? []) fn();
+  assert.ok(!getTable(host).classList.contains("mkui-table-fixed"), "back to auto layout");
+  assert.equal(getColgroup(host)._ch.length, 0, "colgroup cleared");
+
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(5));
+  assert.ok(getTable(host).classList.contains("mkui-table-fixed"), "re-measured on new data");
+  assert.equal(getColgroup(host)._ch.length, 3);
+});
+
+/* ── Numeric decimal alignment ───────────────────────────────────────── */
+
+function colCells(host, col) {
+  return getTbody(host)._ch.map(tr => tr._ch.find(td => td.dataset?.col === col));
+}
+
+test("numeric columns right-align and pad to the decimal point", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", value: "1" },
+    { _mkio_row: "2", name: "b", value: "2.5" },
+    { _mkio_row: "3", name: "c", value: "3.25" },
+  ]);
+  const tds = colCells(host, "value");
+  assert.ok(tds.every(td => td.classList.contains("mkui-num")), "numeric cells aligned");
+  assert.equal(tds[0].style["--mkui-num-pad"], "3ch", "integer padded past '.25'");
+  assert.equal(tds[1].style["--mkui-num-pad"], "1ch", "one fraction digit short");
+  assert.equal(tds[2].style["--mkui-num-pad"], "", "widest fraction needs no pad");
+  const names = colCells(host, "name");
+  assert.ok(names.every(td => !td.classList.contains("mkui-num")), "text column untouched");
+});
+
+test("late-arriving decimals restyle already-rendered integer cells", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const sub = lastSubscribe();
+  sub.opts.onSnapshot([{ _mkio_row: "1", value: "10" }]);
+  assert.equal(colCells(host, "value")[0].style["--mkui-num-pad"], "", "no pad while all integers");
+
+  sub.opts.onUpdate("insert", { _mkio_row: "2", value: "3.5" });
+  const tds = colCells(host, "value");
+  assert.equal(tds.find(td => td.textContent === "10").style["--mkui-num-pad"], "2ch",
+    "existing integer re-padded past '.5'");
+  assert.equal(tds.find(td => td.textContent === "3.5").style["--mkui-num-pad"], "");
+});
+
+test("a non-numeric value disables alignment for the whole column", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const sub = lastSubscribe();
+  sub.opts.onSnapshot([{ _mkio_row: "1", value: "1.5" }]);
+  assert.ok(colCells(host, "value")[0].classList.contains("mkui-num"));
+
+  sub.opts.onUpdate("insert", { _mkio_row: "2", value: "n/a" });
+  assert.ok(colCells(host, "value").every(td => !td.classList.contains("mkui-num")),
+    "column flips to text alignment");
+});
+
+test("cell updates keep decimal padding in sync", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const sub = lastSubscribe();
+  sub.opts.onSnapshot([
+    { _mkio_row: "1", value: "1.25" },
+    { _mkio_row: "2", value: "7" },
+  ]);
+  sub.opts.onUpdate("update", { _mkio_row: "2", value: "8.5" });
+  const td = colCells(host, "value").find(t => t.textContent === "8.5");
+  assert.equal(td.style["--mkui-num-pad"], "1ch", "updated value padded to the column's fraction");
+});
+
+test("filter dropdown decimal-aligns numeric values", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", value: "1" },
+    { _mkio_row: "2", name: "b", value: "271.66" },
+    { _mkio_row: "3", name: "c", value: "3.5" },
+  ]);
+
+  const valueTh = getThs(host).find(th => th.dataset.col === "value");
+  valueTh.querySelector(".mkui-filter-btn")._ev.click[0]({ stopPropagation() {} });
+  const dd = host._ch.find(c => String(c.className).includes("mkui-filter-dropdown"));
+  assert.ok(dd, "dropdown opened");
+  const list = dd._ch.find(c => c.className === "mkui-filter-list");
+  const spans = list._ch.map(item => item._ch.find(n => n.tagName === "SPAN"));
+
+  // numerically sorted: 1, 3.5, 271.66 — widest integer part is "271"
+  assert.ok(spans.every(s => s.classList.contains("mkui-filter-num")));
+  assert.equal(spans[0].textContent, "1");
+  assert.equal(spans[0].style["--mkui-num-pad"], "2ch", "1 padded under 271");
+  assert.equal(spans[1].textContent, "3.5");
+  assert.equal(spans[1].style["--mkui-num-pad"], "2ch");
+  assert.equal(spans[2].textContent, "271.66");
+  assert.equal(spans[2].style["--mkui-num-pad"], "", "widest integer part needs no pad");
+
+  // text column values stay plain
+  const nameTh = getThs(host).find(th => th.dataset.col === "name");
+  nameTh.querySelector(".mkui-filter-btn")._ev.click[0]({ stopPropagation() {} });
+  const dd2 = host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).at(-1);
+  const spans2 = dd2._ch.find(c => c.className === "mkui-filter-list")
+    ._ch.map(item => item._ch.find(n => n.tagName === "SPAN"));
+  assert.ok(spans2.every(s => !s.classList.contains("mkui-filter-num")));
+});
+
+/* ── Full-width header (filler cell) ─────────────────────────────────── */
+
+test("header row ends with a filler cell that absorbs extra width", async () => {
+  const { host } = await createTable({ columns: ["a", "b"] });
+  const ths = getThead(host)._ch[0]._ch;
+  assert.equal(ths.length, 3, "two data columns + filler");
+  assert.ok(String(ths.at(-1).className).includes("mkui-th-filler"));
+});
+
+/* ── Virtualized rendering ───────────────────────────────────────────── */
+
+test("only the visible slice of rows is rendered", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  host._clientHeight = 200; // 10 rows @ 20px, +10 overscan
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(100));
+  assert.equal(getTbody(host)._ch.length, 20, "10 visible + 10 overscan");
+  const [top, bottom] = spacerHeights(host);
+  assert.equal(top, "0px");
+  assert.equal(bottom, 80 * 20 + "px", "spacer stands in for the other 80 rows");
+});
+
+test("scrolling re-slices the rendered window", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  host._clientHeight = 200;
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(100));
+
+  host.scrollTop = 1000; // rows 50-60 in view
+  for (const fn of host._ev.scroll ?? []) fn();
+
+  const rendered = getTbody(host)._ch;
+  assert.equal(rendered[0].dataset.ref, "40", "starts at first overscan row");
+  assert.equal(rendered.length, 30, "overscan + visible + overscan");
+  const [top, bottom] = spacerHeights(host);
+  assert.equal(top, 40 * 20 + "px");
+  assert.equal(bottom, 30 * 20 + "px");
+});
+
+test("spacer colspan tracks the column count", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(5)); // 2 visible columns
+  const spacers = getRawTbody(host)._ch.filter(c => String(c.className).includes("mkui-vspacer"));
+  assert.equal(spacers.length, 2);
+  for (const sp of spacers) {
+    // An oversized colspan adds that many phantom columns to the fixed
+    // layout, which would swallow the filler column's width ~0px each.
+    assert.equal(sp._ch[0].colSpan, 3, "data columns + filler");
+  }
+});
+
+test("100k-row snapshot keeps the DOM small", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  host._clientHeight = 200;
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(100000));
+  flushRaf();
+  assert.equal(getTbody(host)._ch.length, 20, "only the visible slice exists in the DOM");
+  const [, bottom] = spacerHeights(host);
+  assert.equal(bottom, (100000 - 20) * 20 + "px");
+});
+
+test("virtualized rows preserve live update semantics", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  host._clientHeight = 200;
+  triggerVisible(io);
+  const sub = lastSubscribe();
+  sub.opts.onSnapshot(makeRows(100));
+
+  sub.opts.onUpdate("insert", { _mkio_row: "x1", name: "new", value: 1 });
+  assert.equal(spacerHeights(host)[1], (101 - 20) * 20 + "px", "insert grows the virtual height");
+
+  sub.opts.onUpdate("delete", { _mkio_row: "x1" });
+  assert.equal(spacerHeights(host)[1], (100 - 20) * 20 + "px", "delete shrinks the virtual height");
+
+  sub.opts.onUpdate("update", { _mkio_row: "5", name: "row-5b", value: 5 });
+  const tr = getTbody(host)._ch.find(t => t.dataset.ref === "5");
+  const td = tr._ch.find(c => c.dataset.col === "name");
+  assert.equal(td.textContent, "row-5b", "visible row updated in place");
+});
+
+test("paged stream locks widths from the first page", async () => {
+  const { host, io } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
+  const table = getTable(host);
+  assert.ok(table.classList.contains("mkui-table-fixed"));
+  assert.equal(getColgroup(host)._ch.length, 3);
 });
 
 test("refresh re-fetches with saved pageLoadRef and pageLoadBefore", async () => {
