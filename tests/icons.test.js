@@ -28,7 +28,7 @@ const { icon } = await import("../mkui/static/src/lib/icons.js");
 const OUTLINE_NAMES = [
   "close", "maximize", "pin", "refresh", "chevron-left", "chevron-right",
 ];
-const FILLED_NAMES = ["caret-up", "caret-down", "dot"];
+const FILLED_NAMES = ["caret-up", "caret-down", "dot", "filter"];
 
 test("unknown icon name throws", () => {
   assert.throws(() => icon("no-such-icon"), /unknown icon: no-such-icon/);
@@ -86,6 +86,35 @@ test("every icon contains at least one path child with data", () => {
 test("multi-stroke icons keep separate paths (close has 2, refresh has 4)", () => {
   assert.equal(icon("close")._ch.length, 2);
   assert.equal(icon("refresh")._ch.length, 4);
+});
+
+test("filter icon's vertical span matches the sort caret's", () => {
+  function yExtent(name) {
+    const d = icon(name)._ch.map(p => p._attrs.d).join(" ");
+    const tokens = d.match(/[A-Za-z]|[-+]?\d*\.?\d+/g);
+    let x = 0, y = 0, minY = Infinity, maxY = -Infinity;
+    const track = () => { minY = Math.min(minY, y); maxY = Math.max(maxY, y); };
+    let i = 0;
+    while (i < tokens.length) {
+      const cmd = tokens[i++];
+      const n = () => parseFloat(tokens[i++]);
+      if (cmd === "M" || cmd === "L") { x = n(); y = n(); track(); }
+      else if (cmd === "m" || cmd === "l") { x += n(); y += n(); track(); }
+      else if (cmd === "H") { x = n(); track(); }
+      else if (cmd === "h") { x += n(); track(); }
+      else if (cmd === "V") { y = n(); track(); }
+      else if (cmd === "v") { y += n(); track(); }
+      else if (cmd === "z" || cmd === "Z") { /* close */ }
+      else if (/\d/.test(cmd) || cmd === "-" || cmd === ".") {
+        i--; x = n(); y = n(); track();
+      }
+    }
+    return maxY - minY;
+  }
+  const caretSpan = yExtent("caret-down");
+  const filterSpan = yExtent("filter");
+  assert.ok(Math.abs(filterSpan - caretSpan) <= 1,
+    `filter vertical span (${filterSpan}) should be within 1 unit of caret (${caretSpan})`);
 });
 
 test("each call returns a fresh element — no shared mutable node", () => {

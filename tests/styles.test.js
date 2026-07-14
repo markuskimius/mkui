@@ -224,6 +224,15 @@ test("header cells lay out as a flex row, filter button un-floated", () => {
     "a floated filter button overlaps nowrap header text when squeezed");
 });
 
+test("filter icon matches the sort icon's CSS dimensions", () => {
+  const sortW = declaration(".mkui-sort-indicator .mkui-icon", "width");
+  const sortH = declaration(".mkui-sort-indicator .mkui-icon", "height");
+  const filterW = declaration(".mkui-filter-btn .mkui-icon", "width");
+  const filterH = declaration(".mkui-filter-btn .mkui-icon", "height");
+  assert.equal(filterW, sortW, "filter and sort icons should be the same width");
+  assert.equal(filterH, sortH, "filter and sort icons should be the same height");
+});
+
 // SVG icons must never intercept pointer events: click/drag handlers
 // hit-test against the hosting button (e.g. closest(".mkui-filter-btn")
 // works, but tab-drag and column-drag target checks assume the button

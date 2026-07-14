@@ -530,7 +530,7 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   align-items: center;
   font-size: 10px; /* multi-sort priority superscript next to the caret */
 }
-.mkui-sort-indicator .mkui-icon { width: 10px; height: 10px; }
+.mkui-sort-indicator .mkui-icon { width: 16px; height: 16px; }
 .mkui-filter-btn {
   display: inline-flex;
   align-items: center;
@@ -539,7 +539,7 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   border-radius: 2px;
   cursor: pointer;
 }
-.mkui-filter-btn .mkui-icon { width: 10px; height: 10px; }
+.mkui-filter-btn .mkui-icon { width: 16px; height: 16px; }
 .mkui-filter-btn:hover { color: var(--mkui-fg); background: var(--mkui-bg-hover); }
 .mkui-filter-btn.active { color: var(--mkui-accent); }
 

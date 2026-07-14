@@ -30,6 +30,7 @@ const FILLED = {
   "caret-up": ["M12 5l9 13H3z"],
   "caret-down": ["M12 19 3 6h18z"],
   dot: ["M12 4a8 8 0 1 1 0 16 8 8 0 0 1 0-16z"],
+  filter: ["M19.2 5.5H4.8l5.8 6.8V17l2.9 1.5v-6.2L19.2 5.5z"],
 };
 
 const NS = "http://www.w3.org/2000/svg";

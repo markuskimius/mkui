@@ -29,7 +29,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 - `mkui/static/src/components/frame.js` — frame chrome, internal tree rendering, splitter drag; also defines `<mkui-pane>`
 - `mkui/static/src/components/app.js` — shell: menubar + workspace + statusbar
 - `mkui/static/src/core.js` — `App`, `State` (reactive store), widget/pane-type registries
-- `mkui/static/src/lib/icons.js` — SVG icon library: `icon(name)` returns a currentColor `<svg>` built from vendored path data (Lucide outlines + custom filled carets/dot) — no icon font, no external fetch; sized per context via `.mkui-icon` CSS rules
+- `mkui/static/src/lib/icons.js` — SVG icon library: `icon(name)` returns a currentColor `<svg>` built from vendored path data (Lucide outlines + custom filled carets/dot/filter) — no icon font, no external fetch; sized per context via `.mkui-icon` CSS rules
 - `mkui/static/src/widgets/mkio-table.js` — built-in `mkio-table` pane type: subscribes to mkio services, renders live tables
 - `mkui/static/src/widgets/mkui-dialog.js` — `openDialog()`: config-driven modal dialogs with validation, RPC submission, and pin-to-keep-open
 - `mkui/static/src/auth.js` — config-driven login dialog; `showLogin()` authenticates before the app loads
@@ -148,9 +148,9 @@ Animations: inserts flash blue and fade in, deletes flash red and fade out, fiel
 
 Each pane instance gets a unique `subid` for multiplexing multiple subscriptions to the same service on one WebSocket.
 
-Sorting: click a column header to cycle ascending → descending → none. Shift+click adds secondary sort keys for multi-column sort; priority shown with superscript numbers (▲¹ ▼²). Auto-detects numeric vs string comparison. New rows insert at the correct sorted position; sort state persists across resubscribes.
+Sorting: click a column header to cycle ascending → descending → none. Shift+click adds secondary sort keys for multi-column sort; priority is a digit knocked out *inside* the 16px caret (`.mkui-sort-num`, drawn in the header background color, offset toward the triangle's wide base per direction — the icon is sized to barely contain one digit). Sort and filter icons always pin to the header cell's right edge (`.mkui-th-label` is `flex: 1`). Auto-detects numeric vs string comparison. Guarded by `tests/styles.test.js`. New rows insert at the correct sorted position; sort state persists across resubscribes.
 
-Filtering: each column header has a ▾ dropdown button. Click to open a filter panel with a search input, "Select all"/"Clear" links, and checkboxes for each unique value. Changes apply immediately. Active filters show the ▾ in accent color. Multiple columns can be filtered independently. Filter state persists across resubscribes.
+Filtering: each column header has a filter button (`icon("filter")`, a filled funnel scaled to match the sort caret's visual height). Click to open a filter panel anchored to the column's right edge, with a search input, "Select all"/"Clear" links, and checkboxes for each unique value. Changes apply immediately. Active filters show the icon in accent color. Multiple columns can be filtered independently. Filter state persists across resubscribes.
 
 Virtualized rows: only the rows overlapping the viewport (plus 10 overscan each side) exist as DOM elements; two `.mkui-vspacer` rows (top/bottom of tbody) carry the height of everything else, so scrolling, pane resizes, and frame moves are O(visible) regardless of row count (~40 `tr`s for any dataset — designed for a million rows). Data lives in a `rows` Map plus a `baseOrder` keys array (display/insertion order); `view` is the filtered+sorted keys array that drives rendering. `render()` reconciles the visible slice into the tbody between the spacers, reusing keyed `tr`s (`rowEls` holds only rendered rows) and leaving in-place rows untouched so running flash animations aren't restarted. Inserts/deletes/replaces do incremental `view` surgery (binary search when sorted); sort/filter changes mark the view dirty for a full rebuild. Renders trigger on data change, scroll (sync, with an unchanged-slice early-exit), pane resize (`ResizeObserver`), and pane visibility. Row height is measured from the first rendered row (uniform — cells never wrap).
 
@@ -184,6 +184,7 @@ Pin button: an SVG pin-icon toggle (`icon("pin")`) in the dialog's titlebar (fra
 
 ## Conventions
 
+- Worktree sessions must keep the main checkout in sync: when editing files in a worktree, apply the same changes to the main checkout so the running dev server reflects them immediately
 - Zero runtime dependencies; Web Components for framework-agnostic use
 - Icons are inline SVGs from `lib/icons.js` (`icon(name)`), never text glyphs — they inherit color via `currentColor` and are sized per context by `.mkui-icon` CSS rules. `.mkui-icon` keeps `pointer-events: none` so hit-testing lands on the hosting button (guarded by `tests/styles.test.js`)
 - `registerPaneType(name, factory)` for custom content; `registerWidget(name, factory)` for lightweight inline widgets
