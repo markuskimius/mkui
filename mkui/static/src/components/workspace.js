@@ -17,6 +17,23 @@ import { getPaneType, getWidget } from "../core.js";
 import { clampToDock, rectToFrac, fracToRect, dropZoneFor, previewRect, snapMove, snapResize, cascadePosition } from "../layout/drag.js";
 import { layout, insertPane, removePane, findPane, firstTabGroup, listPanes } from "../layout/tree.js";
 
+// Write a frame rect to an element's style in whole pixels. Frame geometry
+// is fractional (frac × workspace size, pointer deltas), but the frame's
+// internal layout measures its body via clientWidth/clientHeight — integers
+// — so a fractional frame size leaves a sub-pixel sliver of frame background
+// along the bottom/right edge (a hairline under a pane's horizontal
+// scrollbar). Rounding the edges (not width/height independently) keeps
+// frames flush with the dock and with frames they're snapped against.
+function applyFrameRect(el, r) {
+  const x = Math.round(r.x), y = Math.round(r.y);
+  Object.assign(el.style, {
+    left: x + "px",
+    top: y + "px",
+    width: (Math.round(r.x + r.w) - x) + "px",
+    height: (Math.round(r.y + r.h) - y) + "px",
+  });
+}
+
 class MkuiWorkspace extends HTMLElement {
   constructor() {
     super();
@@ -191,12 +208,7 @@ class MkuiWorkspace extends HTMLElement {
       const frac = rectToFrac(r, ws);
       spec.x = frac.xFrac; spec.y = frac.yFrac;
       spec.w = frac.wFrac; spec.h = frac.hFrac;
-      Object.assign(el.style, {
-        left: r.x + "px",
-        top: r.y + "px",
-        width: r.w + "px",
-        height: r.h + "px",
-      });
+      applyFrameRect(el, r);
     }
   }
 
@@ -539,7 +551,7 @@ class MkuiWorkspace extends HTMLElement {
         spec.w = pre.w; spec.h = pre.h;
         this._clearTileState(spec, frameEl);
         snap = this._getSnapLines(spec.id);
-        Object.assign(frameEl.style, { width: newW + "px", height: newH + "px" });
+        Object.assign(frameEl.style, { width: Math.round(newW) + "px", height: Math.round(newH) + "px" });
         restored = true;
       }
       const wr = this.getBoundingClientRect();
@@ -550,8 +562,8 @@ class MkuiWorkspace extends HTMLElement {
       spec.x = frac.xFrac; spec.y = frac.yFrac;
       spec.w = frac.wFrac; spec.h = frac.hFrac;
       Object.assign(frameEl.style, {
-        left: clamped.x + "px",
-        top: clamped.y + "px",
+        left: Math.round(clamped.x) + "px",
+        top: Math.round(clamped.y) + "px",
       });
     };
     const up = () => {
@@ -597,12 +609,7 @@ class MkuiWorkspace extends HTMLElement {
       const frac = rectToFrac(clamped, ws);
       spec.x = frac.xFrac; spec.y = frac.yFrac;
       spec.w = frac.wFrac; spec.h = frac.hFrac;
-      Object.assign(frameEl.style, {
-        left: clamped.x + "px",
-        top: clamped.y + "px",
-        width: clamped.w + "px",
-        height: clamped.h + "px",
-      });
+      applyFrameRect(frameEl, clamped);
     };
     const up = () => {
       window.removeEventListener("mousemove", move);
@@ -761,7 +768,7 @@ class MkuiWorkspace extends HTMLElement {
         );
         const frac = rectToFrac(clamped, ws);
         spec.x = frac.xFrac; spec.y = frac.yFrac;
-        Object.assign(el.style, { left: clamped.x + "px", top: clamped.y + "px" });
+        Object.assign(el.style, { left: Math.round(clamped.x) + "px", top: Math.round(clamped.y) + "px" });
 
         drop = this._hitTestForDrop(el, e.clientX, e.clientY);
         if (drop) this._showDropOverlay(drop.previewRect);
