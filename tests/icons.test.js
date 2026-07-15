@@ -28,7 +28,7 @@ const { icon } = await import("../mkui/static/src/lib/icons.js");
 const OUTLINE_NAMES = [
   "close", "maximize", "pin", "refresh", "chevron-left", "chevron-right",
 ];
-const FILLED_NAMES = ["caret-up", "caret-down", "dot"];
+const FILLED_NAMES = ["caret-up", "caret-down", "dot", "filter"];
 
 test("unknown icon name throws", () => {
   assert.throws(() => icon("no-such-icon"), /unknown icon: no-such-icon/);

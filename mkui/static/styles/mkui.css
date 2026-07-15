@@ -503,9 +503,12 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-table-fixed .mkui-th-inner {
   overflow: hidden;
 }
-/* overflow:hidden lets the label shrink below its content (flex min-size
-   rule) so the sort/filter buttons stay visible in a narrow column. */
+/* flex:1 makes the label claim all free space, pinning the sort and filter
+   icons to the cell's right edge; overflow:hidden lets it also shrink below
+   its content (flex min-size rule) so the icons stay visible in a narrow
+   column. */
 .mkui-th-label {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -526,20 +529,45 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
     transparent 2.5px, var(--mkui-accent) 2.5px 4.5px, transparent 4.5px);
 }
 .mkui-sort-indicator {
+  position: relative; /* anchors the multi-sort priority digit overlay */
   display: inline-flex;
   align-items: center;
-  font-size: 10px; /* multi-sort priority superscript next to the caret */
 }
-.mkui-sort-indicator .mkui-icon { width: 10px; height: 10px; }
+/* Big enough for a one-digit priority number to (barely) fit inside the
+   filled caret. */
+.mkui-sort-indicator .mkui-icon { width: 16px; height: 16px; }
+/* Multi-sort priority: the digit is knocked out of the caret (drawn in the
+   header background color) inside the triangle's wide half — the base sits
+   4px in from the box edge at this size, so the digit hugs it: bottom of an
+   ascending ▲, top of a descending ▼. */
+.mkui-sort-num {
+  position: absolute;
+  left: 0; right: 0;
+  text-align: center;
+  font-family: var(--mkui-font);
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--mkui-bg-alt);
+  pointer-events: none;
+}
+.mkui-sort-asc  .mkui-sort-num { bottom: 4px; }
+/* 1px tighter against the ▼ base: digit glyphs are widest at mid/bottom,
+   which lands in the narrowing half of an inverted triangle. */
+.mkui-sort-desc .mkui-sort-num { top: 3px; }
 .mkui-filter-btn {
   display: inline-flex;
   align-items: center;
   color: var(--mkui-fg-mute);
   padding: 2px 3px;
+  /* Cancel the vertical padding's footprint so the button adds no header
+     height beyond its 16px icon (the padding still pads the hover pill). */
+  margin: -2px 0;
   border-radius: 2px;
   cursor: pointer;
 }
-.mkui-filter-btn .mkui-icon { width: 10px; height: 10px; }
+/* Same size as the sort caret. */
+.mkui-filter-btn .mkui-icon { width: 16px; height: 16px; }
 .mkui-filter-btn:hover { color: var(--mkui-fg); background: var(--mkui-bg-hover); }
 .mkui-filter-btn.active { color: var(--mkui-accent); }
 

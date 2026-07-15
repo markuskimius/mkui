@@ -520,8 +520,6 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
   }
 
-  const SUPER = "¹²³⁴⁵⁶⁷⁸⁹";
-
   function closeDropdown() {
     if (dropdown) { dropdown.remove(); dropdown = null; dropdownCol = null; }
     if (dropdownCleanup) { dropdownCleanup(); dropdownCleanup = null; }
@@ -692,7 +690,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
       const filterBtn = document.createElement("span");
       filterBtn.className = "mkui-filter-btn";
-      filterBtn.appendChild(icon("caret-down"));
+      filterBtn.appendChild(icon("filter"));
 
       const sortInd = document.createElement("span");
       sortInd.className = "mkui-sort-indicator";
@@ -771,9 +769,18 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const ind = th.querySelector(".mkui-sort-indicator");
       const si = sortKeys.findIndex((k) => k.col === col);
       ind.textContent = "";
+      ind.className = "mkui-sort-indicator";
       if (si >= 0) {
-        ind.appendChild(icon(sortKeys[si].dir === "asc" ? "caret-up" : "caret-down"));
-        if (sortKeys.length > 1) ind.append(SUPER[si] || String(si + 1));
+        const dir = sortKeys[si].dir;
+        ind.classList.add(dir === "asc" ? "mkui-sort-asc" : "mkui-sort-desc");
+        ind.appendChild(icon(dir === "asc" ? "caret-up" : "caret-down"));
+        if (sortKeys.length > 1) {
+          // Priority digit overlaid inside the caret (see .mkui-sort-num).
+          const num = document.createElement("span");
+          num.className = "mkui-sort-num";
+          num.textContent = String(si + 1);
+          ind.appendChild(num);
+        }
       }
       const btn = th.querySelector(".mkui-filter-btn");
       btn.classList.toggle("active", filters.has(col));
@@ -879,7 +886,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     dd.style.position = "fixed";
     dd.style.zIndex = "10001";
 
-    let left = rect.left;
+    let left = rect.right - 200;
+    if (left < 4) left = 4;
     if (left + 200 > window.innerWidth) left = Math.max(4, window.innerWidth - 204);
     dd.style.left = left + "px";
     dd.style.top = (rect.bottom + 1) + "px";

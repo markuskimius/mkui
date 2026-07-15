@@ -224,6 +224,42 @@ test("header cells lay out as a flex row, filter button un-floated", () => {
     "a floated filter button overlaps nowrap header text when squeezed");
 });
 
+test("sort/filter icons pin to the header cell's right edge", () => {
+  // The label claims all free space, pushing the icons right regardless of
+  // how wide the column is.
+  assert.match(declaration(".mkui-th-label", "flex"), /^1\b/);
+});
+
+test("multi-sort priority digit overlays inside the caret", () => {
+  assert.equal(declaration(".mkui-sort-num", "position"), "absolute");
+  // Knocked out in the header background color so it reads as a cutout of
+  // the filled caret rather than a stray character next to it.
+  assert.equal(declaration(".mkui-sort-num", "color"), "var(--mkui-bg-alt)");
+  // Digit sits in the triangle's wide half: base-side offset per direction.
+  assert.ok(declaration(".mkui-sort-asc  .mkui-sort-num", "bottom"));
+  assert.ok(declaration(".mkui-sort-desc .mkui-sort-num", "top"));
+  // The digit is positioned against the caret's box, so the indicator must
+  // establish the containing block.
+  assert.equal(declaration(".mkui-sort-indicator", "position"), "relative");
+});
+
+test("sort caret and filter funnel are the same 16px size", () => {
+  // The caret has to be big enough for the priority digit to fit inside its
+  // wide half; the funnel matches it so the header icons read as one set.
+  assert.equal(declaration(".mkui-sort-indicator .mkui-icon", "width"), "16px");
+  assert.equal(declaration(".mkui-sort-indicator .mkui-icon", "height"), "16px");
+  assert.equal(declaration(".mkui-filter-btn .mkui-icon", "width"), "16px");
+  assert.equal(declaration(".mkui-filter-btn .mkui-icon", "height"), "16px");
+});
+
+test("filter button's vertical padding is margin-cancelled", () => {
+  // The padding inflates the hover pill but must not add header height
+  // beyond the 16px icon, so the vertical margin cancels it exactly.
+  const vpad = declaration(".mkui-filter-btn", "padding").split(/\s+/)[0];
+  const vmargin = declaration(".mkui-filter-btn", "margin").split(/\s+/)[0];
+  assert.equal(vmargin, "-" + vpad);
+});
+
 // SVG icons must never intercept pointer events: click/drag handlers
 // hit-test against the hosting button (e.g. closest(".mkui-filter-btn")
 // works, but tab-drag and column-drag target checks assume the button
