@@ -211,7 +211,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   let displayOrder = null;
   const colWidths = new Map();
   let widthsInited = false;
+  let widthsDirty = false;     // a ratchet grew a column — colgroup refresh pending
+  const userSized = new Set(); // manually resized columns: auto-grow keeps hands off
   const MIN_COL_W = 40;
+  const CELL_CHROME = 17;      // 8px cell padding each side + 1px divider (mkui.css)
   const labels = spec.labels ?? {};
   const label = (col) => labels[col] ?? col;
   const visibleColumns = () =>
@@ -224,7 +227,26 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // pad is (column's widest fraction - this cell's fraction) in ch, which
   // is exact in the table's monospace font. maxFrac is a one-way ratchet
   // (deletes don't shrink it), reset when the data is cleared.
-  const colStats = new Map(); // col -> { numeric, maxFrac }
+  const colStats = new Map(); // col -> { numeric, maxFrac, maxIntW, maxTextW }
+
+  // Canvas text measurement in the table font — lets ingestion grow column
+  // widths from raw values without touching DOM layout. chW is the width of
+  // one mono character ("0"), the same unit as maxFrac's ch padding.
+  let measureCtx = null, chW = 0;
+  function ensureMeasureCtx() {
+    if (measureCtx) return true;
+    if (typeof getComputedStyle !== "function") return false;
+    const cs = getComputedStyle(table);
+    if (!cs.fontSize || cs.fontSize === "0px") return false; // not styled yet
+    const ctx = document.createElement("canvas").getContext?.("2d");
+    if (!ctx) return false;
+    ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+    const w = ctx.measureText("0").width;
+    if (!(w > 0)) return false;
+    measureCtx = ctx;
+    chW = w;
+    return true;
+  }
 
   // Length of the "." + fraction-digits suffix, 0 for integers.
   const fracLen = (s) => {
@@ -254,23 +276,40 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function bumpStats(row) {
+    const canMeasure = ensureMeasureCtx();
     for (const k in row) {
       if (k.startsWith("_mkio_")) continue;
       const v = row[k];
       if (v == null || v === "") continue;
       let st = colStats.get(k);
-      if (!st) { st = { numeric: true, maxFrac: 0 }; colStats.set(k, st); }
-      if (!st.numeric) continue;
+      if (!st) { st = { numeric: true, maxFrac: 0, maxIntW: 0, maxTextW: 0 }; colStats.set(k, st); }
       const s = String(v);
-      let changed = false;
-      if (isNaN(Number(s))) {
-        st.numeric = false;
-        changed = true;
-      } else {
-        const f = fracLen(s);
-        if (f > st.maxFrac) { st.maxFrac = f; changed = true; }
+      let grew = false;
+      if (st.numeric) {
+        let changed = false;
+        if (isNaN(Number(s))) {
+          st.numeric = false;
+          changed = true;
+        } else {
+          const f = fracLen(s);
+          if (f > st.maxFrac) { st.maxFrac = f; changed = grew = true; }
+        }
+        if (changed) restyleColumn(k);
       }
-      if (changed) restyleColumn(k);
+      if (!canMeasure) continue;
+      // Width ratchet: numeric strings are ASCII, exactly 1ch per char in
+      // the mono table font; text is canvas-measured, skipped when even at
+      // 2ch per char (fullwidth glyphs) it can't beat the current max.
+      let w;
+      if (st.numeric) w = s.length * chW;
+      else if (2 * s.length * chW <= st.maxTextW) w = 0;
+      else w = measureCtx.measureText(s).width;
+      if (w > st.maxTextW) { st.maxTextW = w; grew = true; }
+      if (st.numeric) {
+        const iw = w - fracLen(s) * chW; // width of the integer part
+        if (iw > st.maxIntW) { st.maxIntW = iw; grew = true; }
+      }
+      if (grew) growColWidth(k, st);
     }
   }
 
@@ -354,6 +393,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function render() {
+    if (widthsDirty) {
+      widthsDirty = false;
+      if (widthsInited) renderColgroup();
+    }
     if (viewDirty) rebuildView();
     const total = view.length;
     const vh = scrollHost.clientHeight || 400;
@@ -567,7 +610,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // Widths are keyed by column name in colWidths so they survive reorder,
   // resubscribe, and paging-mode switches. Until widthsInited the table
   // auto-lays-out; after init a <colgroup> + table-layout:fixed pins each
-  // column and overflowing cell text is clipped with an ellipsis.
+  // column and overflowing cell text is clipped with an ellipsis. Init
+  // happens as soon as the header can be measured — before any data — so
+  // columns start at header width and only grow from there as records
+  // arrive (growColWidth, driven by bumpStats).
 
   function renderColgroup() {
     colgroup.innerHTML = "";
@@ -594,17 +640,37 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     table.style.width = ""; // width:100% from .mkui-table; also undoes the max-content measuring width
   }
 
-  // Default width = the column's natural width from the initial snapshot
-  // (auto layout puts the widest cell's width on the th), capped at half
-  // the pane's visible width. Runs once, on the first data that renders.
+  const maxColWidth = () => {
+    const hostW = scrollHost.clientWidth || window.innerWidth || 0;
+    return hostW > 0 ? Math.max(MIN_COL_W, hostW / 2) : Infinity;
+  };
+
+  // Ratchet a column up to fit its widest measured content: numeric columns
+  // need max-integer + max-fraction so decimal points align, text columns
+  // just the widest string. Never shrinks, never overrides a manual resize,
+  // capped at half the pane. The colgroup refresh is deferred to the next
+  // render() so a snapshot chunk costs one refresh, not one per row.
+  function growColWidth(col, st) {
+    if (userSized.has(col)) return;
+    const content = st.numeric ? st.maxIntW + st.maxFrac * chW : st.maxTextW;
+    const needed = Math.min(Math.ceil(content) + CELL_CHROME, maxColWidth());
+    if (needed > (colWidths.get(col) ?? 0)) {
+      colWidths.set(col, needed);
+      widthsDirty = true;
+    }
+  }
+
+  // Initial width = the column's header width, measured under max-content
+  // (the default width:100% would stretch the headers across the pane
+  // first), capped at half the pane. Runs as soon as the header exists —
+  // before any data — so the table starts at header widths and only grows
+  // from there. If the pane isn't laid out yet the measurement reads 0 and
+  // widths stay un-inited; data events and the visibility observer retry.
   function maybeInitWidths() {
-    if (widthsInited || rows.size === 0) return;
+    if (widthsInited || !columns) return;
     const ths = thead.querySelectorAll("th");
     if (!ths.length) return;
-    const hostW = scrollHost.clientWidth || window.innerWidth || 0;
-    const maxW = hostW > 0 ? Math.max(MIN_COL_W, hostW / 2) : Infinity;
-    // Measure natural content widths — max-content overrides the default
-    // width:100% so columns aren't stretched to fill the pane first.
+    const maxW = maxColWidth();
     const prevWidth = table.style.width;
     table.style.width = "max-content";
     let measured = false;
@@ -612,18 +678,21 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (!th.dataset.col) continue; // filler cell
       const w = th.getBoundingClientRect().width;
       if (w > 0) {
-        colWidths.set(th.dataset.col, Math.min(Math.max(w, MIN_COL_W), maxW));
+        colWidths.set(th.dataset.col,
+          Math.min(Math.max(w, colWidths.get(th.dataset.col) ?? 0, MIN_COL_W), maxW));
         measured = true;
       }
     }
-    if (!measured) { table.style.width = prevWidth; return; } // pane hidden — retry on next data
+    if (!measured) { table.style.width = prevWidth; return; } // pane hidden — retry later
     widthsInited = true;
     renderColgroup();
   }
 
   function resetColWidths() {
     colWidths.clear();
+    userSized.clear();
     widthsInited = false;
+    widthsDirty = false;
     colgroup.innerHTML = "";
     table.classList.remove("mkui-table-fixed");
     table.style.width = "";
@@ -648,6 +717,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
     function onMove(e2) {
       if (e2.pointerId !== pid) return;
+      userSized.add(col); // manual width — stop auto-growing this column
       colWidths.set(col, Math.max(MIN_COL_W, startW + (e2.clientX - startX)));
       renderColgroup();
     }
@@ -760,6 +830,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     topSpacerTd.colSpan = visCols.length + 1;
     botSpacerTd.colSpan = visCols.length + 1;
     renderColgroup();
+    maybeInitWidths();
   }
 
   function updateHeaderState() {
@@ -1037,6 +1108,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       columns = Object.keys(snap[0]);
       renderHead();
     }
+    maybeInitWidths(); // lock header widths before rows render, not after
     // At least CHUNK per frame, but never more than ~50 frames total —
     // a million-row snapshot ingests in 20k-row chunks, not 10k frames.
     const chunkSize = Math.max(CHUNK, Math.ceil(snap.length / 50));
@@ -1052,7 +1124,6 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (snap.length <= chunkSize) {
       ingest(snap.length);
       maybeRestoreScroll();
-      maybeInitWidths();
       return;
     }
 
@@ -1068,7 +1139,6 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       } else {
         progress.style.display = "none";
         maybeRestoreScroll();
-        maybeInitWidths();
       }
     }
     renderChunk();
@@ -1079,11 +1149,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       columns = Object.keys(row);
       renderHead();
     }
+    maybeInitWidths(); // lock header widths before the row renders
     insertRow(row);
     render();
     const tr = rowEls.get(row[idKey]);
     if (tr) flash(tr, "mkui-flash-in");
-    maybeInitWidths();
   }
 
   function applyDelete(row) {
@@ -1280,11 +1350,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         }
         if (pageRows.length > 0) {
           if (!columns) { columns = Object.keys(pageRows[0]); renderHead(); }
+          maybeInitWidths(); // lock header widths before rows render
           for (const row of pageRows) insertRow(row);
           render();
           firstRef = pageRows[0]._mkio_ref;
           lastRef = pageRows[pageRows.length - 1]._mkio_ref;
-          maybeInitWidths();
         } else if (before && prevPageLoadRef != null) {
           noPrev = true;
           fetchPage(prevPageLoadRef, prevPageLoadBefore);
@@ -1350,6 +1420,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         if (pageRows.length > 0) {
           hasEarlierPages = true;
           if (!columns) { columns = Object.keys(pageRows[0]); renderHead(); }
+          maybeInitWidths(); // lock header widths before rows render
           // Prepend the earlier page in display order without disturbing
           // the live rows below it.
           const keys = [];
@@ -1363,7 +1434,6 @@ registerPaneType("mkio-table", async (spec, app, host) => {
           markViewDirty();
           render();
           firstRef = pageRows[0]._mkio_ref;
-          maybeInitWidths();
         }
         updatePagingUI();
       },
@@ -1471,6 +1541,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const visible = entries[0].intersectionRatio > 0;
     if (visible) {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+      maybeInitWidths(); // header wasn't measurable while hidden
       render(); // viewport may have appeared/changed while hidden
       if (isPaged && !liveMode) {
         if (!subscribed) fetchPage(pageLoadRef, pageLoadBefore);

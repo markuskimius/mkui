@@ -474,8 +474,8 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   align-items: center;
   gap: 1px;
 }
-/* Fixed column widths, applied once the initial snapshot is measured (or
-   after a manual resize). Widths live on <colgroup> cols and the table
+/* Fixed column widths, applied once the header row is measured (data then
+   only grows columns). Widths live on <colgroup> cols and the table
    keeps the base width:100%: under fixed layout the used width is
    max(pane, sum of col widths), so data columns always keep their exact
    widths — a wider pane only grows the auto-width filler column

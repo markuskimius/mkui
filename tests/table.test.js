@@ -135,7 +135,14 @@ function mockEl(tag) {
 }
 
 globalThis.document = {
-  createElement: (tag) => mockEl(tag),
+  createElement: (tag) => {
+    const el = mockEl(tag);
+    // Canvas text measurement (column width auto-grow): 6px per character,
+    // matching the mocked chW below.
+    if (tag === "canvas")
+      el.getContext = () => ({ font: "", measureText: (s) => ({ width: s.length * 6 }) });
+    return el;
+  },
   createElementNS: (_ns, tag) => mockEl(tag),
   createTextNode: (text) => ({ textContent: text, nodeType: 3 }),
   createDocumentFragment() {
@@ -154,6 +161,8 @@ globalThis.document = {
 };
 globalThis.window = globalThis;
 globalThis.CSS = { escape: (s) => s };
+// Table font for width measurement — chW ("0") is 6px via the canvas mock.
+globalThis.getComputedStyle = () => ({ fontWeight: "400", fontSize: "12px", fontFamily: "monospace" });
 
 let rafQueue = [];
 globalThis.requestAnimationFrame = (fn) => { rafQueue.push(fn); return rafQueue.length; };
@@ -2190,6 +2199,110 @@ test("pane reopen resets column widths for re-measurement", async () => {
   lastSubscribe().opts.onSnapshot(makeRows(5));
   assert.ok(getTable(host).classList.contains("mkui-table-fixed"), "re-measured on new data");
   assert.equal(getColgroup(host)._ch.length, 3);
+});
+
+test("pre-configured columns lock at header width before any data", async () => {
+  const { host } = await createTable({ protocol: "query", columns: ["name", "value"] });
+  const table = getTable(host);
+  assert.ok(table.classList.contains("mkui-table-fixed"), "fixed layout from the header alone");
+  const cols = getColgroup(host)._ch;
+  assert.equal(cols[0].style.width, "100px", "header-measured width, no data yet");
+  assert.equal(cols[1].style.width, "100px");
+});
+
+test("columns grow to fit wider records as they arrive", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(3));
+  assert.equal(getColgroup(host)._ch[0].style.width, "100px", "header width fits short values");
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "x", name: "x".repeat(30), value: 5 });
+  assert.equal(getColgroup(host)._ch[0].style.width, (30 * 6 + 17) + "px",
+    "grew to fit the widest value");
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "y", name: "short", value: 6 });
+  assert.equal(getColgroup(host)._ch[0].style.width, (30 * 6 + 17) + "px",
+    "narrower values never shrink a column");
+});
+
+test("auto-grow is capped at half the pane width", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(3));
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "x", name: "y".repeat(100), value: 5 });
+  assert.equal(getColgroup(host)._ch[0].style.width, "200px", "clamped to half of 400px pane");
+});
+
+test("numeric columns grow to max-integer plus max-fraction width", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", value: "123456789012345678" }, // 18-char integer part
+    { _mkio_row: "2", name: "b", value: "1.2345" },             // 5-char ".fraction"
+  ]);
+  // Decimal alignment needs max integer part + max fraction: 18ch + 5ch.
+  assert.equal(getColgroup(host)._ch[1].style.width, (23 * 6 + 17) + "px");
+});
+
+test("a manually resized column stops auto-growing", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(3));
+  const resizer = getGrips(host)[0];
+  resizer._ev.pointerdown[0]({
+    button: 0, pointerId: 11, clientX: 100,
+    stopPropagation() {}, preventDefault() {},
+  });
+  document._ev.pointermove.at(-1)({ pointerId: 11, clientX: 120 });
+  document._ev.pointerup.at(-1)({ pointerId: 11 });
+  assert.equal(getColgroup(host)._ch[0].style.width, "120px");
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "x", name: "z".repeat(30), value: 5 });
+  assert.equal(getColgroup(host)._ch[0].style.width, "120px", "manual width wins over auto-grow");
+});
+
+test("columns grow between chunks of a large snapshot", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  // 150 rows ingest in 100-row chunks; the wide value sits in the 2nd chunk.
+  const snap = makeRows(150);
+  snap[120].name = "w".repeat(30);
+  lastSubscribe().opts.onSnapshot(snap);
+  assert.equal(getColgroup(host)._ch[0].style.width, "100px",
+    "first chunk fits within the header width");
+  flushRaf();
+  assert.equal(getColgroup(host)._ch[0].style.width, (30 * 6 + 17) + "px",
+    "second chunk grew the column mid-snapshot");
+});
+
+test("a numeric column that flips to text grows to its widest string", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(3)); // value column is numeric
+  assert.equal(getColgroup(host)._ch[1].style.width, "100px");
+  lastSubscribe().opts.onUpdate("insert",
+    { _mkio_row: "x", name: "a", value: "not a number but a long string" }); // 30 chars
+  assert.equal(getColgroup(host)._ch[1].style.width, (30 * 6 + 17) + "px",
+    "text width drives the column after the numeric flip");
+});
+
+test("pane reopen re-enables auto-grow after a manual resize", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(3));
+  const resizer = getGrips(host)[0];
+  resizer._ev.pointerdown[0]({
+    button: 0, pointerId: 12, clientX: 100,
+    stopPropagation() {}, preventDefault() {},
+  });
+  document._ev.pointermove.at(-1)({ pointerId: 12, clientX: 120 });
+  document._ev.pointerup.at(-1)({ pointerId: 12 });
+
+  const paneEl = host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+  for (const fn of paneEl._ev["mkui-pane-open"] ?? []) fn();
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(3));
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "x", name: "q".repeat(30), value: 5 });
+  assert.equal(getColgroup(host)._ch[0].style.width, (30 * 6 + 17) + "px",
+    "manual-resize opt-out cleared by reopen");
 });
 
 /* ── Numeric decimal alignment ───────────────────────────────────────── */

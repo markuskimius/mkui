@@ -184,7 +184,7 @@ test("table cells never wrap", () => {
 });
 
 test("fixed-width table stretches via the filler column only", () => {
-  // Column widths are locked from the initial snapshot and live on the
+  // Column widths are locked from the measured header row and live on the
   // <colgroup> cols. The table must lay out at width:100% (from
   // .mkui-table) under table-layout:fixed: the used width is then
   // max(pane, sum of cols), so data columns keep their exact widths and a
