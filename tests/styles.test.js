@@ -235,6 +235,11 @@ test("multi-sort priority digit overlays inside the caret", () => {
   // Knocked out in the header background color so it reads as a cutout of
   // the filled caret rather than a stray character next to it.
   assert.equal(declaration(".mkui-sort-num", "color"), "var(--mkui-bg-alt)");
+  // The caret lives inside the filter button, whose hover pill changes the
+  // background — the knockout must track it or the digit stops reading as
+  // a hole in the caret.
+  assert.equal(declaration(".mkui-filter-btn:hover .mkui-sort-num", "color"),
+    "var(--mkui-bg-hover)");
   // Digit sits in the triangle's wide half: base-side offset per direction.
   assert.ok(declaration(".mkui-sort-asc  .mkui-sort-num", "bottom"));
   assert.ok(declaration(".mkui-sort-desc .mkui-sort-num", "top"));
@@ -243,21 +248,32 @@ test("multi-sort priority digit overlays inside the caret", () => {
   assert.equal(declaration(".mkui-sort-indicator", "position"), "relative");
 });
 
-test("sort caret and filter funnel are the same 16px size", () => {
+test("sort caret and filter hamburger are the same 16px size", () => {
   // The caret has to be big enough for the priority digit to fit inside its
-  // wide half; the funnel matches it so the header icons read as one set.
+  // wide half; the hamburger matches it so the header icons read as one set.
   assert.equal(declaration(".mkui-sort-indicator .mkui-icon", "width"), "16px");
   assert.equal(declaration(".mkui-sort-indicator .mkui-icon", "height"), "16px");
   assert.equal(declaration(".mkui-filter-btn .mkui-icon", "width"), "16px");
   assert.equal(declaration(".mkui-filter-btn .mkui-icon", "height"), "16px");
 });
 
-test("filter button's vertical padding is margin-cancelled", () => {
-  // The padding inflates the hover pill but must not add header height
-  // beyond the 16px icon, so the vertical margin cancels it exactly.
-  const vpad = declaration(".mkui-filter-btn", "padding").split(/\s+/)[0];
-  const vmargin = declaration(".mkui-filter-btn", "margin").split(/\s+/)[0];
+test("filter button's padding is margin-cancelled on both axes", () => {
+  // The padding inflates the hover pill but must not add to the button's
+  // footprint: no header height beyond the 16px icon, and no extra
+  // distance from the sort caret or the cell's padding edge — the pill
+  // overhangs its neighbors instead of pushing them away.
+  const [vpad, hpad] = declaration(".mkui-filter-btn", "padding").split(/\s+/);
+  const [vmargin, hmargin] = declaration(".mkui-filter-btn", "margin").split(/\s+/);
   assert.equal(vmargin, "-" + vpad);
+  assert.equal(hmargin, "-" + hpad);
+});
+
+test("header cells keep icons snug to the right edge but clear of the label", () => {
+  // th right padding is tighter than the td's 8px: the cell ends in the
+  // icon, whose shape already reads as padding.
+  assert.equal(declaration(".mkui-table th", "padding-right"), "4px");
+  // A visible gap between the label text and the icon.
+  assert.equal(declaration(".mkui-th-inner", "gap"), "4px");
 });
 
 // SVG icons must never intercept pointer events: click/drag handlers

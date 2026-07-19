@@ -2506,3 +2506,181 @@ test("refresh re-fetches with saved pageLoadRef and pageLoadBefore", async () =>
   const refreshSub = lastSubscribe();
   assert.equal(refreshSub.opts.ref, nextSub.opts.ref, "refresh uses same ref as the page it's refreshing");
 });
+
+/* ── Merged sort/filter header icon ───────────────────────────────────── */
+// One icon slot per header: the filter button shows the hamburger until
+// the column is sorted, then turns into the sort caret (with an in-caret
+// priority digit under multi-sort). It opens the filter dropdown either way.
+
+function clickHeader(th, { shift = false } = {}) {
+  th._ev.click[0]({ shiftKey: shift, target: { closest: () => null } });
+}
+
+function clickFilterBtn(th) {
+  th.querySelector(".mkui-filter-btn")._ev.click[0]({ stopPropagation() {} });
+}
+
+// Describes what the header cell's single icon slot currently shows.
+function headerIcon(th) {
+  const btn = th.querySelector(".mkui-filter-btn");
+  const ind = btn._ch.find(c => String(c.className).includes("mkui-sort-indicator"));
+  if (ind) {
+    const svg = ind._ch.find(c => String(c.className).includes("mkui-icon"));
+    return {
+      kind: String(svg.className).includes("mkui-icon-caret-up") ? "caret-up" : "caret-down",
+      dir: String(ind.className).includes("mkui-sort-asc") ? "asc" : "desc",
+      digit: ind._ch.find(c => String(c.className).includes("mkui-sort-num"))?.textContent ?? null,
+      extra: btn._ch.length - 1,
+    };
+  }
+  const svg = btn._ch.find(c => String(c.className).includes("mkui-icon"));
+  return {
+    kind: String(svg?.className).includes("mkui-icon-filter") ? "hamburger" : "none",
+    extra: btn._ch.length - 1,
+  };
+}
+
+test("header icon starts as the hamburger with no separate sort indicator", async () => {
+  const { host } = await createTable({ columns: ["a", "b"] });
+  for (const th of getThs(host)) {
+    assert.deepEqual(headerIcon(th), { kind: "hamburger", extra: 0 });
+    assert.equal(th.querySelector(".mkui-sort-indicator"), null,
+      "no indicator outside the filter button");
+    const inner = th._ch.find(n => n.className === "mkui-th-inner");
+    assert.equal(inner._ch.length, 2, "label + filter button only");
+  }
+});
+
+test("clicking a header swaps the hamburger for a caret, cycling asc → desc → off", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "b" },
+    { _mkio_row: "2", name: "a" },
+  ]);
+  const th = getThs(host)[0];
+
+  clickHeader(th);
+  assert.deepEqual(headerIcon(th), { kind: "caret-up", dir: "asc", digit: null, extra: 0 },
+    "asc caret replaces the hamburger");
+
+  clickHeader(th);
+  assert.deepEqual(headerIcon(th), { kind: "caret-down", dir: "desc", digit: null, extra: 0 });
+
+  clickHeader(th);
+  assert.deepEqual(headerIcon(th), { kind: "hamburger", extra: 0 },
+    "third click clears the sort and restores the hamburger");
+});
+
+test("sorting reorders rendered rows: string asc/desc, third click restores insertion order", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "carol" },
+    { _mkio_row: "2", name: "alice" },
+    { _mkio_row: "3", name: "bob" },
+  ]);
+  const th = getThs(host)[0];
+  const names = () => colCells(host, "name").map(td => td.textContent);
+
+  clickHeader(th);
+  assert.deepEqual(names(), ["alice", "bob", "carol"]);
+  clickHeader(th);
+  assert.deepEqual(names(), ["carol", "bob", "alice"]);
+  clickHeader(th);
+  assert.deepEqual(names(), ["carol", "alice", "bob"], "insertion order restored");
+});
+
+test("numeric columns sort numerically, not lexically", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", value: "10" },
+    { _mkio_row: "2", value: "2" },
+    { _mkio_row: "3", value: "1.5" },
+  ]);
+  const th = getThs(host)[0];
+  clickHeader(th);
+  assert.deepEqual(colCells(host, "value").map(td => td.textContent),
+    ["1.5", "2", "10"], "10 sorts after 2 numerically");
+});
+
+test("shift+click adds a secondary sort with priority digits inside both carets", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", a: "x", b: "y" },
+  ]);
+  const [thA, thB] = getThs(host);
+
+  clickHeader(thA);
+  clickHeader(thB, { shift: true });
+  assert.deepEqual(headerIcon(thA), { kind: "caret-up", dir: "asc", digit: "1", extra: 0 });
+  assert.deepEqual(headerIcon(thB), { kind: "caret-up", dir: "asc", digit: "2", extra: 0 });
+
+  // Shift+click cycles the secondary key independently: asc → desc → removed.
+  clickHeader(thB, { shift: true });
+  assert.deepEqual(headerIcon(thB), { kind: "caret-down", dir: "desc", digit: "2", extra: 0 });
+  clickHeader(thB, { shift: true });
+  assert.deepEqual(headerIcon(thB), { kind: "hamburger", extra: 0 });
+  assert.deepEqual(headerIcon(thA), { kind: "caret-up", dir: "asc", digit: null, extra: 0 },
+    "sole remaining key drops its priority digit");
+});
+
+test("plain click on a secondary column makes it the only sort key", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", a: "x", b: "y" }]);
+  const [thA, thB] = getThs(host);
+
+  clickHeader(thA);
+  clickHeader(thB, { shift: true });
+  clickHeader(thB);
+  assert.deepEqual(headerIcon(thA), { kind: "hamburger", extra: 0 });
+  assert.deepEqual(headerIcon(thB), { kind: "caret-up", dir: "asc", digit: null, extra: 0 });
+});
+
+test("filter button still opens the dropdown while showing a caret", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a" },
+    { _mkio_row: "2", name: "b" },
+  ]);
+  const th = getThs(host)[0];
+  clickHeader(th);
+  assert.equal(headerIcon(th).kind, "caret-up");
+
+  clickFilterBtn(th);
+  const dd = host._ch.find(c => String(c.className).includes("mkui-filter-dropdown"));
+  assert.ok(dd, "dropdown opened from the caret-shaped button");
+});
+
+test("active filter keeps the button accented through icon swaps", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a" },
+    { _mkio_row: "2", name: "b" },
+  ]);
+  const th = getThs(host)[0];
+  const btn = th.querySelector(".mkui-filter-btn");
+
+  clickFilterBtn(th);
+  const dd = host._ch.find(c => String(c.className).includes("mkui-filter-dropdown"));
+  const item = dd._ch.find(c => c.className === "mkui-filter-list")._ch[0];
+  const cb = item._ch.find(n => n.tagName === "INPUT");
+  cb.checked = false;
+  cb._ev.change[0]();
+  assert.ok(btn.classList.contains("active"), "filter active with hamburger showing");
+  assert.equal(headerIcon(th).kind, "hamburger");
+
+  clickHeader(th);
+  assert.ok(btn.classList.contains("active"), "still active with caret showing");
+  assert.equal(headerIcon(th).kind, "caret-up");
+
+  clickHeader(th);
+  clickHeader(th);
+  assert.ok(btn.classList.contains("active"), "still active after sort cleared");
+  assert.equal(headerIcon(th).kind, "hamburger");
+});

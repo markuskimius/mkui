@@ -762,16 +762,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       filterBtn.className = "mkui-filter-btn";
       filterBtn.appendChild(icon("filter"));
 
-      const sortInd = document.createElement("span");
-      sortInd.className = "mkui-sort-indicator";
-
       const labelEl = document.createElement("span");
       labelEl.className = "mkui-th-label";
       labelEl.textContent = label(c);
 
       const inner = document.createElement("div");
       inner.className = "mkui-th-inner";
-      inner.append(labelEl, sortInd, filterBtn);
+      inner.append(labelEl, filterBtn);
       th.appendChild(inner);
 
       // The grip that resizes column N straddles the divider at N's right
@@ -837,13 +834,17 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     for (const th of thead.querySelectorAll("th")) {
       const col = th.dataset.col;
       if (!col) continue; // filler cell
-      const ind = th.querySelector(".mkui-sort-indicator");
+      // One icon slot: the filter button shows the hamburger until the column
+      // is sorted, then turns into the sort caret. Either way it still
+      // opens the filter dropdown; filter state stays visible as color.
+      const btn = th.querySelector(".mkui-filter-btn");
+      btn.innerHTML = "";
       const si = sortKeys.findIndex((k) => k.col === col);
-      ind.textContent = "";
-      ind.className = "mkui-sort-indicator";
       if (si >= 0) {
         const dir = sortKeys[si].dir;
-        ind.classList.add(dir === "asc" ? "mkui-sort-asc" : "mkui-sort-desc");
+        const ind = document.createElement("span");
+        ind.className = "mkui-sort-indicator " +
+          (dir === "asc" ? "mkui-sort-asc" : "mkui-sort-desc");
         ind.appendChild(icon(dir === "asc" ? "caret-up" : "caret-down"));
         if (sortKeys.length > 1) {
           // Priority digit overlaid inside the caret (see .mkui-sort-num).
@@ -852,8 +853,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
           num.textContent = String(si + 1);
           ind.appendChild(num);
         }
+        btn.appendChild(ind);
+      } else {
+        btn.appendChild(icon("filter"));
       }
-      const btn = th.querySelector(".mkui-filter-btn");
       btn.classList.toggle("active", filters.has(col));
     }
   }

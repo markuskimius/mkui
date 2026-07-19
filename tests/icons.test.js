@@ -88,6 +88,10 @@ test("multi-stroke icons keep separate paths (close has 2, refresh has 4)", () =
   assert.equal(icon("refresh")._ch.length, 4);
 });
 
+test("filter icon is a hamburger: three separate bar paths", () => {
+  assert.equal(icon("filter")._ch.length, 3);
+});
+
 test("each call returns a fresh element — no shared mutable node", () => {
   const a = icon("close");
   const b = icon("close");

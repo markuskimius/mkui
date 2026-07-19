@@ -463,6 +463,9 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   background: var(--mkui-bg-alt);
   color: var(--mkui-fg-mute);
   font-weight: normal;
+  /* Tighter than the td's 8px: the cell ends in the filter icon, whose
+     shape already reads as padding. */
+  padding-right: 4px;
   position: sticky; top: 0;
   cursor: pointer;
   user-select: none;
@@ -472,7 +475,7 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-th-inner {
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 4px;
 }
 /* Fixed column widths, applied once the header row is measured (data then
    only grows columns). Widths live on <colgroup> cols and the table
@@ -528,6 +531,8 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   background: linear-gradient(to right,
     transparent 2.5px, var(--mkui-accent) 2.5px 4.5px, transparent 4.5px);
 }
+/* Lives inside the filter button: when a column is sorted the caret
+   replaces the funnel as the button's icon (one icon slot per header). */
 .mkui-sort-indicator {
   position: relative; /* anchors the multi-sort priority digit overlay */
   display: inline-flex;
@@ -560,15 +565,20 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   align-items: center;
   color: var(--mkui-fg-mute);
   padding: 2px 3px;
-  /* Cancel the vertical padding's footprint so the button adds no header
-     height beyond its 16px icon (the padding still pads the hover pill). */
-  margin: -2px 0;
+  /* Cancel the padding's footprint entirely so the button occupies just
+     its 16px icon — no header height, no extra distance from the sort
+     caret or the cell's padding edge (the padding still pads the hover
+     pill, which overhangs those neighbors instead of pushing them away). */
+  margin: -2px -3px;
   border-radius: 2px;
   cursor: pointer;
 }
 /* Same size as the sort caret. */
 .mkui-filter-btn .mkui-icon { width: 16px; height: 16px; }
 .mkui-filter-btn:hover { color: var(--mkui-fg); background: var(--mkui-bg-hover); }
+/* The priority digit is a knockout drawn in the background color — track
+   the hover pill's background so it keeps reading as a hole in the caret. */
+.mkui-filter-btn:hover .mkui-sort-num { color: var(--mkui-bg-hover); }
 .mkui-filter-btn.active { color: var(--mkui-accent); }
 
 .mkui-filter-dropdown {

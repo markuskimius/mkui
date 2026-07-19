@@ -1,8 +1,8 @@
 // SVG icon library. One <svg> per call, drawn from vendored path data —
 // no icon font, no fetch, no runtime dependency. Outline paths come from
-// Lucide (https://lucide.dev, ISC license); the filled carets/dot are
-// custom shapes that span most of the 24-box so they stay legible at the
-// tiny sizes where a 2px outline stroke would break down.
+// Lucide (https://lucide.dev, ISC license); the filled shapes (carets,
+// dot, hamburger) are custom and span most of the 24-box so they stay
+// legible at the tiny sizes where a 2px outline stroke would break down.
 //
 // All icons live in a 24×24 viewBox and inherit color via currentColor
 // (stroke for outline icons, fill for filled ones), so hover/active/theme
@@ -30,8 +30,10 @@ const FILLED = {
   "caret-up": ["M12 5l9 13H3z"],
   "caret-down": ["M12 19 3 6h18z"],
   dot: ["M12 4a8 8 0 1 1 0 16 8 8 0 0 1 0-16z"],
-  // Funnel (Lucide's filter polygon, filled) — solid like the carets.
-  filter: ["M19.2 5.5H4.8l5.8 6.8V17l2.9 1.5v-6.2L19.2 5.5z"],
+  // Hamburger — three solid bars, slightly inset from the carets' x 3–21
+  // extent so it reads a touch lighter; same 24-box, so the filter
+  // button's icon swap on sort keeps the same footprint.
+  filter: ["M4.5 5.5h15v3h-15z", "M4.5 10.5h15v3h-15z", "M4.5 15.5h15v3h-15z"],
 };
 
 const NS = "http://www.w3.org/2000/svg";
