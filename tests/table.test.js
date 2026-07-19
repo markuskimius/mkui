@@ -2845,6 +2845,132 @@ test("selecting cells clears row selection and vice versa", async () => {
   assert.ok(!trs[1]._ch[1].classList.contains("mkui-cell-sel"));
 });
 
+/* Cell rects track records, not positions: the row keys spanned when the
+   rect was made stay selected across sorts, filters, and live inserts —
+   rows that later move between the rect's endpoints don't join it. */
+
+test("sorting keeps cell selection on the originally selected records", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "carol" },
+    { _mkio_row: "2", name: "alice" },
+    { _mkio_row: "3", name: "bob" },
+  ]);
+  let trs = dataRows(host);
+  pointerDown(trs[0], 0);                     // carol
+  pointerDown(trs[1], 0, { shiftKey: true }); // rect carol..alice
+  clickHeader(getThs(host)[0]);               // asc: alice, bob, carol
+  trs = dataRows(host);
+  assert.deepEqual(trs.map(tr => tr._ch[0].textContent), ["alice", "bob", "carol"]);
+  assert.ok(trs[0]._ch[0].classList.contains("mkui-cell-sel"), "alice stays selected");
+  assert.ok(!trs[1]._ch[0].classList.contains("mkui-cell-sel"),
+    "bob sorted between the endpoints doesn't join the selection");
+  assert.ok(trs[2]._ch[0].classList.contains("mkui-cell-sel"), "carol stays selected");
+});
+
+test("copy after sorting copies the originally selected cells", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "carol" },
+    { _mkio_row: "2", name: "alice" },
+    { _mkio_row: "3", name: "bob" },
+  ]);
+  const trs = dataRows(host);
+  pointerDown(trs[0], 0);
+  pointerDown(trs[1], 0, { shiftKey: true }); // carol + alice
+  clickHeader(getThs(host)[0]);               // asc: alice, bob, carol
+  let written = null;
+  globalThis.navigator = { clipboard: { writeText: (s) => { written = s; } } };
+  try { host._paneEl._editActions.copy(); }
+  finally { delete globalThis.navigator; }
+  assert.equal(written, "alice\r\ncarol", "bob is not part of the copied grid");
+});
+
+test("live insert between a sorted rect's rows doesn't join the selection", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const sub = lastSubscribe();
+  sub.opts.onSnapshot([
+    { _mkio_row: "1", name: "alice" },
+    { _mkio_row: "2", name: "carol" },
+  ]);
+  clickHeader(getThs(host)[0]); // sort asc first
+  let trs = dataRows(host);
+  pointerDown(trs[0], 0);
+  pointerDown(trs[1], 0, { shiftKey: true }); // alice + carol
+  sub.opts.onUpdate("insert", { _mkio_row: "3", name: "bob" });
+  trs = dataRows(host);
+  assert.deepEqual(trs.map(tr => tr._ch[0].textContent), ["alice", "bob", "carol"]);
+  assert.ok(trs[0]._ch[0].classList.contains("mkui-cell-sel"));
+  assert.ok(!trs[1]._ch[0].classList.contains("mkui-cell-sel"),
+    "inserted row inside the rect's span stays unselected");
+  assert.ok(trs[2]._ch[0].classList.contains("mkui-cell-sel"));
+});
+
+test("shift+arrow-extended rect also tracks its records across a sort", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "carol" },
+    { _mkio_row: "2", name: "alice" },
+    { _mkio_row: "3", name: "bob" },
+  ]);
+  keyDown(host, "ArrowDown");                     // place cursor on carol
+  keyDown(host, "ArrowDown", { shiftKey: true }); // rect carol..alice
+  clickHeader(getThs(host)[0]);                   // asc: alice, bob, carol
+  const trs = dataRows(host);
+  assert.ok(trs[0]._ch[0].classList.contains("mkui-cell-sel"), "alice stays selected");
+  assert.ok(!trs[1]._ch[0].classList.contains("mkui-cell-sel"),
+    "bob sorted between the endpoints doesn't join the selection");
+  assert.ok(trs[2]._ch[0].classList.contains("mkui-cell-sel"), "carol stays selected");
+});
+
+test("ctrl-toggled-off cell stays off after sorting", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "carol" },
+    { _mkio_row: "2", name: "alice" },
+    { _mkio_row: "3", name: "bob" },
+  ]);
+  let trs = dataRows(host);
+  pointerDown(trs[0], 0);
+  pointerDown(trs[2], 0, { shiftKey: true });   // carol, alice, bob
+  pointerDown(trs[1], 0, { ctrlKey: true });    // toggle alice off
+  clickHeader(getThs(host)[0]);                 // asc: alice, bob, carol
+  trs = dataRows(host);
+  assert.ok(!trs[0]._ch[0].classList.contains("mkui-cell-sel"), "alice still toggled off");
+  assert.ok(trs[1]._ch[0].classList.contains("mkui-cell-sel"), "bob stays selected");
+  assert.ok(trs[2]._ch[0].classList.contains("mkui-cell-sel"), "carol stays selected");
+});
+
+test("filtered-out rect members reappear selected when the filter is relaxed", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[0], 1);
+  pointerDown(trs[2], 1, { shiftKey: true }); // name cells of rows 0-2
+  const th = getThead(host)._ch[0]._ch.find(t => t.dataset.col === "name");
+  clickFilterBtn(th);
+  const dd = host._ch.find(c => String(c.className).includes("mkui-filter-dropdown"));
+  const cbs = dd._ch.find(c => c.className === "mkui-filter-list")._ch
+    .map(item => item._ch.find(n => n.tagName === "INPUT"));
+  for (const cb of cbs) cb.checked = cb.dataset.val !== "row-1";
+  cbs[0]._ev.change[0]();
+  let vis = dataRows(host);
+  assert.equal(vis.length, 3, "row-1 filtered out");
+  assert.ok(vis[0]._ch[1].classList.contains("mkui-cell-sel"));
+  assert.ok(vis[1]._ch[1].classList.contains("mkui-cell-sel"));
+  assert.ok(!vis[2]._ch[1].classList.contains("mkui-cell-sel"), "row-3 was never in the rect");
+  for (const cb of cbs) cb.checked = true;
+  cbs[0]._ev.change[0]();
+  vis = dataRows(host);
+  assert.equal(vis.length, 4);
+  assert.ok(vis[1]._ch[1].classList.contains("mkui-cell-sel"),
+    "row-1 rejoins the selection when the filter is relaxed");
+});
+
 test("arrow keys move the focused cell; first press just places it", async () => {
   const { host } = await createSelTable();
   const trs = dataRows(host);

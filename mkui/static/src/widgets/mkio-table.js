@@ -478,9 +478,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // cell (the keyboard cursor):
   //  - row mode:  selectedKeys (row keys) + selectedAnchor
   //  - cell mode: cellRects — rectangles stored as anchor/focus (key, col)
-  //    pairs so they survive sorts and live inserts, resolved to view /
-  //    column indices lazily (aIdx/fIdx remember the last-known position
-  //    for anchors whose row was deleted). cellOff holds ctrl-toggled-off
+  //    pairs plus a `keys` snapshot of the row keys spanned when the rect
+  //    was last user-modified. Membership is that key set × the column
+  //    range, resolved lazily to view/column indices, so sorts and filters
+  //    move the same records around instead of reinterpreting the
+  //    anchor→focus span (and live inserts inside the span don't join the
+  //    selection). aIdx/fIdx remember last-known positions for extension
+  //    anchoring when a row was deleted. cellOff holds ctrl-toggled-off
   //    cells inside rects.
   // The focused cell is the implicit selection when neither mode has an
   // explicit one — copy and row-unit buttons fall back to it.
@@ -497,13 +501,28 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // Resolve a row key to its view index, falling back to its last-known
   // index (clamped) when the row was deleted or filtered out.
   function keyViewIdx(key, lastIdx) {
+    if (lastIdx != null && view[lastIdx] === key) return lastIdx;
     const i = view.indexOf(key);
     if (i >= 0) return i;
     return Math.max(0, Math.min(lastIdx ?? 0, view.length - 1));
   }
 
+  // Snapshot the row keys a rect spans in the current view order — called
+  // whenever a user gesture creates or extends the rect. From then on the
+  // rect's row membership is these records, wherever they move.
+  function snapRectKeys(r) {
+    const a = keyViewIdx(r.aKey, r.aIdx), f = keyViewIdx(r.fKey, r.fIdx);
+    r.aIdx = a; r.fIdx = f;
+    const keys = new Set();
+    for (let i = Math.min(a, f); i <= Math.max(a, f); i++) keys.add(view[i]);
+    r.keys = keys;
+  }
+
   // Rect bounds in (view row idx, visible col idx) space, cached per
   // view/selection revision — rendering tests visible cells against these.
+  // Each rect's key snapshot resolves to one or more contiguous row runs
+  // (sorting can scatter the member rows), each × the rect's column range;
+  // keys not in the view (deleted or filtered out) simply don't resolve.
   let rectCacheKey = "";
   let rectBoundsCache = [];
   function rectBounds() {
@@ -514,17 +533,28 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     rectBoundsCache = [];
     if (!columns || !view.length) return rectBoundsCache;
     const cols = visibleColumns();
+    const viewIdx = new Map();
+    for (let i = 0; i < view.length; i++) viewIdx.set(view[i], i);
     for (const r of cellRects) {
-      let a = view.indexOf(r.aKey);
-      if (a >= 0) r.aIdx = a; else a = Math.min(r.aIdx ?? 0, view.length - 1);
-      let f = view.indexOf(r.fKey);
-      if (f >= 0) r.fIdx = f; else f = Math.min(r.fIdx ?? 0, view.length - 1);
+      const a = viewIdx.get(r.aKey);
+      if (a != null) r.aIdx = a;
+      const f = viewIdx.get(r.fKey);
+      if (f != null) r.fIdx = f;
       const ca = cols.indexOf(r.aCol), cf = cols.indexOf(r.fCol);
-      if (a < 0 || f < 0 || ca < 0 || cf < 0) continue;
-      rectBoundsCache.push({
-        r1: Math.min(a, f), r2: Math.max(a, f),
-        c1: Math.min(ca, cf), c2: Math.max(ca, cf),
-      });
+      if (ca < 0 || cf < 0 || !r.keys?.size) continue;
+      const c1 = Math.min(ca, cf), c2 = Math.max(ca, cf);
+      const idxs = [];
+      for (const k of r.keys) {
+        const i = viewIdx.get(k);
+        if (i != null) idxs.push(i);
+      }
+      idxs.sort((x, y) => x - y);
+      for (let s = 0; s < idxs.length; ) {
+        let e = s;
+        while (e + 1 < idxs.length && idxs[e + 1] === idxs[e] + 1) e++;
+        rectBoundsCache.push({ r1: idxs[s], r2: idxs[e], c1, c2 });
+        s = e + 1;
+      }
     }
     return rectBoundsCache;
   }
@@ -686,6 +716,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       else if (last) cellRects.pop();
       dragRect = { aKey: a.key, aCol: a.col, aIdx: a.idx,
                    fKey: key, fCol: col, fIdx: idx };
+      snapRectKeys(dragRect);
       cellRects.push(dragRect);
     } else if (meta) {
       const ci = colIndex(col);
@@ -702,10 +733,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
           (focusCell.key !== key || focusCell.col !== col)) {
         const fi = keyViewIdx(focusCell.key, focusCell.idx);
         cellRects.push({ aKey: focusCell.key, aCol: focusCell.col, aIdx: fi,
-                         fKey: focusCell.key, fCol: focusCell.col, fIdx: fi });
+                         fKey: focusCell.key, fCol: focusCell.col, fIdx: fi,
+                         keys: new Set([focusCell.key]) });
       }
       dragRect = { aKey: key, aCol: col, aIdx: idx,
-                   fKey: key, fCol: col, fIdx: idx };
+                   fKey: key, fCol: col, fIdx: idx, keys: new Set([key]) };
       cellRects.push(dragRect);
     } else {
       // Plain click: selection collapses to the focused cell (implicit —
@@ -815,11 +847,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (!rect) {
         if (key === aKey && col === aCol) return;
         rect = { aKey, aCol, aIdx, fKey: key, fCol: col, fIdx: idx };
+        snapRectKeys(rect);
         cellRects.push(rect);
       } else if (rect.fKey === key && rect.fCol === col) {
         return;
       } else {
         rect.fKey = key; rect.fCol = col; rect.fIdx = idx;
+        snapRectKeys(rect);
       }
       focusCell = { key, col, idx };
       refreshSelectionStyles();
@@ -950,6 +984,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         cellRects.push(r);
       }
       r.fKey = key; r.fCol = col; r.fIdx = idx;
+      snapRectKeys(r);
       focusCell = { key, col, idx };
     } else {
       // Plain move: selection collapses to the focused cell.
