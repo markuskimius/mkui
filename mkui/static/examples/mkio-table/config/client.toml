@@ -10,6 +10,14 @@ background = "#b8b8b8"
 # ─── Menubar ──────────────────────────────────────────────────────────
 
 [[menubar]]
+label = "Edit"
+items = [
+  { label = "Copy", action = "edit.copy", shortcut = "mod+C" },
+  { sep = true },
+  { label = "Select All", action = "edit.selectAll", shortcut = "mod+A" },
+]
+
+[[menubar]]
 label = "Orders"
 items = [
   { label = "All Orders", action = "pane.show", args = "all-orders" },

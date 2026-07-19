@@ -2,6 +2,7 @@ import { registerPaneType } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
 import { resolveExpr, resolveObject } from "../lib/expressions.js";
 import { icon } from "../lib/icons.js";
+import { gridToTSV, gridToHTML } from "../lib/copy.js";
 
 function midnightRef() {
   const d = new Date();
@@ -90,6 +91,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   const idKey = protocol === "stream" ? "_mkio_ref" : protocol === "subpub" ? "_mkio_topic" : "_mkio_row";
   const maxcount = spec.maxcount !== undefined ? spec.maxcount : 200;
   const isPaged = protocol === "stream" && maxcount > 0;
+  const rowColumn = spec.rowColumn !== false; // row-number column, on by default
   const getStartRef = () => isPaged && (spec.start ?? "today") === "today" ? midnightRef() : null;
 
   const table = document.createElement("table");
@@ -213,6 +215,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   let widthsInited = false;
   let widthsDirty = false;     // a ratchet grew a column — colgroup refresh pending
   const userSized = new Set(); // manually resized columns: auto-grow keeps hands off
+  let rowNumDigits = 2;        // row-number column width follows the digit count
   const MIN_COL_W = 40;
   const CELL_CHROME = 17;      // 8px cell padding each side + 1px divider (mkui.css)
   const labels = spec.labels ?? {};
@@ -393,6 +396,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function render() {
+    if (rowColumn) {
+      const d = String(Math.max(1, view.length)).length;
+      if (d !== rowNumDigits) {
+        rowNumDigits = d;
+        if (widthsInited) widthsDirty = true;
+      }
+    }
     if (widthsDirty) {
       widthsDirty = false;
       if (widthsInited) renderColgroup();
@@ -421,6 +431,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       }
       if (cursor.nextSibling !== tr) tbody.insertBefore(tr, cursor.nextSibling);
       cursor = tr;
+      tr._viewIdx = i;
+      if (rowColumn) {
+        const nd = tr.children[0];
+        const num = String(i + 1);
+        if (nd && nd.textContent !== num) nd.textContent = num;
+      }
+      styleRowSelection(tr, key, i);
     }
     if (rowEls.size > end - start) {
       const want = new Set();
@@ -431,7 +448,14 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
 
     if (!rowHMeasured && end > start) {
-      const h = rowEls.get(view[start])?.getBoundingClientRect().height;
+      // Measure the row PITCH (top-to-top of adjacent rows) when two rows
+      // are rendered: border-collapse splits row borders across neighbors,
+      // so a single row's rect height is ~0.5px short of the true pitch —
+      // an error that compounds linearly with the row index.
+      const r1 = rowEls.get(view[start])?.getBoundingClientRect();
+      const r2 = end - start > 1
+        ? rowEls.get(view[start + 1])?.getBoundingClientRect() : null;
+      const h = r2 && r1 && r2.top > r1.top ? r2.top - r1.top : r1?.height;
       if (h) {
         rowHMeasured = true;
         if (h !== rowH) { rowH = h; renderedStart = -2; render(); }
@@ -450,79 +474,724 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   /* ── Selection state ──────────────────────────────────────────────── */
 
+  // Two mutually exclusive selection modes plus an always-present focused
+  // cell (the keyboard cursor):
+  //  - row mode:  selectedKeys (row keys) + selectedAnchor
+  //  - cell mode: cellRects — rectangles stored as anchor/focus (key, col)
+  //    pairs so they survive sorts and live inserts, resolved to view /
+  //    column indices lazily (aIdx/fIdx remember the last-known position
+  //    for anchors whose row was deleted). cellOff holds ctrl-toggled-off
+  //    cells inside rects.
+  // The focused cell is the implicit selection when neither mode has an
+  // explicit one — copy and row-unit buttons fall back to it.
+
   const selectedKeys = new Set();
   let selectedAnchor = null;
+  let cellRects = [];         // [{ aKey, aCol, aIdx, fKey, fCol, fIdx }]
+  const cellOff = new Set();  // "key\0col" cells toggled off inside rects
+  let focusCell = null;       // { key, col, idx }
+  let selRev = 0;             // bumped on any selection change
 
-  function getSelectedRows() {
-    const out = [];
-    for (const key of selectedKeys) {
-      const row = rows.get(key);
-      if (row) out.push(row);
+  const colIndex = (col) => (columns ? visibleColumns().indexOf(col) : -1);
+
+  // Resolve a row key to its view index, falling back to its last-known
+  // index (clamped) when the row was deleted or filtered out.
+  function keyViewIdx(key, lastIdx) {
+    const i = view.indexOf(key);
+    if (i >= 0) return i;
+    return Math.max(0, Math.min(lastIdx ?? 0, view.length - 1));
+  }
+
+  // Rect bounds in (view row idx, visible col idx) space, cached per
+  // view/selection revision — rendering tests visible cells against these.
+  let rectCacheKey = "";
+  let rectBoundsCache = [];
+  function rectBounds() {
+    if (!cellRects.length) return (rectBoundsCache = []);
+    const ck = viewRev + ":" + selRev;
+    if (rectCacheKey === ck) return rectBoundsCache;
+    rectCacheKey = ck;
+    rectBoundsCache = [];
+    if (!columns || !view.length) return rectBoundsCache;
+    const cols = visibleColumns();
+    for (const r of cellRects) {
+      let a = view.indexOf(r.aKey);
+      if (a >= 0) r.aIdx = a; else a = Math.min(r.aIdx ?? 0, view.length - 1);
+      let f = view.indexOf(r.fKey);
+      if (f >= 0) r.fIdx = f; else f = Math.min(r.fIdx ?? 0, view.length - 1);
+      const ca = cols.indexOf(r.aCol), cf = cols.indexOf(r.fCol);
+      if (a < 0 || f < 0 || ca < 0 || cf < 0) continue;
+      rectBoundsCache.push({
+        r1: Math.min(a, f), r2: Math.max(a, f),
+        c1: Math.min(ca, cf), c2: Math.max(ca, cf),
+      });
+    }
+    return rectBoundsCache;
+  }
+
+  function cellSelected(viewIdx, colIdx, key, col) {
+    if (cellOff.has(key + "\0" + col)) return false;
+    for (const b of rectBounds())
+      if (viewIdx >= b.r1 && viewIdx <= b.r2 && colIdx >= b.c1 && colIdx <= b.c2)
+        return true;
+    return false;
+  }
+
+  function rowInRects(viewIdx) {
+    for (const b of rectBounds())
+      if (viewIdx >= b.r1 && viewIdx <= b.r2) return true;
+    return false;
+  }
+
+  // Merged [lo, hi] view-index intervals covered by the cell rects — row
+  // counts and row materialization work off these without enumerating
+  // cells.
+  function selectedRowIntervals() {
+    const bs = rectBounds();
+    if (!bs.length) return [];
+    const iv = bs.map((b) => [b.r1, b.r2]).sort((x, y) => x[0] - y[0]);
+    const out = [iv[0].slice()];
+    for (let i = 1; i < iv.length; i++) {
+      const last = out[out.length - 1];
+      if (iv[i][0] <= last[1] + 1) last[1] = Math.max(last[1], iv[i][1]);
+      else out.push(iv[i].slice());
     }
     return out;
   }
 
-  function setRowSelected(key, selected) {
-    if (selected) selectedKeys.add(key);
-    else selectedKeys.delete(key);
-    const tr = rowEls.get(key);
-    if (tr) tr.classList.toggle("mkui-selected", selected);
-  }
-
-  function clearSelection() {
-    for (const key of selectedKeys) {
-      const tr = rowEls.get(key);
-      if (tr) tr.classList.remove("mkui-selected");
+  // Snap the focused cell back onto a live view row (its row may have been
+  // deleted or filtered out); establish it if the table has data but no
+  // focus yet. Returns false when there is nothing to focus.
+  function ensureFocusCell() {
+    if (!columns || !view.length) return false;
+    const cols = visibleColumns();
+    if (!cols.length) return false;
+    if (focusCell) {
+      const idx = keyViewIdx(focusCell.key, focusCell.idx);
+      const col = cols.includes(focusCell.col) ? focusCell.col : cols[0];
+      focusCell = { key: view[idx], col, idx };
+    } else {
+      focusCell = { key: view[0], col: cols[0], idx: 0 };
     }
-    selectedKeys.clear();
+    return true;
   }
 
+  function styleRowSelection(tr, key, viewIdx) {
+    const rowSel = selectedKeys.has(key);
+    tr.classList.toggle("mkui-selected", rowSel);
+    const hl = (focusCell != null && focusCell.key === key) ||
+      (cellRects.length > 0 && rowInRects(viewIdx));
+    tr.classList.toggle("mkui-row-hl", !rowSel && hl);
+    let ci = 0;
+    for (const td of tr.children) {
+      const col = td.dataset?.col;
+      if (col == null) continue; // row-number cell
+      td.classList.toggle("mkui-cell-sel",
+        cellRects.length > 0 && cellSelected(viewIdx, ci, key, col));
+      td.classList.toggle("mkui-cell-focus",
+        focusCell != null && focusCell.key === key && focusCell.col === col);
+      ci++;
+    }
+  }
+
+  // Restyle the rendered slice after a selection change (data changes go
+  // through render(), which restyles as it walks the slice).
+  function refreshSelectionStyles() {
+    selRev++;
+    for (const [key, tr] of rowEls) {
+      if (tr._viewIdx == null) continue;
+      styleRowSelection(tr, key, tr._viewIdx);
+    }
+    if (hasButtons) updateButtonStates();
+  }
+
+  function clearCellSelection() {
+    cellRects = [];
+    cellOff.clear();
+  }
+
+  // Full selection reset — for data-reset paths (new snapshot, page fetch,
+  // pane reopen) where even the focused cell's row is gone.
+  function clearSelection() {
+    selectedKeys.clear();
+    selectedAnchor = null;
+    clearCellSelection();
+    focusCell = null;
+    refreshSelectionStyles();
+  }
+
+  // Esc: drop the selection but keep the cursor. Returns whether there was
+  // anything to clear (the caller decides whether to swallow the key).
+  function clearSelectionKeepFocus() {
+    const had = selectedKeys.size > 0 || cellRects.length > 0;
+    selectedKeys.clear();
+    selectedAnchor = null;
+    clearCellSelection();
+    refreshSelectionStyles();
+    return had;
+  }
+
+  function selectAllRows() {
+    if (!view.length) return;
+    clearCellSelection();
+    selectedKeys.clear();
+    for (const key of view) selectedKeys.add(key);
+    selectedAnchor = view[0];
+    refreshSelectionStyles();
+  }
+
+  /* ── Selection interaction (pointer) ──────────────────────────────── */
+
+  // Row-number clicks: plain selects, ctrl/cmd toggles, shift range-selects
+  // from the anchor. Row and cell selection are mutually exclusive.
   function handleRowClick(key, e) {
-    if (e.target.closest(".mkui-filter-btn")) return;
     const metaKey = e.ctrlKey || e.metaKey;
+    clearCellSelection();
     if (e.shiftKey && selectedAnchor != null) {
       const anchorIdx = view.indexOf(selectedAnchor);
       const targetIdx = view.indexOf(key);
       if (anchorIdx >= 0 && targetIdx >= 0) {
-        if (!metaKey) clearSelection();
+        if (!metaKey) selectedKeys.clear();
         const lo = Math.min(anchorIdx, targetIdx);
         const hi = Math.max(anchorIdx, targetIdx);
-        for (let i = lo; i <= hi; i++) setRowSelected(view[i], true);
+        for (let i = lo; i <= hi; i++) selectedKeys.add(view[i]);
       }
     } else if (metaKey) {
-      setRowSelected(key, !selectedKeys.has(key));
+      if (selectedKeys.has(key)) selectedKeys.delete(key);
+      else selectedKeys.add(key);
       selectedAnchor = key;
     } else {
-      clearSelection();
-      setRowSelected(key, true);
+      selectedKeys.clear();
+      selectedKeys.add(key);
       selectedAnchor = key;
     }
-    updateButtonStates();
+    refreshSelectionStyles();
+  }
+
+  function handleCellPointerDown(key, col, e) {
+    const meta = e.ctrlKey || e.metaKey;
+    const idx = view.indexOf(key);
+    if (idx < 0) return;
+    selectedKeys.clear(); // cell mode is exclusive with row mode
+    selectedAnchor = null;
+    let dragRect = null;
+    if (e.shiftKey) {
+      // Extend the active rect from its anchor (or from the focused cell).
+      const last = cellRects[cellRects.length - 1];
+      const a = last
+        ? { key: last.aKey, col: last.aCol, idx: last.aIdx }
+        : { key: focusCell?.key ?? key, col: focusCell?.col ?? col,
+            idx: focusCell?.idx ?? idx };
+      if (!meta) clearCellSelection();
+      else if (last) cellRects.pop();
+      dragRect = { aKey: a.key, aCol: a.col, aIdx: a.idx,
+                   fKey: key, fCol: col, fIdx: idx };
+      cellRects.push(dragRect);
+    } else if (meta) {
+      const ci = colIndex(col);
+      if (cellSelected(idx, ci, key, col)) {
+        cellOff.add(key + "\0" + col);
+        focusCell = { key, col, idx };
+        refreshSelectionStyles();
+        return; // a toggle-off doesn't start a drag
+      }
+      cellOff.delete(key + "\0" + col);
+      // A plain-clicked focus cell is implicitly selected — materialize it
+      // so ctrl-click extends rather than replaces it (Excel behavior).
+      if (!cellRects.length && focusCell && rows.has(focusCell.key) &&
+          (focusCell.key !== key || focusCell.col !== col)) {
+        const fi = keyViewIdx(focusCell.key, focusCell.idx);
+        cellRects.push({ aKey: focusCell.key, aCol: focusCell.col, aIdx: fi,
+                         fKey: focusCell.key, fCol: focusCell.col, fIdx: fi });
+      }
+      dragRect = { aKey: key, aCol: col, aIdx: idx,
+                   fKey: key, fCol: col, fIdx: idx };
+      cellRects.push(dragRect);
+    } else {
+      // Plain click: selection collapses to the focused cell (implicit —
+      // no rect until an actual drag extends it).
+      clearCellSelection();
+    }
+    focusCell = { key, col, idx };
+    refreshSelectionStyles();
+    if (e.pointerType !== "touch")
+      startCellDrag(e, key, col, idx, dragRect);
+  }
+
+  function handleRowPointerDown(key, e) {
+    if (e.button !== 0 && e.button !== undefined) return;
+    scrollHost.focus?.({ preventScroll: true });
+    const td = e.target;
+    if (td?.dataset?.col != null) {
+      if (e.pointerType === "touch") return; // touch scrolls, no cell drag
+      handleCellPointerDown(key, td.dataset.col, e);
+    } else {
+      // Row-number cell (the only other cell in a data row).
+      handleRowClick(key, e);
+      const cols = columns ? visibleColumns() : [];
+      focusCell = { key, col: cols[0] ?? null, idx: view.indexOf(key) };
+      refreshSelectionStyles();
+      startRowDrag(e);
+    }
+  }
+
+  /* ── Drag-to-select ───────────────────────────────────────────────── */
+
+  // Map a pointer position to a (row key, column) cell. Works outside the
+  // scroll area too — coordinates clamp to the nearest row/column — so a
+  // drag can keep extending while autoscrolling.
+  function cellFromPoint(x, y) {
+    const rect = scrollHost.getBoundingClientRect?.();
+    if (!rect || !view.length || !columns) return null;
+    const headH = thead.clientHeight || 0;
+    const yy = (y - rect.top) - headH + scrollHost.scrollTop;
+    const idx = Math.max(0, Math.min(view.length - 1, Math.floor(yy / rowH)));
+    let col = null, best = null, bestDist = Infinity;
+    for (const th of thead.querySelectorAll("th")) {
+      if (!th.dataset.col) continue;
+      const r = th.getBoundingClientRect();
+      if (x >= r.left && x < r.right) { col = th.dataset.col; break; }
+      const d = x < r.left ? r.left - x : x - r.right;
+      if (d < bestDist) { bestDist = d; best = th.dataset.col; }
+    }
+    col = col ?? best;
+    if (col == null) return null;
+    return { key: view[idx], col, idx };
+  }
+
+  // Shared drag loop: rAF-throttled, autoscrolls when the pointer leaves
+  // the scroll area (and keeps scrolling while it stays outside).
+  function startSelDrag(e, onCell) {
+    const pid = e.pointerId;
+    let raf = 0, lastEv = e, done = false;
+    const step = () => {
+      raf = 0;
+      if (done) return;
+      const ev = lastEv;
+      const rect = scrollHost.getBoundingClientRect?.();
+      if (!rect) return;
+      const headH = thead.clientHeight || 0;
+      let scrolled = false;
+      if (ev.clientY < rect.top + headH) {
+        scrollHost.scrollTop -= Math.min(40, rect.top + headH - ev.clientY);
+        scrolled = true;
+      } else if (ev.clientY > rect.bottom) {
+        scrollHost.scrollTop += Math.min(40, ev.clientY - rect.bottom);
+        scrolled = true;
+      }
+      if (ev.clientX < rect.left) {
+        scrollHost.scrollLeft -= Math.min(40, rect.left - ev.clientX);
+        scrolled = true;
+      } else if (ev.clientX > rect.right) {
+        scrollHost.scrollLeft += Math.min(40, ev.clientX - rect.right);
+        scrolled = true;
+      }
+      if (scrolled) render();
+      const hit = cellFromPoint(ev.clientX, ev.clientY);
+      if (hit) onCell(hit.key, hit.col, hit.idx);
+      if (scrolled) raf = requestAnimationFrame(step);
+    };
+    const onMove = (ev) => {
+      if (ev.pointerId !== pid) return;
+      lastEv = ev;
+      if (!raf) raf = requestAnimationFrame(step);
+    };
+    const onUp = (ev) => {
+      if (ev.pointerId !== pid) return;
+      done = true;
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+  }
+
+  // `rect` is the active rect to extend (shift / ctrl starts); a plain
+  // click passes null and the rect materializes on the first real move.
+  function startCellDrag(e, aKey, aCol, aIdx, rect) {
+    startSelDrag(e, (key, col, idx) => {
+      if (!rect) {
+        if (key === aKey && col === aCol) return;
+        rect = { aKey, aCol, aIdx, fKey: key, fCol: col, fIdx: idx };
+        cellRects.push(rect);
+      } else if (rect.fKey === key && rect.fCol === col) {
+        return;
+      } else {
+        rect.fKey = key; rect.fCol = col; rect.fIdx = idx;
+      }
+      focusCell = { key, col, idx };
+      refreshSelectionStyles();
+    });
+  }
+
+  function startRowDrag(e) {
+    const base = (e.ctrlKey || e.metaKey) ? new Set(selectedKeys) : null;
+    const aIdx = keyViewIdx(selectedAnchor, 0);
+    startSelDrag(e, (key, col, idx) => {
+      selectedKeys.clear();
+      if (base) for (const k of base) selectedKeys.add(k);
+      const lo = Math.min(aIdx, idx), hi = Math.max(aIdx, idx);
+      for (let i = lo; i <= hi; i++) selectedKeys.add(view[i]);
+      focusCell = { key, col: focusCell?.col ?? col, idx };
+      refreshSelectionStyles();
+    });
+  }
+
+  /* ── Keyboard navigation ──────────────────────────────────────────── */
+
+  function scrollFocusIntoView() {
+    if (!focusCell) return;
+    const idx = keyViewIdx(focusCell.key, focusCell.idx);
+    const headH = thead.clientHeight || 0;
+    // Coarse pass: rowH-based estimate, enough to get the row rendered.
+    const top = idx * rowH;
+    const viewH = (scrollHost.clientHeight || 0) - headH;
+    if (top < scrollHost.scrollTop) scrollHost.scrollTop = top;
+    else if (top + rowH > scrollHost.scrollTop + viewH)
+      scrollHost.scrollTop = top + rowH - viewH;
+    render();
+    // Exact pass: any residual rowH drift (sub-pixel pitch, zoom) still
+    // accumulates over hundreds of rows, so measure the rendered row's
+    // real rect and correct by the exact overshoot. Skipped when the
+    // viewport is shorter than the sticky header (degenerate layout).
+    const ftr = rowEls.get(focusCell.key);
+    if (ftr?.getBoundingClientRect && scrollHost.getBoundingClientRect) {
+      const rr = ftr.getBoundingClientRect();
+      const hr = scrollHost.getBoundingClientRect();
+      if (rr.height > 0 && hr.bottom > hr.top + headH) {
+        if (rr.top < hr.top + headH) {
+          scrollHost.scrollTop -= hr.top + headH - rr.top;
+          render();
+        } else if (rr.bottom > hr.bottom) {
+          scrollHost.scrollTop += rr.bottom - hr.bottom;
+          render();
+        }
+      }
+    }
+    const th = focusCell.col != null && thead.querySelector
+      ? thead.querySelector(`th[data-col="${CSS.escape(focusCell.col)}"]`) : null;
+    if (th?.getBoundingClientRect && scrollHost.getBoundingClientRect) {
+      const tr = th.getBoundingClientRect();
+      const hr = scrollHost.getBoundingClientRect();
+      const stickyW = rowColumn
+        ? (thead.querySelector(".mkui-th-rownum")?.getBoundingClientRect()?.width ?? 0)
+        : 0;
+      if (tr.left < hr.left + stickyW)
+        scrollHost.scrollLeft -= hr.left + stickyW - tr.left;
+      else if (tr.right > hr.right)
+        scrollHost.scrollLeft += tr.right - hr.right;
+    }
+    render();
+  }
+
+  function onTableKeyDown(e) {
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    if (!columns || !view.length) return;
+    const meta = e.ctrlKey || e.metaKey;
+    const cols = visibleColumns();
+
+    if (e.key === " ") {
+      // Spacebar selects the focused row (shift+space is the same, Excel
+      // muscle memory); ctrl/cmd+space toggles it within the set.
+      if (!ensureFocusCell()) return;
+      clearCellSelection();
+      const key = focusCell.key;
+      if (meta) {
+        if (selectedKeys.has(key)) selectedKeys.delete(key);
+        else selectedKeys.add(key);
+      } else {
+        selectedKeys.clear();
+        selectedKeys.add(key);
+      }
+      selectedAnchor = key;
+      refreshSelectionStyles();
+      e.preventDefault?.();
+      return;
+    }
+
+    const nav = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+    let move = nav[e.key] ??
+      (e.key === "Home" ? "home" : e.key === "End" ? "end" :
+       e.key === "PageUp" ? "pgup" : e.key === "PageDown" ? "pgdn" : null);
+    if (move == null) return;
+    const hadFocus = focusCell != null;
+    if (!ensureFocusCell()) return;
+    if (!hadFocus) move = [0, 0]; // first keystroke just places the cursor
+
+    let idx = keyViewIdx(focusCell.key, focusCell.idx);
+    let ci = Math.max(0, cols.indexOf(focusCell.col));
+    const headH = thead.clientHeight || 0;
+    const page = Math.max(1, Math.floor(((scrollHost.clientHeight || 0) - headH) / rowH));
+    if (Array.isArray(move)) { idx += move[0]; ci += move[1]; }
+    else if (move === "home") { ci = 0; if (meta) idx = 0; }
+    else if (move === "end")  { ci = cols.length - 1; if (meta) idx = view.length - 1; }
+    else if (move === "pgup") idx -= page;
+    else if (move === "pgdn") idx += page;
+    idx = Math.max(0, Math.min(view.length - 1, idx));
+    ci = Math.max(0, Math.min(cols.length - 1, ci));
+    const key = view[idx], col = cols[ci];
+
+    if (e.shiftKey && selectedKeys.size > 0) {
+      // Row mode: shift+arrows grow the row range from the anchor.
+      const aIdx = keyViewIdx(selectedAnchor, idx);
+      selectedKeys.clear();
+      const lo = Math.min(aIdx, idx), hi = Math.max(aIdx, idx);
+      for (let i = lo; i <= hi; i++) selectedKeys.add(view[i]);
+      focusCell = { key, col, idx };
+    } else if (e.shiftKey) {
+      // Cell mode: extend the active rect from its anchor.
+      let r = cellRects[cellRects.length - 1];
+      if (!r) {
+        r = { aKey: focusCell.key, aCol: focusCell.col,
+              aIdx: keyViewIdx(focusCell.key, focusCell.idx) };
+        cellRects.push(r);
+      }
+      r.fKey = key; r.fCol = col; r.fIdx = idx;
+      focusCell = { key, col, idx };
+    } else {
+      // Plain move: selection collapses to the focused cell.
+      selectedKeys.clear();
+      selectedAnchor = null;
+      clearCellSelection();
+      focusCell = { key, col, idx };
+    }
+    refreshSelectionStyles();
+    scrollFocusIntoView();
+    e.preventDefault?.();
+  }
+
+  scrollHost.setAttribute?.("tabindex", "0");
+  scrollHost.classList?.add("mkui-table-keys");
+  scrollHost.addEventListener("keydown", onTableKeyDown);
+
+  /* ── Clipboard copy ───────────────────────────────────────────────── */
+
+  // Rows selected → rows × all visible columns, plus a label header row.
+  // Cells selected → the bounding grid of selected rows × selected
+  // columns, blanks for cells outside every rect. Neither → the focused
+  // cell. Only view (filtered) rows are ever copied.
+  function buildCopyGrid() {
+    if (!columns) return null;
+    const cols = visibleColumns();
+    const cellVal = (row, c) => {
+      const v = row?.[c];
+      return v == null ? "" : String(v);
+    };
+    if (selectedKeys.size) {
+      const grid = [cols.map(label)];
+      for (const key of view) {
+        if (!selectedKeys.has(key)) continue;
+        const row = rows.get(key);
+        grid.push(cols.map((c) => cellVal(row, c)));
+      }
+      return grid.length > 1
+        ? { grid, headerRows: 1, what: plural(grid.length - 1, "row") } : null;
+    }
+    const bounds = rectBounds();
+    if (bounds.length) {
+      const rowIdxs = new Set(), colIdxs = new Set();
+      for (const b of bounds) {
+        for (let r = b.r1; r <= b.r2; r++) rowIdxs.add(r);
+        for (let c = b.c1; c <= b.c2; c++) colIdxs.add(c);
+      }
+      const rs = [...rowIdxs].sort((x, y) => x - y);
+      const cs = [...colIdxs].sort((x, y) => x - y);
+      let nCells = 0;
+      const grid = rs.map((r) => {
+        const key = view[r], row = rows.get(key);
+        return cs.map((c) => {
+          if (!cellSelected(r, c, key, cols[c])) return "";
+          nCells++;
+          return cellVal(row, cols[c]);
+        });
+      });
+      return { grid, headerRows: 0, what: plural(nCells, "cell") };
+    }
+    if (focusCell && ensureFocusCell()) {
+      const row = rows.get(focusCell.key);
+      if (row) return { grid: [[cellVal(row, focusCell.col)]], headerRows: 0,
+                        what: "1 cell" };
+    }
+    return null;
+  }
+
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+  // Copy feedback: pulse the copied rows/cells in place…
+  function flashCopied() {
+    if (selectedKeys.size) {
+      for (const [key, tr] of rowEls)
+        if (selectedKeys.has(key)) flash(tr, "mkui-flash-copy");
+    } else if (cellRects.length) {
+      for (const tr of rowEls.values())
+        for (const td of tr.children)
+          if (td.classList.contains("mkui-cell-sel")) flash(td, "mkui-flash-copy");
+    } else if (focusCell) {
+      const tr = rowEls.get(focusCell.key);
+      const td = tr?.querySelector?.(`td[data-col="${CSS.escape(focusCell.col)}"]`);
+      if (td) flash(td, "mkui-flash-copy");
+    }
+  }
+
+  // …and announce it on the statusbar's conventional state path, reverting
+  // after a moment. The revert only fires if the message is still ours, so
+  // a connection-status update landing mid-timeout is never clobbered;
+  // back-to-back copies keep the original message to restore.
+  let copyStatusTimer = null;
+  let copyStatusPrev = null;
+  function showCopyStatus(msg) {
+    const st = app.state;
+    if (!st?.get || !st?.set) return;
+    if (copyStatusTimer) clearTimeout(copyStatusTimer);
+    else copyStatusPrev = st.get("status.message");
+    st.set("status.message", msg);
+    copyStatusTimer = setTimeout(() => {
+      copyStatusTimer = null;
+      if (st.get("status.message") === msg)
+        st.set("status.message", copyStatusPrev ?? "");
+    }, 2000);
+  }
+
+  // Very large grids skip the HTML flavor to halve peak string memory —
+  // TSV alone still pastes into spreadsheets.
+  const HTML_COPY_MAX_ROWS = 100000;
+
+  function copySelection() {
+    const g = buildCopyGrid();
+    if (!g) return false;
+    const clip = typeof navigator !== "undefined" ? navigator.clipboard : null;
+    if (!clip) return false;
+    const tsv = gridToTSV(g.grid);
+    flashCopied();
+    (async () => {
+      if (clip.write && typeof ClipboardItem !== "undefined" &&
+          typeof Blob !== "undefined" && g.grid.length <= HTML_COPY_MAX_ROWS) {
+        try {
+          const html = gridToHTML(g.grid, g.headerRows);
+          await clip.write([new ClipboardItem({
+            "text/plain": new Blob([tsv], { type: "text/plain" }),
+            "text/html": new Blob([html], { type: "text/html" }),
+          })]);
+          showCopyStatus(`Copied ${g.what}`);
+          return;
+        } catch { /* fall through to writeText */ }
+      }
+      try {
+        await clip.writeText(tsv);
+        showCopyStatus(`Copied ${g.what}`);
+      } catch {
+        showCopyStatus("Copy failed");
+      }
+    })();
+    return true;
   }
 
   /* ── Button enablement & click ────────────────────────────────────── */
 
   let mkioConnected = false;
 
+  // Rows the selection implies, in view order: explicit row selection,
+  // else the rows containing selected cells, else the focused cell's row.
+  function getSelectedRows() {
+    const out = [];
+    if (selectedKeys.size) {
+      for (const key of view) if (selectedKeys.has(key)) out.push(rows.get(key));
+      return out;
+    }
+    for (const [a, b] of selectedRowIntervals())
+      for (let i = a; i <= b; i++) out.push(rows.get(view[i]));
+    if (!out.length && focusCell && ensureFocusCell()) {
+      const row = rows.get(focusCell.key);
+      if (row) out.push(row);
+    }
+    return out;
+  }
+
+  function effectiveRowCount() {
+    if (selectedKeys.size) return selectedKeys.size;
+    const iv = selectedRowIntervals();
+    if (iv.length) return iv.reduce((n, [a, b]) => n + (b - a + 1), 0);
+    return focusCell && rows.has(focusCell.key) ? 1 : 0;
+  }
+
+  // Exact until `limit`, then stops — enablement only compares thresholds,
+  // so a huge shift-selected rect never gets fully enumerated per keypress.
+  function countCellsUpTo(limit) {
+    if (!columns) return 0;
+    const cols = visibleColumns();
+    const iv = selectedRowIntervals();
+    if (!iv.length)
+      return focusCell && rows.has(focusCell.key) ? 1 : 0;
+    let n = 0;
+    for (const [a, b] of iv) {
+      for (let r = a; r <= b; r++) {
+        const key = view[r];
+        for (let c = 0; c < cols.length; c++)
+          if (cellSelected(r, c, key, cols[c]) && ++n > limit) return n;
+      }
+    }
+    return n;
+  }
+
+  function getSelectedCells() {
+    const out = [];
+    if (!columns) return out;
+    const cols = visibleColumns();
+    for (const [a, b] of selectedRowIntervals()) {
+      for (let r = a; r <= b; r++) {
+        const key = view[r], row = rows.get(key);
+        for (let c = 0; c < cols.length; c++)
+          if (cellSelected(r, c, key, cols[c]))
+            out.push({ row, column: cols[c], value: row?.[cols[c]] ?? "" });
+      }
+    }
+    if (!out.length && focusCell && ensureFocusCell()) {
+      const row = rows.get(focusCell.key);
+      if (row) out.push({ row, column: focusCell.col, value: row[focusCell.col] ?? "" });
+    }
+    return out;
+  }
+
+  const buttonUnit = (bs) => bs.unit ?? bs.enable?.unit ?? "rows";
+
   function updateButtonStates() {
-    const selected = getSelectedRows();
-    const count = selected.length;
+    const rowCount = effectiveRowCount();
+    let matRows = null; // materialized lazily, only for rowMatch
     for (const { el, spec: bs } of buttonEls) {
       const en = bs.enable ?? {};
+      const unit = buttonUnit(bs);
+      const cellUnit = unit === "cell" || unit === "cells";
+      const single = unit === "cell" || unit === "row";
+      let count;
+      if (cellUnit) {
+        const lim = Math.max(en.minSelected ?? 0, en.maxSelected ?? 0, 1) + 1;
+        count = countCellsUpTo(lim);
+      } else {
+        count = rowCount;
+      }
       let ok = true;
       if (en.connected && !mkioConnected) ok = false;
-      if (ok && en.minSelected != null && count < en.minSelected) ok = false;
-      if (ok && en.maxSelected != null && count > en.maxSelected) ok = false;
-      if (ok && en.rowMatch && count > 0) {
-        for (const [field, expected] of Object.entries(en.rowMatch)) {
-          const vals = Array.isArray(expected) ? expected : [expected];
-          if (!selected.every((r) => vals.includes(r[field] == null ? "" : String(r[field])))) {
-            ok = false;
-            break;
+      // Singular units imply exactly-one unless the config says otherwise.
+      const min = en.minSelected ?? (single ? 1 : null);
+      const max = en.maxSelected ?? (single ? 1 : null);
+      if (ok && min != null && count < min) ok = false;
+      if (ok && max != null && count > max) ok = false;
+      if (ok && en.rowMatch) {
+        if (count === 0) ok = false;
+        else {
+          matRows ??= getSelectedRows();
+          for (const [field, expected] of Object.entries(en.rowMatch)) {
+            const vals = Array.isArray(expected) ? expected : [expected];
+            if (!matRows.every((r) => vals.includes(r[field] == null ? "" : String(r[field])))) {
+              ok = false;
+              break;
+            }
           }
         }
       }
-      if (ok && en.rowMatch && count === 0) ok = false;
       el.disabled = !ok;
     }
   }
@@ -530,15 +1199,32 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   async function handleButtonClick(btnSpec) {
     const action = btnSpec.action;
     if (!action) return;
+    const unit = buttonUnit(btnSpec);
+    const cellUnit = unit === "cell" || unit === "cells";
     const selected = getSelectedRows();
+    const cells = cellUnit ? getSelectedCells() : [];
     const first = selected[0] ?? {};
-    const ctx = { row: first, rows: selected, selection: { count: selected.length }, state: app.state.get() };
+    const ctx = {
+      row: first, rows: selected,
+      cell: cells[0] ?? null, cells,
+      selection: { count: selected.length, rowCount: selected.length,
+                   cellCount: cellUnit ? cells.length : undefined, unit },
+      state: app.state.get(),
+    };
 
     if (action.type === "transaction") {
-      for (const row of selected) {
-        const rowCtx = { ...ctx, row };
-        const data = resolveObject(action.data ?? {}, rowCtx);
-        client.send(action.service, data, { op: action.op });
+      if (cellUnit) {
+        for (const cell of cells) {
+          const cellCtx = { ...ctx, cell, row: cell.row };
+          const data = resolveObject(action.data ?? {}, cellCtx);
+          client.send(action.service, data, { op: action.op });
+        }
+      } else {
+        for (const row of selected) {
+          const rowCtx = { ...ctx, row };
+          const data = resolveObject(action.data ?? {}, rowCtx);
+          client.send(action.service, data, { op: action.op });
+        }
       }
     } else if (action.type === "dialog") {
       let dialogSpec;
@@ -593,7 +1279,19 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return true;
   }
 
-  function applyVisibility() { markViewDirty(); render(); }
+  function applyVisibility() {
+    markViewDirty();
+    // Selection follows visibility: filtered-out rows drop from the row
+    // selection so counts, copies, and actions only ever see view rows.
+    if (selectedKeys.size) {
+      for (const key of [...selectedKeys]) {
+        const r = rows.get(key);
+        if (!r || !matchesFilters(r)) selectedKeys.delete(key);
+      }
+    }
+    render();
+    if (hasButtons) updateButtonStates();
+  }
 
   function reorder() { markViewDirty(); render(); }
 
@@ -615,12 +1313,20 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // columns start at header width and only grow from there as records
   // arrive (growColWidth, driven by bumpStats).
 
+  const rowNumColW = () =>
+    Math.ceil(Math.max(2, rowNumDigits) * (chW || 7.2)) + CELL_CHROME;
+
   function renderColgroup() {
     colgroup.innerHTML = "";
     if (!widthsInited || !columns) {
       table.classList.remove("mkui-table-fixed");
       table.style.width = "";
       return;
+    }
+    if (rowColumn) {
+      const col = document.createElement("col");
+      col.style.width = rowNumColW() + "px";
+      colgroup.appendChild(col);
     }
     for (const c of visibleColumns()) {
       const col = document.createElement("col");
@@ -753,6 +1459,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     thead.innerHTML = "";
     const tr = document.createElement("tr");
     const visCols = visibleColumns();
+    if (rowColumn) {
+      // Top-left corner cell of the row-number column: click selects all.
+      const th = document.createElement("th");
+      th.className = "mkui-th-rownum";
+      th.title = "Select all";
+      th.addEventListener("click", () => {
+        selectAllRows();
+      });
+      tr.appendChild(th);
+    }
     for (let vi = 0; vi < visCols.length; vi++) {
       const c = visCols[vi];
       const th = document.createElement("th");
@@ -824,8 +1540,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (visCols.length) filler.appendChild(makeResizer(visCols[visCols.length - 1]));
     tr.appendChild(filler);
     thead.appendChild(tr);
-    topSpacerTd.colSpan = visCols.length + 1;
-    botSpacerTd.colSpan = visCols.length + 1;
+    const spacerSpan = visCols.length + 1 + (rowColumn ? 1 : 0);
+    topSpacerTd.colSpan = spacerSpan;
+    botSpacerTd.colSpan = spacerSpan;
     renderColgroup();
     maybeInitWidths();
   }
@@ -899,7 +1616,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       ghost.style.left = (e2.clientX + 12) + "px";
       ghost.style.top = (e2.clientY - 10) + "px";
 
-      const ths = thead.querySelectorAll("th");
+      // Skip the row-number th: dropIdx must stay aligned with visCols
+      // indices (the filler th marks the after-last-column slot).
+      const ths = [...thead.querySelectorAll("th")]
+        .filter((t) => !String(t.className).includes("mkui-th-rownum"));
       dropIdx = ths.length;
       for (let i = 0; i < ths.length; i++) {
         const r = ths[i].getBoundingClientRect();
@@ -1076,6 +1796,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const tr = document.createElement("tr");
     const key = row[idKey];
     tr.dataset.ref = key;
+    if (rowColumn) {
+      // Number text is filled in by render() — it depends on view position.
+      const td = document.createElement("td");
+      td.className = "mkui-td-rownum";
+      tr.appendChild(td);
+    }
     for (const c of visibleColumns()) {
       const td = document.createElement("td");
       td.dataset.col = c;
@@ -1084,8 +1810,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       styleCell(td, c);
       tr.appendChild(td);
     }
-    if (selectedKeys.has(key)) tr.classList.add("mkui-selected");
-    tr.addEventListener("click", (e) => handleRowClick(key, e));
+    tr.addEventListener("pointerdown", (e) => handleRowPointerDown(key, e));
     return tr;
   }
 
@@ -1168,6 +1893,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (bi >= 0) baseOrder.splice(bi, 1);
     rows.delete(key);
     selectedKeys.delete(key);
+    if (cellOff.size)
+      for (const k of [...cellOff])
+        if (k.startsWith(key + "\0")) cellOff.delete(k);
     viewRev++;
     const tr = rowEls.get(key);
     if (tr) {
@@ -1501,6 +2229,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   const paneEl = host.closest("mkui-pane");
   if (paneEl) {
+    // Edit hook: the workspace routes Ctrl/Cmd+C, Ctrl/Cmd+A, Escape, and
+    // the edit.* menu actions to the focused frame's active pane.
+    paneEl._editActions = {
+      copy: () => copySelection(),
+      selectAll: () => { selectAllRows(); return true; },
+      clearSelection: () => clearSelectionKeepFocus(),
+    };
     paneEl.addEventListener("mkui-pane-close", () => {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       closed = true;

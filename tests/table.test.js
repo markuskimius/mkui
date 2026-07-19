@@ -55,6 +55,7 @@ function mockEl(tag) {
       return n;
     },
     remove() { detach(el); },
+    removeChild(n) { detach(n); return n; },
     replaceWith(n) {
       const p = el._parent;
       if (!p) return;
@@ -239,7 +240,10 @@ async function createTable(specOverrides = {}) {
     config: { mkio: { url: "ws://localhost:8080/ws" } },
     state,
   };
-  const spec = { service: "test-svc", ...specOverrides };
+  // rowColumn defaults off here so the long-standing assertions can keep
+  // indexing header/row children directly; row-column behavior has its own
+  // tests that opt back in.
+  const spec = { service: "test-svc", rowColumn: false, ...specOverrides };
   const prevLen = ioCallbacks.length;
   await factory(spec, app, host);
   const io = ioCallbacks.length > prevLen ? ioCallbacks[ioCallbacks.length - 1] : null;
@@ -2683,4 +2687,463 @@ test("active filter keeps the button accented through icon swaps", async () => {
   clickHeader(th);
   assert.ok(btn.classList.contains("active"), "still active after sort cleared");
   assert.equal(headerIcon(th).kind, "hamburger");
+});
+
+/* ── Selection: row column, cells, keyboard, copy, buttons ───────────── */
+
+// Fire a pointerdown on a row's cell. tdIdx indexes tr._ch directly (with
+// rowColumn the rownum cell is index 0, data cells follow).
+function pointerDown(tr, tdIdx, overrides = {}) {
+  const e = {
+    target: tr._ch[tdIdx], button: 0, pointerType: "mouse", pointerId: 1,
+    ctrlKey: false, metaKey: false, shiftKey: false, altKey: false,
+    preventDefault() {},
+    ...overrides,
+  };
+  tr._ev.pointerdown[0](e);
+  return e;
+}
+
+function keyDown(scrollHost, key, overrides = {}) {
+  const e = {
+    key, target: { tagName: "DIV" },
+    ctrlKey: false, metaKey: false, shiftKey: false, altKey: false,
+    defaultPrevented: false,
+    preventDefault() { this.defaultPrevented = true; },
+    ...overrides,
+  };
+  scrollHost._ev.keydown[0](e);
+  return e;
+}
+
+async function createSelTable(specOverrides = {}) {
+  const t = await createTable({ rowColumn: true, ...specOverrides });
+  triggerVisible(t.io);
+  lastSubscribe().opts.onSnapshot(makeRows(4));
+  return t;
+}
+
+function dataRows(host) { return getTbody(host)._ch; }
+
+test("row column is on by default", async () => {
+  rafQueue.length = 0;
+  const host = mockEl("div");
+  const paneEl = mockEl("mkui-pane");
+  host.closest = (sel) => sel === "mkui-pane" ? paneEl : null;
+  const state = makeState([["mkio.connected", true]]);
+  const app = { config: { mkio: { url: "ws://localhost:8080/ws" } }, state };
+  const prevLen = ioCallbacks.length;
+  await factory({ service: "test-svc" }, app, host);
+  triggerVisible(ioCallbacks[prevLen]);
+  lastSubscribe().opts.onSnapshot(makeRows(2));
+  const tr = dataRows(host)[0];
+  assert.equal(String(tr._ch[0].className), "mkui-td-rownum");
+});
+
+test("rowColumn false renders no row-number cells", async () => {
+  const { host } = await createSelTable({ rowColumn: false });
+  const tr = dataRows(host)[0];
+  assert.equal(tr._ch[0].dataset.col, "name");
+});
+
+test("row numbers follow view order, 1-based", async () => {
+  const { host } = await createSelTable();
+  const nums = dataRows(host).map(tr => tr._ch[0].textContent);
+  assert.deepEqual(nums, ["1", "2", "3", "4"]);
+});
+
+test("spacer colspan includes the row-number column", async () => {
+  const { host } = await createSelTable();
+  const spacer = getRawTbody(host)._ch.find(c => String(c.className).includes("mkui-vspacer"));
+  // name + value + filler + rownum
+  assert.equal(spacer._ch[0].colSpan, 4);
+});
+
+test("header starts with a select-all corner cell", async () => {
+  const { host } = await createSelTable();
+  const tr = getThead(host)._ch[0];
+  assert.equal(String(tr._ch[0].className), "mkui-th-rownum");
+  tr._ch[0]._ev.click[0]({});
+  for (const row of dataRows(host))
+    assert.ok(row.classList.contains("mkui-selected"));
+});
+
+test("rownum click selects the row; ctrl toggles; shift ranges", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[0], 0);
+  assert.ok(trs[0].classList.contains("mkui-selected"));
+
+  pointerDown(trs[2], 0, { ctrlKey: true });
+  assert.ok(trs[0].classList.contains("mkui-selected"));
+  assert.ok(trs[2].classList.contains("mkui-selected"));
+  assert.ok(!trs[1].classList.contains("mkui-selected"));
+
+  pointerDown(trs[2], 0, { ctrlKey: true }); // toggle back off
+  assert.ok(!trs[2].classList.contains("mkui-selected"));
+
+  pointerDown(trs[3], 0, { shiftKey: true }); // anchor is row 2 (last ctrl)
+  assert.ok(trs[2].classList.contains("mkui-selected"));
+  assert.ok(trs[3].classList.contains("mkui-selected"));
+});
+
+test("cell click focuses the cell and highlights its row", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[1], 1); // "name" cell of row 1
+  assert.ok(trs[1]._ch[1].classList.contains("mkui-cell-focus"));
+  assert.ok(trs[1].classList.contains("mkui-row-hl"));
+  assert.ok(!trs[1].classList.contains("mkui-selected"));
+  // plain click = implicit selection, no explicit cell-sel rect
+  assert.ok(!trs[1]._ch[1].classList.contains("mkui-cell-sel"));
+});
+
+test("ctrl+cell-click keeps the focused cell selected and adds the new one", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[0], 1);
+  pointerDown(trs[1], 2, { ctrlKey: true });
+  assert.ok(trs[0]._ch[1].classList.contains("mkui-cell-sel"));
+  assert.ok(trs[1]._ch[2].classList.contains("mkui-cell-sel"));
+  assert.ok(trs[1]._ch[2].classList.contains("mkui-cell-focus"));
+  // both rows carry the highlight, neither is row-selected
+  assert.ok(trs[0].classList.contains("mkui-row-hl"));
+  assert.ok(trs[1].classList.contains("mkui-row-hl"));
+  assert.ok(!trs[0].classList.contains("mkui-selected"));
+});
+
+test("shift+cell-click selects the rectangle between anchor and target", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[0], 1);
+  pointerDown(trs[2], 2, { shiftKey: true });
+  for (let r = 0; r <= 2; r++)
+    for (let c = 1; c <= 2; c++)
+      assert.ok(trs[r]._ch[c].classList.contains("mkui-cell-sel"),
+        `cell ${r},${c} in rect`);
+  assert.ok(!trs[3]._ch[1].classList.contains("mkui-cell-sel"));
+});
+
+test("ctrl+click on a selected cell toggles it off", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[0], 1);
+  pointerDown(trs[2], 2, { shiftKey: true });
+  pointerDown(trs[1], 1, { ctrlKey: true }); // inside the rect → off
+  assert.ok(!trs[1]._ch[1].classList.contains("mkui-cell-sel"));
+  assert.ok(trs[1]._ch[2].classList.contains("mkui-cell-sel"), "rest of rect intact");
+});
+
+test("selecting cells clears row selection and vice versa", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[0], 0); // row select
+  pointerDown(trs[1], 1); // cell select
+  assert.ok(!trs[0].classList.contains("mkui-selected"));
+  pointerDown(trs[2], 0); // row select again
+  assert.ok(trs[2].classList.contains("mkui-selected"));
+  assert.ok(!trs[1]._ch[1].classList.contains("mkui-cell-sel"));
+});
+
+test("arrow keys move the focused cell; first press just places it", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  keyDown(host, "ArrowDown");
+  assert.ok(trs[0]._ch[1].classList.contains("mkui-cell-focus"), "cursor placed at first cell");
+  keyDown(host, "ArrowDown");
+  keyDown(host, "ArrowRight");
+  assert.ok(trs[1]._ch[2].classList.contains("mkui-cell-focus"));
+  assert.ok(!trs[0]._ch[1].classList.contains("mkui-cell-focus"));
+});
+
+test("shift+arrow extends a cell rect from the anchor", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[0], 1);
+  keyDown(host, "ArrowDown", { shiftKey: true });
+  keyDown(host, "ArrowRight", { shiftKey: true });
+  for (let r = 0; r <= 1; r++)
+    for (let c = 1; c <= 2; c++)
+      assert.ok(trs[r]._ch[c].classList.contains("mkui-cell-sel"));
+});
+
+test("space selects the focused row; ctrl+space toggles more rows in", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[1], 1);
+  keyDown(host, " ");
+  assert.ok(trs[1].classList.contains("mkui-selected"));
+  keyDown(host, "ArrowDown");
+  // plain arrow cleared the row selection (back to cell mode)
+  assert.ok(!trs[1].classList.contains("mkui-selected"));
+  keyDown(host, " ");
+  keyDown(host, "ArrowUp");
+  assert.ok(!trs[2].classList.contains("mkui-selected"));
+});
+
+test("shift+arrow in row mode grows the row range", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[0], 0);
+  keyDown(host, "ArrowDown", { shiftKey: true });
+  keyDown(host, "ArrowDown", { shiftKey: true });
+  assert.ok(trs[0].classList.contains("mkui-selected"));
+  assert.ok(trs[1].classList.contains("mkui-selected"));
+  assert.ok(trs[2].classList.contains("mkui-selected"));
+  keyDown(host, "ArrowUp", { shiftKey: true });
+  assert.ok(!trs[2].classList.contains("mkui-selected"), "range shrinks back");
+});
+
+test("Home/End jump columns; ctrl+End jumps to the last cell", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[1], 2);
+  keyDown(host, "Home");
+  assert.ok(trs[1]._ch[1].classList.contains("mkui-cell-focus"));
+  keyDown(host, "End", { ctrlKey: true });
+  assert.ok(trs[3]._ch[2].classList.contains("mkui-cell-focus"));
+});
+
+test("edit hook: Escape clears selection but keeps the cursor", async () => {
+  const { host } = await createSelTable();
+  const paneEl = host._paneEl;
+  const trs = dataRows(host);
+  pointerDown(trs[0], 0);
+  assert.equal(paneEl._editActions.clearSelection(), true);
+  assert.ok(!trs[0].classList.contains("mkui-selected"));
+  assert.ok(trs[0]._ch[1].classList.contains("mkui-cell-focus"), "cursor survives Esc");
+  assert.equal(paneEl._editActions.clearSelection(), false, "nothing left to clear");
+});
+
+test("edit hook: selectAll selects every view row", async () => {
+  const { host } = await createSelTable();
+  host._paneEl._editActions.selectAll();
+  for (const tr of dataRows(host))
+    assert.ok(tr.classList.contains("mkui-selected"));
+});
+
+test("copy of selected rows includes the header labels row", async () => {
+  const { host } = await createSelTable({ labels: { name: "Name" } });
+  const trs = dataRows(host);
+  pointerDown(trs[0], 0);
+  pointerDown(trs[2], 0, { ctrlKey: true });
+  let written = null;
+  globalThis.navigator = { clipboard: { writeText: (s) => { written = s; } } };
+  try {
+    assert.equal(host._paneEl._editActions.copy(), true);
+  } finally {
+    delete globalThis.navigator;
+  }
+  assert.equal(written,
+    "Name\tvalue\r\nrow-0\t0\r\nrow-2\t2");
+});
+
+test("copy of cells has no header and blanks outside the rects", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[0], 1);                    // (0, name)
+  pointerDown(trs[1], 2, { ctrlKey: true }); // (1, value)
+  let written = null;
+  globalThis.navigator = { clipboard: { writeText: (s) => { written = s; } } };
+  try { host._paneEl._editActions.copy(); }
+  finally { delete globalThis.navigator; }
+  assert.equal(written, "row-0\t\r\n\t1");
+});
+
+test("copy with only a focused cell copies that one value", async () => {
+  const { host } = await createSelTable();
+  pointerDown(dataRows(host)[2], 1);
+  let written = null;
+  globalThis.navigator = { clipboard: { writeText: (s) => { written = s; } } };
+  try { host._paneEl._editActions.copy(); }
+  finally { delete globalThis.navigator; }
+  assert.equal(written, "row-2");
+});
+
+test("copy with no data reports unhandled", async () => {
+  const { host } = await createTable({ rowColumn: true, columns: ["name"] });
+  assert.equal(host._paneEl._editActions.copy(), false);
+});
+
+test("copy writes both TSV and HTML flavors when ClipboardItem exists", async () => {
+  const { host } = await createSelTable();
+  pointerDown(dataRows(host)[0], 0);
+  let items = null;
+  globalThis.ClipboardItem = class { constructor(o) { this.o = o; } };
+  globalThis.navigator = { clipboard: {
+    write: (arr) => { items = arr; },
+    writeText: () => { throw new Error("should use write()"); },
+  } };
+  try { host._paneEl._editActions.copy(); }
+  finally { delete globalThis.navigator; delete globalThis.ClipboardItem; }
+  await Promise.resolve();
+  assert.ok(items, "clipboard.write called");
+  const flavors = Object.keys(items[0].o);
+  assert.deepEqual(flavors.sort(), ["text/html", "text/plain"]);
+  assert.equal(await items[0].o["text/html"].text(),
+    "<table><tr><th>name</th><th>value</th></tr><tr><td>row-0</td><td>0</td></tr></table>");
+});
+
+test("row-unit buttons act on the rows implied by a cell selection", async () => {
+  const { host } = await createSelTable({
+    buttons: [{ label: "Act", enable: { minSelected: 1 },
+                action: { type: "transaction", service: "svc", data: { n: "${row.name}" } } }],
+  });
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
+  const btn = toolbar._ch[0];
+  assert.equal(btn.disabled, true, "disabled before any interaction");
+  const trs = dataRows(host);
+  pointerDown(trs[1], 1); // focused cell implies its row
+  assert.equal(btn.disabled, false);
+  const sent = [];
+  fakeClient.send = (service, data, opts) => sent.push({ service, data, opts });
+  try {
+    btn._ev.click[0]();
+    assert.deepEqual(sent, [{ service: "svc", data: { n: "row-1" }, opts: { op: undefined } }]);
+  } finally {
+    delete fakeClient.send;
+  }
+});
+
+test("cell-unit buttons count cells and default to exactly one", async () => {
+  const { host } = await createSelTable({
+    buttons: [{ label: "C", unit: "cell", action: { type: "action", name: "x" } }],
+  });
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
+  const btn = toolbar._ch[0];
+  const trs = dataRows(host);
+  assert.equal(btn.disabled, true);
+  pointerDown(trs[0], 1);
+  assert.equal(btn.disabled, false, "one focused cell enables");
+  pointerDown(trs[1], 2, { ctrlKey: true });
+  assert.equal(btn.disabled, true, "two cells exceed the singular default");
+});
+
+test("rows-unit is the default and counts row selection", async () => {
+  const { host } = await createSelTable({
+    buttons: [{ label: "R", enable: { minSelected: 2 }, action: { type: "action", name: "x" } }],
+  });
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
+  const btn = toolbar._ch[0];
+  const trs = dataRows(host);
+  pointerDown(trs[0], 0);
+  assert.equal(btn.disabled, true, "one row < minSelected 2");
+  pointerDown(trs[1], 0, { ctrlKey: true });
+  assert.equal(btn.disabled, false);
+});
+
+test("selection survives re-render; deleted rows drop out of it", async () => {
+  const { host } = await createSelTable();
+  let trs = dataRows(host);
+  pointerDown(trs[0], 0);
+  pointerDown(trs[1], 0, { ctrlKey: true });
+  lastSubscribe().opts.onUpdate("delete", { _mkio_row: "1" });
+  // row "0" still selected, row "1" gone (its tr lingers only to fade out)
+  trs = dataRows(host).filter(tr => !tr.classList.contains("mkui-flash-out"));
+  const selected = trs.filter(tr => tr.classList.contains("mkui-selected"));
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0]._ch[1].textContent, "row-0");
+});
+
+test("new snapshot fully resets selection and focus", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[1], 1);
+  lastSubscribe().opts.onSnapshot(makeRows(2, 10));
+  for (const tr of dataRows(host)) {
+    assert.ok(!tr.classList.contains("mkui-selected"));
+    assert.ok(!tr.classList.contains("mkui-row-hl"));
+    for (const td of tr._ch)
+      assert.ok(!td.classList.contains("mkui-cell-focus"));
+  }
+});
+
+test("copy pulses the copied rows and shows a transient status message", async () => {
+  const { host, state } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[0], 0);
+  pointerDown(trs[1], 0, { ctrlKey: true });
+  globalThis.navigator = { clipboard: { writeText: () => {} } };
+  try { host._paneEl._editActions.copy(); }
+  finally { delete globalThis.navigator; }
+  assert.ok(trs[0].classList.contains("mkui-flash-copy"));
+  assert.ok(trs[1].classList.contains("mkui-flash-copy"));
+  assert.ok(!trs[2].classList.contains("mkui-flash-copy"));
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(state.get("status.message"), "Copied 2 rows");
+  advanceTimers();
+  assert.equal(state.get("status.message"), "", "message reverts after the timeout");
+});
+
+test("cell copy pulses the cells and counts them in the message", async () => {
+  const { host, state } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[0], 1);
+  pointerDown(trs[1], 2, { shiftKey: true }); // 2x2 rect
+  globalThis.navigator = { clipboard: { writeText: () => {} } };
+  try { host._paneEl._editActions.copy(); }
+  finally { delete globalThis.navigator; }
+  for (let r = 0; r <= 1; r++)
+    for (let c = 1; c <= 2; c++)
+      assert.ok(trs[r]._ch[c].classList.contains("mkui-flash-copy"), `cell ${r},${c}`);
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(state.get("status.message"), "Copied 4 cells");
+});
+
+test("focused-cell copy reports 1 cell; failures report Copy failed", async () => {
+  const { host, state } = await createSelTable();
+  pointerDown(dataRows(host)[0], 1);
+  globalThis.navigator = { clipboard: { writeText: () => {} } };
+  try { host._paneEl._editActions.copy(); }
+  finally { delete globalThis.navigator; }
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(state.get("status.message"), "Copied 1 cell");
+  advanceTimers();
+  globalThis.navigator = { clipboard: { writeText: () => { throw new Error("denied"); } } };
+  try { host._paneEl._editActions.copy(); }
+  finally { delete globalThis.navigator; }
+  await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  assert.equal(state.get("status.message"), "Copy failed");
+});
+
+test("a status update landing mid-timeout is not clobbered by the revert", async () => {
+  const { host, state } = await createSelTable();
+  pointerDown(dataRows(host)[0], 0);
+  globalThis.navigator = { clipboard: { writeText: () => {} } };
+  try { host._paneEl._editActions.copy(); }
+  finally { delete globalThis.navigator; }
+  await Promise.resolve(); await Promise.resolve();
+  state.set("status.message", "Disconnected"); // e.g. the mkio.disconnected map
+  advanceTimers();
+  assert.equal(state.get("status.message"), "Disconnected");
+});
+
+test("shift+space is an alias for row select (Excel muscle memory)", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[2], 1);
+  keyDown(host, " ", { shiftKey: true });
+  assert.ok(trs[2].classList.contains("mkui-selected"));
+});
+
+test("filtering out a selected row prunes it from the selection", async () => {
+  const { host } = await createSelTable();
+  const trs = dataRows(host);
+  pointerDown(trs[0], 0);
+  pointerDown(trs[1], 0, { ctrlKey: true });
+  // filter the "name" column to only row-1 via the dropdown
+  const th = getThead(host)._ch[0]._ch.find(t => t.dataset.col === "name");
+  clickFilterBtn(th);
+  const dd = host._ch.find(c => String(c.className).includes("mkui-filter-dropdown"));
+  const cbs = dd._ch.find(c => c.className === "mkui-filter-list")._ch
+    .map(item => item._ch.find(n => n.tagName === "INPUT"));
+  for (const cb of cbs) cb.checked = cb.dataset.val === "row-1";
+  cbs[0]._ev.change[0]();
+  // only row-1 is visible; row-0 must have dropped out of the selection,
+  // so copy sees exactly the surviving selected row
+  let written = null;
+  globalThis.navigator = { clipboard: { writeText: (s) => { written = s; } } };
+  try { host._paneEl._editActions.copy(); }
+  finally { delete globalThis.navigator; }
+  assert.equal(written, "name\tvalue\r\nrow-1\t1");
 });

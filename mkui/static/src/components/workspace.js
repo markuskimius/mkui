@@ -73,10 +73,36 @@ class MkuiWorkspace extends HTMLElement {
   // _activeTabGroup (set when the user interacts with a tab); if unset, we
   // fall back to the first tab group in the frame's tree.
   _onKeyDown = (e) => {
+    const t = e.target;
+    const inText = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+
+    // Edit shortcuts route to the focused frame's active pane via its
+    // _editActions hook. Guards: text inputs and native text selections
+    // always win — the browser's own copy/select-all must keep working.
+    if (!inText) {
+      if (e.key === "Escape") {
+        if (this.editAction("clearSelection")) e.preventDefault();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+        const k = typeof e.key === "string" ? e.key.toLowerCase() : "";
+        if (k === "c") {
+          const sel = typeof window !== "undefined" && window.getSelection
+            ? window.getSelection() : null;
+          if (sel && !sel.isCollapsed) return;
+          if (this.editAction("copy")) e.preventDefault();
+          return;
+        }
+        if (k === "a") {
+          if (this.editAction("selectAll")) e.preventDefault();
+          return;
+        }
+      }
+    }
+
     if (!(e.altKey && e.shiftKey)) return;
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-    const t = e.target;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    if (inText) return;
     const topSpec = this._frames[this._frames.length - 1];
     if (!topSpec) return;
     const frameEl = this._frameEls.get(topSpec.id);
@@ -92,6 +118,24 @@ class MkuiWorkspace extends HTMLElement {
     e.preventDefault();
     frameEl._renderInternal();
   };
+
+  // The pane element with keyboard focus per the frame focus model: the
+  // focused frame's active tab group's active tab.
+  activePaneEl() {
+    const el = this._frameEls.get(this._focusedId);
+    if (!el?.getTree) return null;
+    const tg = el._activeTabGroup ?? firstTabGroup(el.getTree());
+    const id = tg?.children?.[tg.active ?? 0];
+    return id != null ? this._paneEls.get(id) ?? null : null;
+  }
+
+  // Fire an edit action ("copy" | "selectAll" | "clearSelection") on the
+  // active pane's _editActions hook. Returns whether the pane handled it —
+  // false means the caller should leave the browser default alone.
+  editAction(name) {
+    const fn = this.activePaneEl()?._editActions?.[name];
+    return fn ? fn() !== false : false;
+  }
 
   setApp(app) {
     this._app = app;

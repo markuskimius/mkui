@@ -92,6 +92,12 @@ mkui-menubar {
 }
 .mkui-menu-item-arrow .mkui-icon { width: 12px; height: 12px; }
 .mkui-menu-item:hover .mkui-menu-item-arrow { color: var(--mkui-accent-fg); }
+/* Right-aligned shortcut hint (the item is already justify-space-between). */
+.mkui-menu-shortcut {
+  margin-left: 24px;
+  color: var(--mkui-fg-mute);
+}
+.mkui-menu-item:hover .mkui-menu-shortcut { color: var(--mkui-accent-fg); }
 .mkui-menu-sep { height: 1px; background: var(--mkui-border); margin: 4px 0; }
 
 mkui-statusbar {
@@ -438,6 +444,10 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   border-collapse: collapse;
   font-family: var(--mkui-font-mono);
   font-size: 12px;
+  /* Cell/row selection replaces native text selection — Ctrl/Cmd+C copies
+     the structured selection instead. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .mkui-table th, .mkui-table td {
   text-align: left;
@@ -707,6 +717,17 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-flash-out    { animation: mkui-flash-out 600ms ease forwards; }
 .mkui-flash-update { animation: mkui-flash-update 600ms ease forwards; }
 
+/* Copy feedback: a quick accent pulse on the copied rows/cells. The end
+   keyframe is deliberately omitted: the animation then interpolates to the
+   element's OWN resting background — the selection tint, the row
+   highlight, or transparent. An explicit `100% { transparent }` would dip
+   selected rows below their tint and snap back, reading as a double
+   flash. */
+@keyframes mkui-flash-copy {
+  0% { background: var(--mkui-accent); }
+}
+.mkui-flash-copy { animation: mkui-flash-copy 350ms ease; }
+
 /* ─── Table paging & progress ───────────────────────────────────────── */
 
 .mkui-table-scroll {
@@ -772,14 +793,65 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   font-size: 12px;
 }
 
-/* ─── Table row selection ──────────────────────────────────────────── */
+/* ─── Table selection ──────────────────────────────────────────────── */
 
-.mkui-table tbody tr { cursor: pointer; }
+/* The scroll container is focusable (tabindex=0) so arrow keys / space /
+   shortcuts land on the table; the focused-cell outline is the visible
+   focus indicator, not a ring around the whole pane. */
+.mkui-table-keys:focus { outline: none; }
+
+.mkui-table tbody tr { cursor: default; }
+
+/* Explicit row selection — the strong style. */
 .mkui-table tr.mkui-selected {
   background: rgba(14, 99, 156, 0.25);
 }
 .mkui-table tr.mkui-selected td {
   border-bottom-color: rgba(14, 99, 156, 0.4);
+}
+/* Row highlight — a row containing the focused cell or selected cells.
+   Deliberately far subtler than mkui-selected: it lets the whole row be
+   read without claiming the row is selected. Painted on the tr (like
+   mkui-selected) so td-level flash animations still show. */
+.mkui-table tr.mkui-row-hl {
+  background: rgba(14, 99, 156, 0.08);
+}
+
+/* Selected cells share the row-selection blue. */
+.mkui-table td.mkui-cell-sel {
+  background: rgba(14, 99, 156, 0.25);
+}
+/* Focused cell — the keyboard cursor. Inset outline so it doesn't bleed
+   into neighboring cells. */
+.mkui-table td.mkui-cell-focus {
+  outline: 1px solid var(--mkui-accent);
+  outline-offset: -1px;
+}
+
+/* Row-number column: sticky-left so numbers survive horizontal scroll
+   (the header corner cell is sticky on both axes via th's sticky top). */
+.mkui-table th.mkui-th-rownum,
+.mkui-table td.mkui-td-rownum {
+  position: sticky;
+  left: 0;
+  background: var(--mkui-bg-alt);
+  color: var(--mkui-fg-mute);
+  text-align: right;
+  cursor: pointer;
+  border-right: 1px solid var(--mkui-border);
+  touch-action: none;
+}
+.mkui-table th.mkui-th-rownum { z-index: 2; }
+.mkui-table td.mkui-td-rownum { z-index: 1; }
+/* The rownum cell is opaque (sticky cells must be — rows scroll beneath
+   them), so the tr's selection tint can't show through: tint explicitly. */
+.mkui-table tr.mkui-row-hl td.mkui-td-rownum {
+  background: color-mix(in srgb, var(--mkui-bg-alt) 88%, var(--mkui-accent));
+  color: var(--mkui-fg);
+}
+.mkui-table tr.mkui-selected td.mkui-td-rownum {
+  background: color-mix(in srgb, var(--mkui-bg-alt) 60%, var(--mkui-accent));
+  color: var(--mkui-fg);
 }
 
 /* ─── Table toolbar ────────────────────────────────────────────────── */

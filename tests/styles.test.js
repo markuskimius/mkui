@@ -283,3 +283,82 @@ test("header cells keep icons snug to the right edge but clear of the label", ()
 test("icons are transparent to pointer events", () => {
   assert.equal(declaration(".mkui-icon", "pointer-events"), "none");
 });
+
+// ── Table selection & row-number column ──────────────────────────────
+// Cell/row selection replaces native text selection; the focused cell is
+// the visible keyboard-focus indicator; the row-number column is sticky
+// and opaque, so selection tints must be painted onto it explicitly.
+
+test("tables opt out of native text selection (structured copy instead)", () => {
+  assert.equal(declaration(".mkui-table", "user-select"), "none");
+});
+
+test("the focusable scroll container shows no focus ring of its own", () => {
+  assert.equal(declaration(".mkui-table-keys:focus", "outline"), "none");
+});
+
+test("focused cell outline is inset so it doesn't bleed into neighbors", () => {
+  assert.match(declaration(".mkui-table td.mkui-cell-focus", "outline"),
+    /1px solid var\(--mkui-accent\)/);
+  assert.equal(declaration(".mkui-table td.mkui-cell-focus", "outline-offset"), "-1px");
+});
+
+test("row highlight paints on the tr, far subtler than row selection", () => {
+  // Painted on the tr (like mkui-selected) so td-level flash animations
+  // still show; the td-level cell-sel tint matches row selection strength.
+  const hl = declaration(".mkui-table tr.mkui-row-hl", "background");
+  const sel = declaration(".mkui-table tr.mkui-selected", "background");
+  assert.notEqual(hl, sel, "highlight must be visually distinct from selection");
+  assert.equal(declaration(".mkui-table td.mkui-cell-sel", "background"), sel);
+});
+
+test("row-number cells are sticky-left and opaque", () => {
+  const body = ruleContaining(".mkui-table td.mkui-td-rownum");
+  assert.match(body, /position:\s*sticky/);
+  assert.match(body, /left:\s*0/);
+  // Opaque: rows scroll beneath the sticky cell.
+  assert.match(body, /background:\s*var\(--mkui-bg-alt\)/);
+});
+
+test("rownum header corner stacks above rownum body cells", () => {
+  // Match the standalone one-liner rules directly: the shared sticky rule
+  // lists both selectors, so the generic helper would find that instead.
+  const thZ = css.match(/th\.mkui-th-rownum\s*\{\s*z-index:\s*(\d+)/);
+  const tdZ = css.match(/td\.mkui-td-rownum\s*\{\s*z-index:\s*(\d+)/);
+  assert.ok(thZ && tdZ, "both rownum z-index rules must exist");
+  assert.ok(parseInt(thZ[1]) > parseInt(tdZ[1]),
+    "corner cell must cover scrolled rownum cells");
+});
+
+test("selected and highlighted rows tint their opaque rownum cell explicitly", () => {
+  assert.match(
+    declaration(".mkui-table tr.mkui-selected td.mkui-td-rownum", "background"),
+    /color-mix|rgba/);
+  assert.match(
+    declaration(".mkui-table tr.mkui-row-hl td.mkui-td-rownum", "background"),
+    /color-mix|rgba/);
+});
+
+// ── Menu shortcut labels ──────────────────────────────────────────────
+
+test("menu shortcuts read as hints: muted, flipping with item hover", () => {
+  assert.equal(declaration(".mkui-menu-shortcut", "color"), "var(--mkui-fg-mute)");
+  assert.equal(
+    declaration(".mkui-menu-item:hover .mkui-menu-shortcut", "color"),
+    "var(--mkui-accent-fg)");
+});
+
+test("copy flash fades to each element's own resting background", () => {
+  // The keyframes must start at the accent and declare NO end frame: the
+  // animation then interpolates to the element's computed background (the
+  // selection tint, the row highlight, or transparent). An explicit
+  // `100% { transparent }` dips selected rows below their tint and snaps
+  // back — it reads as a double flash.
+  const i = css.indexOf("@keyframes mkui-flash-copy");
+  assert.ok(i >= 0, "mkui-flash-copy keyframes must exist");
+  const block = css.slice(i, css.indexOf("\n}", i) + 2);
+  assert.match(block, /0%\s*\{\s*background:\s*var\(--mkui-accent\)/);
+  assert.ok(!/100%|\bto\b|transparent/.test(block),
+    "no end keyframe — the resting background is the implicit end state");
+  assert.match(declaration(".mkui-flash-copy", "animation"), /mkui-flash-copy/);
+});
