@@ -55,6 +55,7 @@ class MkuiMenubar extends HTMLElement {
       el.className = "mkui-menu";
       el.textContent = menu.label;
       el.addEventListener("mousedown", (ev) => {
+        if (ev.button !== 0) return;
         ev.stopPropagation();
         if (this._rootAnchor === el) this._closeAll();
         else { this._closeAll(); this._openRoot(el, menu); this._pressActive = true; }
@@ -147,10 +148,12 @@ class MkuiMenubar extends HTMLElement {
         if (hasSubmenu) this._openSubmenu(it, item, depth + 1);
       });
       it.addEventListener("mousedown", (ev) => {
+        if (ev.button !== 0) return;
         ev.stopPropagation();
         this._pressActive = true;
       });
       it.addEventListener("mouseup", (ev) => {
+        if (ev.button !== 0) return;
         ev.stopPropagation();
         this._pressActive = false;
         if (hasSubmenu) return; // hover already opened it

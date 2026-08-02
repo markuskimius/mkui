@@ -88,6 +88,12 @@ entirely inside frames.
 - **Dragging a torn-out (or any single-pane) frame over another frame**
   shows drop zones: edges split, center adds as a tab. Release to dock.
 - **Splitter drag** → resize the ratio between two children of a split.
+- **Left button only** — menus, drags, resizes, sorting, and selection
+  respond to the primary mouse button; right and middle clicks are inert
+  (except that any button raises a frame, matching OS convention).
+  Modified clicks are inert where the modifier has no meaning: e.g.
+  ctrl/cmd/alt+click on a sort header leaves the sort untouched
+  (shift+click still builds multi-column sort).
 - **Any mousedown inside a frame** raises it to the top of the z-order.
   The top frame gets an accent border; within it, the last-clicked tab
   group's selected tab is raised in the selected-tab color, while

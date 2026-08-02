@@ -1499,7 +1499,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const th = document.createElement("th");
       th.className = "mkui-th-rownum";
       th.title = "Select all";
-      th.addEventListener("click", () => {
+      th.addEventListener("click", (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
         selectAllRows();
       });
       tr.appendChild(th);
@@ -1532,6 +1533,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       th.addEventListener("click", (e) => {
         if (suppressClick) { suppressClick = false; return; }
         if (e.target.closest(".mkui-filter-btn")) return;
+        // Shift builds multi-column sort; other modifiers are inert so a
+        // stray ctrl/cmd/alt+click can't wipe an existing sort stack.
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
 
         const idx = sortKeys.findIndex((k) => k.col === c);
         if (e.shiftKey) {

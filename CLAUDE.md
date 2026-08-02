@@ -196,6 +196,7 @@ Pin button: an SVG pin-icon toggle (`icon("pin")`) in the dialog's titlebar (fra
 ## Conventions
 
 - Zero runtime dependencies; Web Components for framework-agnostic use
+- Pointer guards: every mousedown/pointerdown that opens a menu or starts an action/drag checks `ev.button === 0` (menubar open + item activation, frame resize handles, splitters, drag region, tabs, table selection/column resize/reorder) — right/middle clicks are inert. Exception: the frame-raise mousedown is deliberately unguarded (any-button raise, OS convention). Modified clicks are inert where the modifier has no meaning: table sort headers ignore ctrl/cmd/alt (shift keeps multi-sort), the select-all corner ignores all modifiers. Guarded by `tests/pointer-guards.test.js` and `tests/table.test.js`
 - Icons are inline SVGs from `lib/icons.js` (`icon(name)`), never text glyphs — they inherit color via `currentColor` and are sized per context by `.mkui-icon` CSS rules. `.mkui-icon` keeps `pointer-events: none` so hit-testing lands on the hosting button (guarded by `tests/styles.test.js`)
 - `registerPaneType(name, factory)` for custom content; `registerWidget(name, factory)` for lightweight inline widgets
 - Built-in actions prefixed `pane.*` (show), `window.*` (tileH, tileV, grid, cascade), and `app.*` (quit)

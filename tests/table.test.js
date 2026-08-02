@@ -2516,8 +2516,9 @@ test("refresh re-fetches with saved pageLoadRef and pageLoadBefore", async () =>
 // the column is sorted, then turns into the sort caret (with an in-caret
 // priority digit under multi-sort). It opens the filter dropdown either way.
 
-function clickHeader(th, { shift = false } = {}) {
-  th._ev.click[0]({ shiftKey: shift, target: { closest: () => null } });
+function clickHeader(th, { shift = false, ctrl = false, meta = false, alt = false } = {}) {
+  th._ev.click[0]({ shiftKey: shift, ctrlKey: ctrl, metaKey: meta, altKey: alt,
+                    target: { closest: () => null } });
 }
 
 function clickFilterBtn(th) {
@@ -2644,6 +2645,32 @@ test("plain click on a secondary column makes it the only sort key", async () =>
   assert.deepEqual(headerIcon(thB), { kind: "caret-up", dir: "asc", digit: null, extra: 0 });
 });
 
+test("ctrl/cmd/alt-modified header clicks leave the sort untouched", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", a: "x", b: "y" },
+  ]);
+  const [thA, thB] = getThs(host);
+  clickHeader(thA);
+  clickHeader(thB, { shift: true }); // carefully built two-key sort
+
+  clickHeader(thA, { ctrl: true });
+  clickHeader(thB, { meta: true });
+  clickHeader(thA, { alt: true });
+  assert.deepEqual(headerIcon(thA), { kind: "caret-up", dir: "asc", digit: "1", extra: 0 },
+    "modified clicks neither cycle nor clear the primary key");
+  assert.deepEqual(headerIcon(thB), { kind: "caret-up", dir: "asc", digit: "2", extra: 0 },
+    "secondary key survives modified clicks");
+
+  // Unsorted column: a modified click must not start a sort either.
+  clickHeader(thA);                   // plain click: sole key, asc
+  clickHeader(thA); clickHeader(thA); // desc → cleared
+  clickHeader(thA, { ctrl: true });
+  assert.deepEqual(headerIcon(thA), { kind: "hamburger", extra: 0 },
+    "ctrl+click on an unsorted column does not sort it");
+});
+
 test("filter button still opens the dropdown while showing a caret", async () => {
   const { host, io } = await createTable({ protocol: "query" });
   triggerVisible(io);
@@ -2764,6 +2791,20 @@ test("header starts with a select-all corner cell", async () => {
   const tr = getThead(host)._ch[0];
   assert.equal(String(tr._ch[0].className), "mkui-th-rownum");
   tr._ch[0]._ev.click[0]({});
+  for (const row of dataRows(host))
+    assert.ok(row.classList.contains("mkui-selected"));
+});
+
+test("modified clicks on the select-all corner are inert", async () => {
+  const { host } = await createSelTable();
+  const corner = getThead(host)._ch[0]._ch[0];
+  for (const mod of ["ctrlKey", "metaKey", "altKey", "shiftKey"]) {
+    corner._ev.click[0]({ [mod]: true });
+    for (const row of dataRows(host))
+      assert.ok(!row.classList.contains("mkui-selected"),
+        `${mod}+click must not select all`);
+  }
+  corner._ev.click[0]({}); // plain click still selects all
   for (const row of dataRows(host))
     assert.ok(row.classList.contains("mkui-selected"));
 });

@@ -68,6 +68,7 @@ class MkuiFrame extends HTMLElement {
       const h = document.createElement("div");
       h.className = `mkui-frame-resize mkui-frame-resize-${dir}`;
       h.addEventListener("mousedown", (ev) => {
+        if (ev.button !== 0) return;
         this._workspace?._beginFrameResize(ev, this, dir);
       });
       this.appendChild(h);
@@ -191,7 +192,10 @@ class MkuiFrame extends HTMLElement {
         width: sp.rect.w + "px",
         height: sp.rect.h + "px",
       });
-      h.addEventListener("mousedown", (ev) => this._beginSplitterDrag(ev, sp));
+      h.addEventListener("mousedown", (ev) => {
+        if (ev.button !== 0) return;
+        this._beginSplitterDrag(ev, sp);
+      });
       this._bodyEl.appendChild(h);
       this._chromeEls.push(h);
     }
