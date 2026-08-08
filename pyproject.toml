@@ -35,6 +35,7 @@ mkui = [
     "static/src/**/*.js",
     "static/styles/**/*.css",
     "static/examples/**/*.html",
+    "static/examples/**/*.js",
     "static/examples/**/*.json",
     "static/examples/**/*.toml",
     "static/examples/**/*.py",
