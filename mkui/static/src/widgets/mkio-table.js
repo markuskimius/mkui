@@ -1,4 +1,4 @@
-import { registerPaneType } from "../core.js";
+import { registerPaneType, getFormatter } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
 import { resolveExpr, resolveObject } from "../lib/expressions.js";
 import { icon } from "../lib/icons.js";
@@ -223,6 +223,46 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   const visibleColumns = () =>
     displayOrder || columns.filter((c) => !c.startsWith("_mkio_"));
 
+  /* ── Cell values ──────────────────────────────────────────────────── */
+
+  // Every column value the table shows, sorts, filters, measures, or copies
+  // goes through cellValue, so a formatted column behaves like a real field
+  // everywhere. A formatter may also invent a column that no row carries —
+  // list it in `columns` (inference only sees keys present on the data).
+  // Button action payloads deliberately bypass this: they carry raw row
+  // fields so a display format can't change what gets sent to a service.
+  const formatterNames = spec.formatters ?? {};
+  const hasFormatters = Object.keys(formatterNames).length > 0;
+  const warnedFormatters = new Set();
+
+  function cellValue(row, col) {
+    const name = formatterNames[col];
+    if (name) {
+      const fn = getFormatter(name);
+      if (fn) return fn(row?.[col], row, col);
+      if (!warnedFormatters.has(name)) {
+        warnedFormatters.add(name);
+        console.warn("[mkio-table] unknown formatter:", name);
+      }
+    }
+    return row?.[col];
+  }
+
+  function cellText(row, col) {
+    const v = cellValue(row, col);
+    return v == null ? "" : String(v);
+  }
+
+  // Raw row keys plus formatter-only columns, so derived values feed the
+  // same numeric-alignment and width stats as real fields.
+  function statColumns(row) {
+    const cols = Object.keys(row);
+    if (hasFormatters) {
+      for (const k in formatterNames) if (!(k in row)) cols.push(k);
+    }
+    return cols;
+  }
+
   /* ── Numeric column alignment ─────────────────────────────────────── */
 
   // Columns whose every non-empty value is numeric are right-aligned with
@@ -280,9 +320,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function bumpStats(row) {
     const canMeasure = ensureMeasureCtx();
-    for (const k in row) {
+    for (const k of statColumns(row)) {
       if (k.startsWith("_mkio_")) continue;
-      const v = row[k];
+      const v = cellValue(row, k);
       if (v == null || v === "") continue;
       let st = colStats.get(k);
       if (!st) { st = { numeric: true, maxFrac: 0, maxIntW: 0, maxTextW: 0 }; colStats.set(k, st); }
@@ -489,6 +529,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // The focused cell is the implicit selection when neither mode has an
   // explicit one — copy and row-unit buttons fall back to it.
 
+  const selectStatePath = spec.select?.state ?? null;
+  let lastPublishedRow = undefined; // undefined = nothing published yet
   const selectedKeys = new Set();
   let selectedAnchor = null;
   let cellRects = [];         // [{ aKey, aCol, aIdx, fKey, fCol, fIdx }]
@@ -633,6 +675,30 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       styleRowSelection(tr, key, tr._viewIdx);
     }
     if (hasButtons) updateButtonStates();
+    publishSelection();
+  }
+
+  // `select = { state = "path" }` mirrors the current row into app state so
+  // other panes (a detail view, a chart) can follow it. The current row is
+  // the cursor's row, else the first selected row in view order, else null —
+  // so clearing the selection publishes null rather than a stale row.
+  function publishSelection() {
+    if (!selectStatePath) return;
+    let key = focusCell?.key ?? null;
+    if (key == null && selectedKeys.size) {
+      for (const k of view) {
+        if (selectedKeys.has(k)) { key = k; break; }
+      }
+    }
+    publishRow(key == null ? null : rows.get(key) ?? null);
+  }
+
+  // Publish a specific row object. Deduped, so the followers of a state path
+  // only see a change when the row they track actually changed.
+  function publishRow(row) {
+    if (!selectStatePath || row === lastPublishedRow) return;
+    lastPublishedRow = row;
+    app.state.set(selectStatePath, row);
   }
 
   function clearCellSelection() {
@@ -1011,10 +1077,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function buildCopyGrid() {
     if (!columns) return null;
     const cols = visibleColumns();
-    const cellVal = (row, c) => {
-      const v = row?.[c];
-      return v == null ? "" : String(v);
-    };
+    const cellVal = cellText;
     if (selectedKeys.size) {
       const grid = [cols.map(label)];
       for (const key of view) {
@@ -1299,7 +1362,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function compareRows(a, b) {
     for (const { col, dir } of sortKeys) {
-      const cmp = compareValues(a[col], b[col]);
+      const cmp = compareValues(cellValue(a, col), cellValue(b, col));
       if (cmp !== 0) return dir === "desc" ? -cmp : cmp;
     }
     return 0;
@@ -1308,7 +1371,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function matchesFilters(row) {
     for (const [col, allowed] of filters) {
       if (!allowed) continue;
-      const v = row[col] == null ? "" : String(row[col]);
+      const v = cellText(row, col);
       if (!allowed.has(v)) return false;
     }
     return true;
@@ -1326,6 +1389,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     render();
     if (hasButtons) updateButtonStates();
+    // Pruning can retire the published row, or promote a different one.
+    publishSelection();
   }
 
   function reorder() { markViewDirty(); render(); }
@@ -1334,7 +1399,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function getUniqueValues(col) {
     const s = new Set();
-    for (const r of rows.values()) s.add(r[col] == null ? "" : String(r[col]));
+    for (const r of rows.values()) s.add(cellText(r, col));
     return [...s].sort(compareValues);
   }
 
@@ -1844,8 +1909,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     for (const c of visibleColumns()) {
       const td = document.createElement("td");
       td.dataset.col = c;
-      const v = row[c];
-      td.textContent = v == null ? "" : String(v);
+      td.textContent = cellText(row, c);
       styleCell(td, c);
       tr.appendChild(td);
     }
@@ -1945,6 +2009,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       tr.addEventListener("animationend", () => tr.remove(), { once: true });
     }
     render();
+    // The published row may be the one that just went away.
+    publishSelection();
   }
 
   function applyReplace(row) {
@@ -1958,8 +2024,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     let sortChanged = false;
     const changed = [];
     for (const c of visibleColumns()) {
-      const newVal = row[c] == null ? "" : String(row[c]);
-      const oldVal = prev[c] == null ? "" : String(prev[c]);
+      const newVal = cellText(row, c);
+      const oldVal = cellText(prev, c);
       if (newVal !== oldVal) {
         changed.push([c, newVal]);
         if (sortKeys.some((k) => k.col === c)) sortChanged = true;
@@ -1992,6 +2058,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         }
       }
     }
+    // A live update to the published row replaces the object it points at,
+    // so followers see the new values instead of a snapshot.
+    if (lastPublishedRow === prev) publishRow(row);
   }
 
   /* ── Subscription ─────────────────────────────────────────────────── */
@@ -2284,6 +2353,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       pageFetchPending = false;
       client.unsubscribe(subid);
       client.unsubscribe(pageSubId);
+      // Nothing is selected in a closed table, so followers stop showing
+      // a row the user can no longer see.
+      publishRow(null);
     });
     paneEl.addEventListener("mkui-pane-open", () => {
       closed = false;

@@ -22,6 +22,7 @@ label = "Orders"
 items = [
   { label = "All Orders", action = "pane.show", args = "all-orders" },
   { label = "Pending", action = "pane.show", args = "pending" },
+  { label = "Order Detail", action = "pane.show", args = "order-detail" },
 ]
 
 [[menubar]]
@@ -58,6 +59,12 @@ title = "All Orders"
 type = "mkio-table"
 service = "all_orders"
 protocol = "query"
+# "notional" is a virtual column produced by a registered formatter (see
+# static/app.js) — it exists in no row, so it must be listed explicitly.
+columns = ["id", "side", "symbol", "qty", "price", "notional", "status"]
+formatters = { notional = "notional" }
+# Mirror the current row into app state; the order-detail pane follows it.
+select = { state = "selected_order" }
 
 [[panes.all-orders.buttons]]
 label = "+ New Order"
@@ -116,6 +123,11 @@ label = "Cancel"
 enable = { connected = true, minSelected = 1 }
 action = { type = "transaction", service = "orders", op = "cancel", data = { id = "${row.id}" } }
 
+[panes.order-detail]
+title = "Order Detail"
+type = "order-detail"
+follow = "selected_order"
+
 [panes.last-trade]
 title = "Last Trade"
 type = "mkio-table"
@@ -139,7 +151,7 @@ x = 0.68
 y = 0.03
 w = 0.30
 h = 0.55
-layout = { type = "tabs", active = 0, children = ["last-trade"] }
+layout = { type = "tabs", active = 0, children = ["last-trade", "order-detail"] }
 
 # ─── mkio connection ──────────────────────────────────────────────────
 

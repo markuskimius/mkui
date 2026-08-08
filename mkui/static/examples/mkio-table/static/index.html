@@ -4,7 +4,8 @@
   <meta charset="utf-8" />
   <title>mkio-table demo</title>
   <link rel="stylesheet" href="/mkui/styles/mkui.css" />
-  <script type="module" src="/mkui/src/index.js"></script>
+  <!-- app.js imports mkui itself, so its registrations land before startup. -->
+  <script type="module" src="/static/app.js"></script>
 </head>
 <body>
   <mkui-app config="/config/client.json"></mkui-app>

@@ -10,8 +10,8 @@ import "./widgets/mkio-table.js";
 export {
   VERSION, version,
   App, State,
-  registerWidget, registerPaneType,
-  getWidget, getPaneType,
+  registerWidget, registerPaneType, registerFormatter,
+  getWidget, getPaneType, getFormatter,
 } from "./core.js";
 export { ensureMkio } from "./mkio-bridge.js";
 

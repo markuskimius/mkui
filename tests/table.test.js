@@ -204,7 +204,7 @@ globalThis.MkioClient = class {
 
 /* ── Import modules (after globals) ───────────────────────────────────── */
 
-const { getPaneType } = await import("../mkui/static/src/core.js");
+const { getPaneType, registerFormatter } = await import("../mkui/static/src/core.js");
 await import("../mkui/static/src/widgets/mkio-table.js");
 
 const factory = getPaneType("mkio-table");
@@ -214,8 +214,10 @@ const factory = getPaneType("mkio-table");
 function makeState(init) {
   const store = new Map(init);
   const subs = new Map();
+  const nWrites = new Map();
   return {
     get: (k) => store.get(k),
+    writes: (k) => nWrites.get(k) ?? 0,
     subscribe: (k, cb) => {
       if (!subs.has(k)) subs.set(k, []);
       subs.get(k).push(cb);
@@ -223,6 +225,7 @@ function makeState(init) {
     },
     set: (k, v) => {
       store.set(k, v);
+      nWrites.set(k, (nWrites.get(k) ?? 0) + 1);
       for (const cb of subs.get(k) || []) cb(v);
     },
   };
@@ -3313,4 +3316,301 @@ test("filtering out a selected row prunes it from the selection", async () => {
   try { host._paneEl._editActions.copy(); }
   finally { delete globalThis.navigator; }
   assert.equal(written, "name\tvalue\r\nrow-1\t1");
+});
+
+/* ── Column formatters ────────────────────────────────────────────────── */
+
+registerFormatter("shout", (v) => String(v ?? "").toUpperCase());
+registerFormatter("double", (v) => Number(v) * 2);
+// Virtual column: no row carries "combo"; it exists only in config.
+registerFormatter("combo", (_v, row) => `${row.name}:${row.value}`);
+
+function cellsOf(tr) {
+  return tr._ch.filter(td => td.dataset?.col != null).map(td => td.textContent);
+}
+
+async function createFmtTable(specOverrides = {}) {
+  const t = await createTable(specOverrides);
+  triggerVisible(t.io);
+  lastSubscribe().opts.onSnapshot(makeRows(3));
+  return t;
+}
+
+test("formatter transforms a column's displayed text", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name", "value"], formatters: { name: "shout" },
+  });
+  assert.deepEqual(cellsOf(dataRows(host)[0]), ["ROW-0", "0"]);
+});
+
+test("columns without a formatter are untouched", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name", "value"], formatters: { name: "shout" },
+  });
+  assert.deepEqual(cellsOf(dataRows(host)[1]), ["ROW-1", "1"]);
+});
+
+test("formatter can create a virtual column absent from the row data", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name", "combo"], formatters: { combo: "combo" },
+  });
+  assert.deepEqual(cellsOf(dataRows(host)[2]), ["row-2", "row-2:2"]);
+});
+
+test("unknown formatter falls back to the raw value", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name"], formatters: { name: "does-not-exist" },
+  });
+  assert.deepEqual(cellsOf(dataRows(host)[0]), ["row-0"]);
+});
+
+test("formatted values drive sorting, not the raw ones", async () => {
+  // Raw ascending is 0,1,2; doubling keeps that order, so sort descending
+  // and assert the formatted text to prove the comparator saw the doubles.
+  const { host } = await createFmtTable({
+    columns: ["value"], formatters: { value: "double" },
+  });
+  const th = getThead(host)._ch[0]._ch.find(t => t.dataset.col === "value");
+  clickHeader(th);                           // asc
+  assert.deepEqual(dataRows(host).map(tr => cellsOf(tr)[0]), ["0", "2", "4"]);
+  clickHeader(th);                           // desc
+  assert.deepEqual(dataRows(host).map(tr => cellsOf(tr)[0]), ["4", "2", "0"]);
+});
+
+test("filter dropdown lists formatted values", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name"], formatters: { name: "shout" },
+  });
+  const th = getThead(host)._ch[0]._ch.find(t => t.dataset.col === "name");
+  clickFilterBtn(th);
+  const dd = host._ch.find(c => String(c.className).includes("mkui-filter-dropdown"));
+  const vals = dd._ch.find(c => c.className === "mkui-filter-list")._ch
+    .map(item => item._ch.find(n => n.tagName === "INPUT").dataset.val);
+  assert.deepEqual(vals.sort(), ["ROW-0", "ROW-1", "ROW-2"]);
+});
+
+test("filtering matches on the formatted value", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name"], formatters: { name: "shout" },
+  });
+  const th = getThead(host)._ch[0]._ch.find(t => t.dataset.col === "name");
+  clickFilterBtn(th);
+  const dd = host._ch.find(c => String(c.className).includes("mkui-filter-dropdown"));
+  const cbs = dd._ch.find(c => c.className === "mkui-filter-list")._ch
+    .map(item => item._ch.find(n => n.tagName === "INPUT"));
+  for (const cb of cbs) cb.checked = cb.dataset.val === "ROW-1";
+  cbs[0]._ev.change[0]();
+  assert.deepEqual(dataRows(host).map(tr => cellsOf(tr)[0]), ["ROW-1"]);
+});
+
+test("copy exports formatted values", async () => {
+  const { host } = await createTable({
+    rowColumn: true, columns: ["name"], formatters: { name: "shout" },
+  });
+  triggerVisible(host._paneEl && ioCallbacks[ioCallbacks.length - 1]);
+  lastSubscribe().opts.onSnapshot(makeRows(2));
+  host._paneEl._editActions.selectAll();
+  let written = null;
+  globalThis.navigator = { clipboard: { writeText: (s) => { written = s; } } };
+  try { host._paneEl._editActions.copy(); }
+  finally { delete globalThis.navigator; }
+  assert.equal(written, "name\r\nROW-0\r\nROW-1");
+});
+
+test("live update re-runs the formatter", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name"], formatters: { name: "shout" },
+  });
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "1", name: "renamed", value: 1 });
+  assert.deepEqual(dataRows(host).map(tr => cellsOf(tr)[0]),
+                   ["ROW-0", "RENAMED", "ROW-2"]);
+});
+
+test("a formatter is called with the raw value, its row, and the column", async () => {
+  const seen = [];
+  registerFormatter("probe", (v, row, col) => { seen.push([v, row.name, col]); return v; });
+  await createFmtTable({ columns: ["value"], formatters: { value: "probe" } });
+  assert.deepEqual(seen[0], [0, "row-0", "value"]);
+});
+
+test("formatted numbers drive decimal alignment, not the raw ones", async () => {
+  // Raw 1 / 2.5 / 3.25 would pad 3ch / 1ch / none; doubled to 2 / 5 / 6.5 the
+  // column's widest fraction is one digit, so the integers pad 2ch instead.
+  const { host, io } = await createTable({
+    columns: ["value"], formatters: { value: "double" },
+  });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", value: "1" },
+    { _mkio_row: "2", value: "2.5" },
+    { _mkio_row: "3", value: "3.25" },
+  ]);
+  const tds = colCells(host, "value");
+  assert.deepEqual(tds.map(td => td.textContent), ["2", "5", "6.5"]);
+  assert.ok(tds.every(td => td.classList.contains("mkui-num")), "still a numeric column");
+  assert.deepEqual(tds.map(td => td.style["--mkui-num-pad"]), ["2ch", "2ch", ""]);
+});
+
+test("a formatter that yields text turns off numeric alignment", async () => {
+  registerFormatter("millis", (v) => `${v} ms`);
+  const { host } = await createFmtTable({
+    columns: ["value"], formatters: { value: "millis" },
+  });
+  const tds = colCells(host, "value");
+  assert.deepEqual(tds.map(td => td.textContent), ["0 ms", "1 ms", "2 ms"]);
+  assert.ok(tds.every(td => !td.classList.contains("mkui-num")), "text column, no alignment");
+});
+
+test("cell-mode copy exports the formatted value", async () => {
+  const { host } = await createSelTable({
+    columns: ["name", "value"], formatters: { name: "shout" },
+  });
+  pointerDown(dataRows(host)[1], 1);          // focused cell = name of row-1
+  let written = null;
+  globalThis.navigator = { clipboard: { writeText: (s) => { written = s; } } };
+  try { host._paneEl._editActions.copy(); }
+  finally { delete globalThis.navigator; }
+  assert.equal(written, "ROW-1");
+});
+
+test("row-unit button payloads carry the raw field, not the formatted one", async () => {
+  const { host } = await createSelTable({
+    columns: ["name", "value"], formatters: { name: "shout" },
+    buttons: [{ label: "Act", enable: { minSelected: 1 },
+                action: { type: "transaction", service: "svc", data: { n: "${row.name}" } } }],
+  });
+  pointerDown(dataRows(host)[1], 0);
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
+  const sent = [];
+  fakeClient.send = (service, data, opts) => sent.push({ service, data, opts });
+  try {
+    toolbar._ch[0]._ev.click[0]();
+    assert.deepEqual(sent, [{ service: "svc", data: { n: "row-1" }, opts: { op: undefined } }]);
+  } finally {
+    delete fakeClient.send;
+  }
+});
+
+test("cell-unit button payloads carry the raw cell value", async () => {
+  const { host } = await createSelTable({
+    columns: ["name", "value"], formatters: { name: "shout" },
+    buttons: [{ label: "C", unit: "cell",
+                action: { type: "transaction", service: "svc",
+                          data: { v: "${cell.value}" } } }],
+  });
+  pointerDown(dataRows(host)[1], 1);          // focused cell = name of row-1
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
+  const sent = [];
+  fakeClient.send = (service, data, opts) => sent.push({ service, data, opts });
+  try {
+    toolbar._ch[0]._ev.click[0]();
+    assert.deepEqual(sent, [{ service: "svc", data: { v: "row-1" }, opts: { op: undefined } }]);
+  } finally {
+    delete fakeClient.send;
+  }
+});
+
+/* ── select: publishing the current row to app state ─────────────────── */
+
+test("no select spec leaves app state untouched", async () => {
+  const { host, state } = await createSelTable();
+  pointerDown(dataRows(host)[1], 0);
+  assert.equal(state.get("current"), undefined);
+});
+
+test("select publishes the clicked row to the configured state path", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  pointerDown(dataRows(host)[1], 0);
+  assert.equal(state.get("current").name, "row-1");
+});
+
+test("Esc keeps the cursor, so the published row survives a selection clear", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  pointerDown(dataRows(host)[1], 0);
+  assert.equal(state.get("current").name, "row-1");
+  host._paneEl._editActions.clearSelection();   // Esc: drops selection, keeps cursor
+  assert.equal(state.get("current").name, "row-1");
+});
+
+test("select publishes null on a full reset that drops the cursor", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  pointerDown(dataRows(host)[1], 0);
+  assert.equal(state.get("current").name, "row-1");
+  lastSubscribe().opts.onSnapshot(makeRows(4));  // query snapshot = full reset
+  assert.equal(state.get("current"), null);
+});
+
+test("select publishes the first row in view order on select-all", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  host._paneEl._editActions.selectAll();
+  assert.equal(state.get("current").name, "row-0");
+});
+
+test("select republishes when a live update replaces the published row", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  pointerDown(dataRows(host)[1], 0);
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "1", name: "row-1", value: 99 });
+  assert.equal(state.get("current").value, 99);
+});
+
+test("select ignores live updates to rows other than the published one", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  pointerDown(dataRows(host)[1], 0);
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "2", name: "row-2", value: 77 });
+  assert.equal(state.get("current").name, "row-1");
+});
+
+test("deleting the published row publishes null", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  pointerDown(dataRows(host)[1], 0);
+  lastSubscribe().opts.onUpdate("delete", { _mkio_row: "1" });
+  assert.equal(state.get("current"), null);
+});
+
+test("deleting the published row promotes the next selected row", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  host._paneEl._editActions.selectAll();          // no cursor: first-in-view wins
+  assert.equal(state.get("current").name, "row-0");
+  lastSubscribe().opts.onUpdate("delete", { _mkio_row: "0" });
+  assert.equal(state.get("current").name, "row-1");
+});
+
+test("filtering out the published row publishes null", async () => {
+  const { host, state } = await createSelTable({
+    select: { state: "current" }, columns: ["name", "value"],
+  });
+  host._paneEl._editActions.selectAll();
+  assert.equal(state.get("current").name, "row-0");
+  const th = getThead(host)._ch[0]._ch.find(t => t.dataset.col === "name");
+  clickFilterBtn(th);
+  const dd = host._ch.find(c => String(c.className).includes("mkui-filter-dropdown"));
+  const cbs = dd._ch.find(c => c.className === "mkui-filter-list")._ch
+    .map(item => item._ch.find(n => n.tagName === "INPUT"));
+  for (const cb of cbs) cb.checked = cb.dataset.val === "row-3";
+  cbs[0]._ev.change[0]();
+  assert.equal(state.get("current").name, "row-3", "the surviving selected row wins");
+});
+
+test("closing the pane publishes null", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  pointerDown(dataRows(host)[1], 0);
+  assert.equal(state.get("current").name, "row-1");
+  for (const fn of host._paneEl._ev["mkui-pane-close"] ?? []) fn();
+  assert.equal(state.get("current"), null);
+});
+
+test("select follows the cursor as the arrow keys move it", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  keyDown(host, "ArrowDown");                // first press only places the cursor
+  assert.equal(state.get("current").name, "row-0");
+  keyDown(host, "ArrowDown");
+  assert.equal(state.get("current").name, "row-1");
+});
+
+test("select writes only when the tracked row changes", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  pointerDown(dataRows(host)[1], 0);
+  const before = state.writes("current");
+  pointerDown(dataRows(host)[1], 0);         // same row again
+  assert.equal(state.writes("current"), before, "re-selecting the same row is a no-op");
 });

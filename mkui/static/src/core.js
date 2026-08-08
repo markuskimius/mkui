@@ -9,6 +9,7 @@ export function version() { return VERSION; }
 
 const widgetTypes = new Map();
 const paneTypes = new Map();
+const formatters = new Map();
 
 export function registerWidget(name, factory) {
   widgetTypes.set(name, factory);
@@ -18,8 +19,15 @@ export function registerWidget(name, factory) {
 export function registerPaneType(name, factory) {
   paneTypes.set(name, factory);
 }
+// A formatter derives a column's displayed value: (value, row, col) => any.
+// `value` is row[col], undefined for a virtual column that exists only in
+// config. Reference from a table spec with `formatters = { col = "<name>" }`.
+export function registerFormatter(name, fn) {
+  formatters.set(name, fn);
+}
 export function getWidget(name) { return widgetTypes.get(name); }
 export function getPaneType(name) { return paneTypes.get(name); }
+export function getFormatter(name) { return formatters.get(name); }
 
 export class State {
   constructor(initial = {}) {
