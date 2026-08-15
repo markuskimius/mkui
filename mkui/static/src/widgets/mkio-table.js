@@ -93,6 +93,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   const isPaged = protocol === "stream" && maxcount > 0;
   const rowColumn = spec.rowColumn !== false; // row-number column, on by default
   const getStartRef = () => isPaged && (spec.start ?? "today") === "today" ? midnightRef() : null;
+  const startLive = isPaged && spec.live === true;
 
   const table = document.createElement("table");
   table.className = "mkui-table";
@@ -2162,6 +2163,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   let prevPageLoadBefore = false;
   let noPrev = false;
 
+  // `live = true` still loads the start page first, then hands off to the
+  // live stream — subscribing live from the outset would ignore `start` and
+  // replay the whole buffer.
+  let autoLivePending = startLive;
+
   function fetchPage(ref, before) {
     if (closed) return;
     unsub();
@@ -2202,6 +2208,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
           firstRef = ref;
         }
         updatePagingUI();
+        if (autoLivePending) {
+          autoLivePending = false;
+          // An empty start page leaves lastRef null, and sub() with no ref
+          // streams the buffer from the beginning — anchor to the start ref.
+          if (lastRef == null) lastRef = getStartRef();
+          goLive();
+        }
       },
     };
     if (before) opts.before = true;
@@ -2380,6 +2393,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         pageLoadBefore = false;
         prevPageLoadRef = null;
         prevPageLoadBefore = false;
+        autoLivePending = startLive;
       }
       io.observe(host);
       ro.observe(scrollHost);

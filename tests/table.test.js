@@ -1148,6 +1148,185 @@ test("after Go Live, hide/show cycles use normal sub/unsub", async () => {
   assert.equal(lastSubscribe().type ?? lastSubscribe().opts ? "subscribe" : "", "subscribe");
 });
 
+/* ── Live by default (live: true) ─────────────────────────────────────── */
+
+test("live: true fetches the start page before going live", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50, live: true });
+  triggerVisible(io);
+
+  const pageSub = lastSubscribe();
+  assert.equal(typeof pageSub.opts.onPage, "function", "start page fetched first");
+  assert.equal(pageSub.opts.ref, testMidnightRef(), "start=today still honored");
+  assert.equal(pageSub.opts.maxcount, 50);
+  assert.ok(!findByClass(host, "mkui-table-paging")._ch[3].classList.contains("active"),
+    "not live until the start page arrives");
+});
+
+test("live: true switches to the live stream once the start page arrives", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50, live: true });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const [prevBtn, pageInfo, nextBtn, liveBtn] = toolbar._ch;
+  assert.ok(liveBtn.classList.contains("active"));
+  assert.equal(pageInfo.textContent, "Live");
+  assert.equal(nextBtn.disabled, true, "next always disabled in live mode");
+  assert.equal(prevBtn.disabled, false, "earlier enabled from the midnight start ref");
+
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.onPage, undefined, "live subscription, not a page fetch");
+  assert.equal(sub.opts.maxcount, undefined);
+  assert.equal(sub.opts.ref, streamRef(49), "resumes from the last row of the start page");
+});
+
+test("live: true tears down the page subscription before going live", async () => {
+  const { io } = await createTable({ protocol: "stream", maxcount: 50, live: true });
+  triggerVisible(io);
+
+  const before = fakeClient.calls.length;
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+  assert.deepEqual(fakeClient.calls.slice(before).map(c => c.type), ["unsubscribe", "subscribe"],
+    "no overlapping subscriptions across the handoff");
+});
+
+test("live: true keeps the start page rows and appends live rows", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50, live: true });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+  assert.equal(getTbody(host)._ch.length, 50, "start page rows survive the handoff");
+
+  const sub = lastSubscribe();
+  sub.opts.onSnapshot(makeStreamRows(5, 50));
+  assert.equal(getTbody(host)._ch.length, 55, "50 page rows + 5 resumed");
+
+  sub.opts.onUpdate("insert", { _mkio_ref: "ref-new-1", name: "live-1", value: 100 });
+  assert.equal(getTbody(host)._ch.length, 56, "live row appended");
+});
+
+test("live: true anchors to the start ref when the start page is empty", async () => {
+  const { io } = await createTable({ protocol: "stream", maxcount: 50, live: true });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage([], { hasmore: false, ref: null });
+
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.onPage, undefined, "goes live despite the empty start page");
+  assert.equal(sub.opts.ref, testMidnightRef(),
+    "anchored to midnight rather than replaying the whole buffer");
+});
+
+test("live: true with start='' and an empty page streams from the beginning", async () => {
+  const { io } = await createTable({ protocol: "stream", maxcount: 50, live: true, start: "" });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage([], { hasmore: false, ref: null });
+
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.onPage, undefined, "goes live");
+  assert.equal(sub.opts.ref, undefined, "no start anchor configured, so no ref");
+});
+
+test("exiting live from live: true returns to the start page", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50, live: true });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[3]._ev.click[0]();
+
+  const sub = lastSubscribe();
+  assert.equal(typeof sub.opts.onPage, "function", "back to a page fetch");
+  assert.equal(sub.opts.ref, testMidnightRef(), "returns to the start page");
+  assert.ok(!toolbar._ch[3].classList.contains("active"));
+});
+
+test("live: true does not re-arm after the user exits live", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50, live: true });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[3]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r2" });
+  assert.ok(!toolbar._ch[3].classList.contains("active"), "stays paged after exiting");
+
+  toolbar._ch[2]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: false, ref: "r3" });
+  assert.ok(!toolbar._ch[3].classList.contains("active"), "still paged after navigating");
+});
+
+test("mkui-pane-open re-arms live: true", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50, live: true });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[3]._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r2" });
+
+  const paneEl = host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+  for (const fn of paneEl._ev["mkui-pane-open"] ?? []) fn();
+  triggerVisible(io);
+
+  const pageSub = lastSubscribe();
+  assert.equal(typeof pageSub.opts.onPage, "function", "reopen fetches the start page first");
+  assert.equal(pageSub.opts.ref, testMidnightRef());
+
+  pageSub.opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r3" });
+  assert.ok(toolbar._ch[3].classList.contains("active"), "live again after reopen");
+});
+
+test("Earlier after auto-live uses the separate paging subscription", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50, live: true });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: true, ref: "r1" });
+
+  const before = fakeClient.calls.length;
+  findByClass(host, "mkui-table-paging")._ch[0]._ev.click[0]();
+
+  const [pageSub, ...rest] = fakeClient.calls.slice(before).filter(c => c.type === "subscribe");
+  assert.equal(rest.length, 0, "one fetch; the live subscription is left alone");
+  assert.ok(pageSub.opts.subid.endsWith("-page"), "earlier pages load on the paging subid");
+  assert.equal(pageSub.opts.before, true);
+  assert.equal(pageSub.opts.ref, streamRef(50), "fetches backward from the first live row");
+});
+
+test("live omitted keeps the table paged", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  assert.ok(!toolbar._ch[3].classList.contains("active"));
+  assert.equal(typeof lastSubscribe().opts.onPage, "function", "still the page fetch");
+});
+
+test("live: false keeps the table paged", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50, live: false });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+
+  assert.ok(!findByClass(host, "mkui-table-paging")._ch[3].classList.contains("active"));
+});
+
+test("live: true on a non-paged stream subscribes live directly", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: null, live: true });
+  triggerVisible(io);
+
+  assert.equal(findByClass(host, "mkui-table-paging"), null, "no toolbar without paging");
+  const sub = lastSubscribe();
+  assert.equal(sub.opts.onPage, undefined, "plain live subscription");
+  assert.equal(sub.opts.ref, undefined);
+});
+
+test("live: true is ignored for query protocol", async () => {
+  const { io, host } = await createTable({ protocol: "query", live: true });
+  triggerVisible(io);
+
+  assert.equal(findByClass(host, "mkui-table-paging"), null);
+  assert.equal(lastSubscribe().opts.ref, undefined);
+});
+
 /* ── Visibility behaviour ─────────────────────────────────────────────── */
 
 test("paged stream: hide+show does not reload if page already loaded", async () => {
