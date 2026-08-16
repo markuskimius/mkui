@@ -92,6 +92,32 @@ test("filter icon is a hamburger: three separate bar paths", () => {
   assert.equal(icon("filter")._ch.length, 3);
 });
 
+test("filter bars are inset from the carets' extent on both axes", () => {
+  // The filter button swaps between the hamburger and a sort caret, so the
+  // hamburger must sit inside the carets' footprint: horizontally inset from
+  // their x 3–21 span, and vertically a hair tighter than their y 5–19 union
+  // (solid bars read taller than a triangle of the same extent).
+  const bars = icon("filter")._ch.map((p) => {
+    const m = p._attrs.d.match(/^M([\d.]+) ([\d.]+)h([\d.]+)v([\d.]+)h-([\d.]+)z$/);
+    assert.ok(m, `bar path is an M/h/v/h/z rect: ${p._attrs.d}`);
+    const [x, y, w, h, w2] = m.slice(1).map(Number);
+    assert.equal(w2, w, "closing horizontal matches the width");
+    return { x, y, w, h };
+  });
+
+  for (const b of bars) {
+    assert.equal(b.x, bars[0].x, "bars share one left edge");
+    assert.equal(b.w, bars[0].w, "bars share one width");
+    assert.equal(b.h, bars[0].h, "bars share one thickness");
+    assert.ok(b.x > 3 && b.x + b.w < 21, "horizontally inside the carets");
+  }
+
+  const ys = bars.map((b) => b.y).sort((a, b) => a - b);
+  assert.equal(ys[1] - ys[0], ys[2] - ys[1], "bars are evenly spaced");
+  assert.ok(ys[0] > 5, "top bar starts below the carets' top");
+  assert.ok(ys[2] + bars[0].h < 19, "bottom bar ends above the carets' bottom");
+});
+
 test("each call returns a fresh element — no shared mutable node", () => {
   const a = icon("close");
   const b = icon("close");

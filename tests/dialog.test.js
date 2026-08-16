@@ -212,3 +212,110 @@ test("pin toggle is idempotent across multiple cycles", () => {
     assert.equal(btn.classList.contains("mkui-dialog-pin-active"), i % 2 === 0);
   }
 });
+
+/* ── Auto-grow (end-to-end with a mock DOM + workspace) ──────────────── */
+// openDialog measures the rendered body: if it would have to scroll, the
+// frame's height fraction grows by the overflow (capped at 90% of the
+// workspace) and the frame re-centers vertically. Element geometry is
+// mocked per class name via `geom`.
+
+let geom = {};
+
+function domEl(tag) {
+  const el = {
+    tagName: tag?.toUpperCase() ?? "",
+    className: "", textContent: "", title: "", type: "", value: "",
+    placeholder: "", checked: false, disabled: false,
+    style: {},
+    _ch: [], _ev: {},
+    classList: {
+      _s: new Set(),
+      add(...cs) { for (const c of cs) this._s.add(c); },
+      remove(...cs) { for (const c of cs) this._s.delete(c); },
+      toggle() {}, contains() { return false; },
+    },
+    append(...ns) { el._ch.push(...ns); },
+    appendChild(n) { el._ch.push(n); return n; },
+    setAttribute() {},
+    addEventListener(e, fn) { (el._ev[e] ??= []).push(fn); },
+    removeEventListener() {},
+    querySelector() { return null; },
+    focus() {},
+    get scrollHeight() { return geom[el.className]?.scrollHeight ?? 0; },
+    get clientHeight() { return geom[el.className]?.clientHeight ?? 0; },
+  };
+  return el;
+}
+
+globalThis.document = {
+  createElement: (tag) => domEl(tag),
+  createElementNS: (_ns, tag) => domEl(tag),
+};
+
+function makeWorkspace({ width = 1000, height = 800 } = {}) {
+  return {
+    _frames: [],
+    _frameEls: new Map(),
+    _paneEls: new Map(),
+    layoutCalls: 0,
+    registerPane() {},
+    unregisterPane() {},
+    addFrame(spec) {
+      const id = `frame-${this._frames.length + 1}`;
+      this._frames.push({ id, ...spec });
+      this._frameEls.set(id, {
+        offsetHeight: spec.h * height,
+        _renderInternal() {},
+      });
+      this._paneEls.set(spec.layout.children[0], {
+        contentEl: domEl("div"),
+        addEventListener() {},
+      });
+      return id;
+    },
+    _layoutFrames() { this.layoutCalls++; },
+    getBoundingClientRect() { return { width, height }; },
+  };
+}
+
+function openTestDialog(ws, bodyGeom) {
+  geom = { "mkui-dialog-body": bodyGeom };
+  const app = { _element: { workspace: ws } };
+  openDialog({ title: "T", fields: [{ name: "a", label: "A" }] }, {}, app);
+  return ws._frames[0];
+}
+
+// The workspace is 1000×800, so the initial frame is h = min(0.6, 400/800)
+// = 0.5 → 400px tall.
+
+test("overflowing dialog body grows the frame and re-centers", () => {
+  const ws = makeWorkspace();
+  const frame = openTestDialog(ws, { scrollHeight: 500, clientHeight: 300 });
+  // 200px of overflow on a 400px frame in an 800px workspace → 600/800.
+  assert.equal(frame.h, 0.75);
+  assert.equal(frame.y, 0.125, "re-centered vertically");
+  assert.equal(ws.layoutCalls, 1, "layout re-ran to apply the new rect");
+});
+
+test("dialog growth caps at 90% of the workspace", () => {
+  const ws = makeWorkspace();
+  const frame = openTestDialog(ws, { scrollHeight: 2000, clientHeight: 300 });
+  assert.equal(frame.h, 0.9);
+  assert.ok(Math.abs(frame.y - 0.05) < 1e-12, "centered under the cap");
+  assert.equal(ws.layoutCalls, 1);
+});
+
+test("dialog body that fits keeps the initial frame height", () => {
+  const ws = makeWorkspace();
+  const frame = openTestDialog(ws, { scrollHeight: 300, clientHeight: 300 });
+  assert.equal(frame.h, 0.5);
+  assert.equal(frame.y, 0.25);
+  assert.equal(ws.layoutCalls, 0, "no relayout when nothing overflows");
+});
+
+test("zero-height workspace rect skips auto-grow without crashing", () => {
+  const ws = makeWorkspace({ height: 0 });
+  const frame = openTestDialog(ws, { scrollHeight: 500, clientHeight: 300 });
+  assert.equal(frame.h, 0.6, "initial fraction untouched");
+  assert.equal(ws.layoutCalls, 0);
+});

@@ -29,7 +29,7 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 - `mkui/static/src/components/frame.js` — frame chrome, internal tree rendering, splitter drag; also defines `<mkui-pane>`
 - `mkui/static/src/components/app.js` — shell: menubar + workspace + statusbar
 - `mkui/static/src/core.js` — `App`, `State` (reactive store), widget/pane-type/formatter registries
-- `mkui/static/src/lib/icons.js` — SVG icon library: `icon(name)` returns a currentColor `<svg>` built from vendored path data (Lucide outlines + custom filled carets/dot/hamburger) — no icon font, no external fetch; sized per context via `.mkui-icon` CSS rules
+- `mkui/static/src/lib/icons.js` — SVG icon library: `icon(name)` returns a currentColor `<svg>` built from vendored path data (Lucide outlines + custom filled carets/dot/hamburger); sized per context via `.mkui-icon` CSS rules
 - `mkui/static/src/lib/copy.js` — clipboard grid serialization: `gridToTSV` (CRLF rows, Excel quoting) and `gridToHTML` (`<table>` flavor), pure functions covered by `tests/copy.test.js`
 - `mkui/static/src/widgets/mkio-table.js` — built-in `mkio-table` pane type: subscribes to mkio services, renders live tables
 - `mkui/static/src/widgets/mkui-dialog.js` — `openDialog()`: config-driven modal dialogs with validation, RPC submission, and pin-to-keep-open
@@ -69,7 +69,7 @@ Item keys:
 - `args` — optional argument passed to action handler
 - `items` — child array; presence makes it a nested submenu (opens on hover, nests arbitrarily)
 - `sep` — `true` renders a separator line
-- `windows` — `true` expands into one `pane.show` leaf per currently-open pane (title from the pane spec), so a Window menu can list open windows dynamically. Popups are rebuilt on each open, keeping the list live. noDock frames (dialogs, login) are excluded; the list comes from `workspace.openPanes()`.
+- `windows` — `true` expands into one `pane.show` leaf per open pane (title from the pane spec); popups rebuild on each open so the list stays live. noDock frames (dialogs, login) are excluded; source is `workspace.openPanes()`.
 - `shortcut` — right-aligned shortcut hint on leaf items (`.mkui-menu-shortcut`, muted, guarded by `tests/styles.test.js`). The `mod` token renders platform-native via `formatShortcut` in menubar.js — `⌘C` on Apple platforms, `Ctrl+C` elsewhere. Display only: handlers accept either modifier on every platform.
 
 Leaf items fire `app.fireAction(action, args)` on mouseup. Built-in actions: `app.quit`, `pane.show` (takes pane ID — switches to its tab and raises the frame, or opens a new frame if parked), `window.tileH`, `window.tileV`, `window.grid`, `window.cascade`, `edit.copy`, `edit.selectAll`. Custom actions registered with `app.registerAction(name, fn)`.
@@ -82,25 +82,19 @@ Edit routing: `edit.copy`/`edit.selectAll` call `workspace.editAction(name)`, wh
 
 ## mkio connection state
 
-When `config.mkio.url` is present, `<mkui-app>` calls `ensureMkio` with `onConnect`/`onDisconnect` callbacks **before** setting up menubar, workspace, and statusbar components. This ordering is load-bearing: pane factories (e.g., `mkio-table`) also call `ensureMkio`, and the bridge caches the first caller's promise — so the app's call must come first to ensure lifecycle callbacks are registered. The bridge wraps user callbacks to pass the `client` as the first argument, enabling verification logic in the callbacks.
+When `config.mkio.url` is present, `<mkui-app>` calls `ensureMkio` with `onConnect`/`onDisconnect` callbacks **before** setting up menubar, workspace, and statusbar components. This ordering is load-bearing: pane factories (e.g., `mkio-table`) also call `ensureMkio` and the bridge caches the first caller's promise, so the app's call must come first for its lifecycle callbacks to register. The bridge passes the `client` as the callbacks' first argument.
 
-Connection is two-phase: **connect** then **verify**. When the WebSocket opens, `mkio.connected` is set to `true` and the `config.mkio.connected` state map is applied immediately. Then an async `_mkio` reqrep request queries the server's identity (name, version, protocol version, mkio version). If verification passes, `mkio.verified` is set to `true`. If it fails, `mkio.verified` stays `false` and the `config.mkio.incompatible` state map is applied (overwriting the connected state map). On reconnect, verification re-runs automatically.
+Connection is two-phase: **connect** then **verify**. On WebSocket open, `mkio.connected` is set `true` and the `config.mkio.connected` state map applies immediately; an async `_mkio` reqrep then queries the server's identity (name, version, protocol version, mkio version). Pass sets `mkio.verified` `true`; fail leaves it `false` and applies the `config.mkio.incompatible` state map (overwriting the connected map). Verification re-runs on reconnect.
 
 The optional `config.mkio.expect` object declares expected server identity. Keys: `name` (exact string match), `version`, `protocol`, `mkio` (all semver-compatible, checked server-side). When `expect` is absent, the `_mkio` query still runs to confirm it is an mkio server and populate `mkio.server.*` state paths. The `_mkio` request has a configurable timeout (`config.mkio.timeout`, default 5000ms) — non-mkio servers that don't respond are detected as incompatible.
 
 State maps: `config.mkio.connected`, `config.mkio.disconnected`, and `config.mkio.incompatible` are objects of `"state.path": value` entries applied on each lifecycle event. Defaults: `{ "status.message": "Connected" }` / `{ "status.message": "Disconnected" }` / `{ "status.message": "Incompatible server" }`. Combine with `statusbar.bindStyle` for visual feedback.
 
-State paths set by the connection lifecycle:
-- `mkio.connected` — boolean, WebSocket is open
-- `mkio.verified` — boolean, server passed `_mkio` verification
-- `mkio.server.name` — server's application name
-- `mkio.server.version` — server's application version
-- `mkio.server.protocol` — server's protocol version
-- `mkio.server.mkio` — server's mkio package version
+State paths set by the connection lifecycle: `mkio.connected` (boolean, WebSocket open), `mkio.verified` (boolean, passed `_mkio` verification), `mkio.server.name` / `.version` / `.protocol` / `.mkio` (server identity).
 
 ## Authentication
 
-When `config.auth` is present, `<mkui-app>` shows a login dialog before loading frames. The workspace is initialized empty (no frames), and frames are created only after successful authentication. This prevents any flash of unauthorized content.
+When `config.auth` is present, `<mkui-app>` shows a login dialog before loading frames. The workspace initializes empty; frames are created only after successful authentication (no flash of unauthorized content).
 
 Three flavors:
 
@@ -114,16 +108,13 @@ Config keys (under `auth`):
 - `connected` — state map applied after successful authentication and on reconnect (e.g. `{ "status.message": "Connected" }`)
 - `disconnected` — state map applied on WebSocket disconnect when auth is enabled (falls back to `mkio.disconnected`)
 
-State paths set by auth:
-- `auth.authenticated` — boolean, true after successful login
-- `auth.user` — username of the authenticated user
-- `auth.role` — role of the authenticated user
+State paths set by auth: `auth.authenticated` (boolean, true after login), `auth.user` (username), `auth.role` (role).
 
 Built-in action: `auth.logout` — reloads the page (clears auth state).
 
 When auth is enabled, `_mkio` server verification is skipped — authentication itself proves the server is valid. The `mkio.connected` state map is still applied on WebSocket connect (to clear the "Connecting..." initial styling), and `auth.connected` is applied after login and on reconnect when already authenticated.
 
-Login dialog: displayed as a floating frame (`stayOnTop`, `noDock`) with `_hideClose = true` (no close button) to prevent dismissal. The frame's `_extraControls` is set to `() => []` to remove any extra buttons. Username and password fields use existing `mkui-dialog-*` CSS classes. Empty field validation shows red borders via `mkui-dialog-invalid`. Failed auth shows the error in a status span and clears the password field.
+Login dialog: floating frame (`stayOnTop`, `noDock`) with `_hideClose = true` and `_extraControls = () => []` so it can't be dismissed. Fields reuse `mkui-dialog-*` CSS classes; empty fields get red borders via `mkui-dialog-invalid`; failed auth shows the error in a status span and clears the password field.
 
 Reconnect: mkio's client stores `_authData` and auto-re-authenticates on reconnect. The `onConnect` handler checks `auth.authenticated` — if already true (reconnect), it applies `auth.connected`; if false (initial connect before login), it applies `mkio.connected`.
 
@@ -184,6 +175,8 @@ Navigation is ref-based with no cursor stack: each page is its own `subscribe` v
 
 `● Live` toggles live streaming, resuming on the main `subid` from the page's `lastRef` so only records after the displayed page transfer. In live mode Later is always disabled and Earlier fetches through a separate `pageSubId` (`fetchPrevLive`), prepending rows via a DocumentFragment before `tbody.firstChild` without interrupting the stream (`pageFetchPending` blocks double-clicks; `hasEarlierPages` drives the `HH:mm – Live` label). Exiting live unsubscribes both subids and re-fetches the saved page — coordinates only, no row snapshot — so inserts and deletes during live mode are reflected. Sort, filter, and column order persist across mode switches; a visibility re-show reloads the same saved page regardless of the direction it was fetched; pane reopen recalculates midnight for the current day (handles overnight running).
 
+Tail following: live streams (paged live mode, and non-paged streams — live from the start) read like a terminal. Each subscription callback samples `shouldFollowTail()` *before* ingesting (stream + live, viewport within 8px of the bottom) and calls `scrollToTail()` after; otherwise `maybeRestoreScroll` runs as before. `goLive` sets `tailPending` to force one jump regardless of scroll position; a viewport scrolled up to inspect history is never moved. Query/subpub never follow.
+
 `live: true` starts in live mode, but still fetches the start page first and hands off from its `onPage` (`autoLivePending` — consumed on the first page so exiting live stays exited, re-armed on pane reopen). Going live straight from `sub()` would ignore `start`, replay the whole buffer, and leave `savedPageState` unset so exiting live had no page to return to. An empty start page leaves `lastRef` null, which `sub()` also reads as "from the beginning", so the handoff seeds it from `getStartRef()` (still null under `start: ""`, where the beginning is intended).
 
 Disconnected indicator: the table subscribes to `mkio.connected`. When the socket drops while live mode is active, the toolbar shows "Disconnected" (or `HH:mm – Disconnected` with earlier pages) in muted text instead of the green blinking Live dot; live mode itself stays on so the saved page coordinates survive the reconnect. The subscription must be declared *after* all paging variables (`liveMode`, `pageHasPrev`, …) — `State.subscribe` fires its initial callback synchronously and would otherwise hit a temporal dead zone.
@@ -200,11 +193,11 @@ Snapshot clearing: for query and subpub, `applySnapshot` unconditionally clears 
 
 Field types: `hidden`, `readonly`, `select`, `checkbox`, `textarea`, `number`, text (default). Fields support `required`, `pattern`, `min`/`max`/`step` validation, `showWhen` conditional visibility, `optionsFrom` (async service-backed options), and `optionsFromColumn` (values from table data).
 
-Layout: fields are listed in `spec.fields`. Items can be `{ group: "Header" }` for section headers, `{ row: [field, field] }` for horizontal layout, or plain field objects. `field.width` sets flex proportion in rows.
+Layout: fields are listed in `spec.fields`. Items can be `{ group: "Header" }` for section headers, `{ row: [field, field] }` for horizontal layout, or plain field objects. `field.width` sets flex proportion in rows. The initial frame height is a guess; after the fields render, a body that would scroll grows the frame by the overflow (capped at 90% of the workspace) and re-centers it vertically — skipped when the workspace rect has zero height.
 
 Submission: when `spec.submit.service` is set, the dialog sends form data via `client.send()` with a configurable timeout (default 5s). `submitPerRow` mode sends one request per selected row. Transaction errors are shown inline and the form stays open for retry. Without a service, the dialog resolves immediately with form data.
 
-Pin button: an SVG pin-icon toggle (`icon("pin")`) in the dialog's titlebar (frame controls area, before maximize/close). When active, the pin rotates 45° counterclockwise and turns accent-colored (CSS transition, 150ms ease). Successful submission resets the form to its default values instead of closing the dialog. The form is only reset after the server confirms success — errors leave the form intact for retry. The pin button is injected via `frameEl._extraControls`, a callback that `_makeControls()` in frame.js calls to prepend custom elements before the standard window controls. Since `_makeControls` runs on every `_renderInternal`, the callback re-creates the button each render; the `pinned` state is held in a closure shared with the submit handler.
+Pin button: an SVG pin-icon toggle (`icon("pin")`) in the dialog's titlebar, before maximize/close. When active the pin rotates 45° counterclockwise and turns accent-colored (CSS transition). While pinned, successful submission resets the form to defaults instead of closing — reset only after the server confirms success; errors leave the form intact for retry. Injected via `frameEl._extraControls`, a callback `_makeControls()` in frame.js calls to prepend custom elements before the standard window controls; since `_makeControls` runs on every `_renderInternal`, the callback re-creates the button each render, with `pinned` held in a closure shared with the submit handler.
 
 ## Conventions
 

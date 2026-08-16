@@ -2258,6 +2258,127 @@ test("refresh button re-enabled after exiting live mode", async () => {
   assert.equal(refreshBtn.disabled, false, "re-enabled after exit live");
 });
 
+/* ── Live tail following ─────────────────────────────────────────────── */
+// A live stream reads like a terminal: while the viewport is parked at the
+// tail (within 8px of the bottom), new rows scroll into view; a viewport
+// scrolled up to inspect history is never yanked. The scroll geometry is
+// mocked directly on the scroll host.
+
+function parkAtTail(el, { scrollHeight = 500, clientHeight = 100 } = {}) {
+  el.scrollHeight = scrollHeight;
+  el._clientHeight = clientHeight;
+  el.scrollTop = scrollHeight - clientHeight;
+}
+
+test("live stream at the tail follows an inserted row", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeStreamRows(20));
+  flushRaf();
+  parkAtTail(host);
+  lastSubscribe().opts.onUpdate("insert", makeStreamRows(1, 20)[0]);
+  host.scrollHeight = 520; // the new row grew the scroll extent
+  flushRaf();
+  assert.equal(host.scrollTop, 520, "viewport jumped to the new tail");
+});
+
+test("live stream scrolled up is not yanked by an insert", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeStreamRows(20));
+  flushRaf();
+  parkAtTail(host);
+  host.scrollTop = 100; // user scrolled up to inspect history
+  lastSubscribe().opts.onUpdate("insert", makeStreamRows(1, 20)[0]);
+  host.scrollHeight = 520;
+  flushRaf();
+  assert.equal(host.scrollTop, 100, "viewport left where the user put it");
+});
+
+test("within the 8px slack of the bottom still counts as the tail", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeStreamRows(20));
+  flushRaf();
+  host.scrollHeight = 500;
+  host._clientHeight = 100;
+  host.scrollTop = 392; // 392 + 100 == 500 - 8, the slack boundary
+  lastSubscribe().opts.onUpdate("insert", makeStreamRows(1, 20)[0]);
+  flushRaf();
+  assert.equal(host.scrollTop, 500, "8px from the bottom still follows");
+});
+
+test("live stream at the tail follows a delta batch", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeStreamRows(20));
+  flushRaf();
+  parkAtTail(host);
+  lastSubscribe().opts.onDelta(makeStreamRows(5, 20).map((row) => ({ op: "insert", row })));
+  host.scrollHeight = 600;
+  flushRaf();
+  assert.equal(host.scrollTop, 600, "delta batch scrolled the tail into view");
+});
+
+test("resumed snapshot keeps a tail-parked viewport at the tail", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: null });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeStreamRows(20));
+  flushRaf();
+  parkAtTail(host);
+  lastSubscribe().opts.onSnapshot(makeStreamRows(10, 20));
+  host.scrollHeight = 700;
+  flushRaf();
+  assert.equal(host.scrollTop, 700, "snapshot rows scrolled into view");
+});
+
+test("query updates never tail-follow", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(20));
+  flushRaf();
+  parkAtTail(host);
+  const before = host.scrollTop;
+  lastSubscribe().opts.onUpdate("insert", makeRows(1, 100)[0]);
+  host.scrollHeight = 520;
+  flushRaf();
+  assert.equal(host.scrollTop, before, "query viewport never moves on updates");
+});
+
+test("Go Live jumps to the tail even from the top of the page", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
+  const scrollArea = findByClass(host, "mkui-table-scroll");
+  scrollArea.scrollHeight = 900;
+  scrollArea._clientHeight = 300;
+  scrollArea.scrollTop = 0;
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[3]._ev.click[0](); // Go Live
+  flushRaf();
+  assert.equal(scrollArea.scrollTop, 900, "entering live forces one jump to the tail");
+});
+
+test("rows arriving after Go Live keep following the tail", async () => {
+  const { io, host } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r" });
+  const scrollArea = findByClass(host, "mkui-table-scroll");
+  scrollArea.scrollHeight = 900;
+  scrollArea._clientHeight = 300;
+  const toolbar = findByClass(host, "mkui-table-paging");
+  toolbar._ch[3]._ev.click[0](); // Go Live
+  flushRaf(); // now parked at the tail (scrollTop 900)
+  lastSubscribe().opts.onSnapshot(makeStreamRows(10, 50)); // resumed snapshot
+  scrollArea.scrollHeight = 1100;
+  flushRaf();
+  assert.equal(scrollArea.scrollTop, 1100, "resumed snapshot followed");
+  lastSubscribe().opts.onUpdate("insert", makeStreamRows(1, 60)[0]);
+  scrollArea.scrollHeight = 1120;
+  flushRaf();
+  assert.equal(scrollArea.scrollTop, 1120, "live update followed");
+});
+
 /* ── Column widths & resize ──────────────────────────────────────────── */
 
 function getColgroup(host) {

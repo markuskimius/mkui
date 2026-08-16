@@ -240,6 +240,21 @@ export function openDialog(spec, context, app, extra = {}) {
 
     applyShowWhen();
 
+    // The initial height is a guess; if the body has to scroll, grow the
+    // frame so the whole form and footer are visible, capped at 90% of the
+    // workspace, and re-center vertically.
+    const bodyOverflow = body.scrollHeight - body.clientHeight;
+    if (bodyOverflow > 0) {
+      const fspec = ws._frames.find((f) => f.id === frameId);
+      if (fspec && wsRect.height > 0) {
+        const curPx = frameEl?.offsetHeight ?? hFrac * wsRect.height;
+        const newFrac = Math.min((curPx + bodyOverflow) / wsRect.height, 0.9);
+        fspec.h = newFrac;
+        fspec.y = Math.max(0, (1 - newFrac) / 2);
+        ws._layoutFrames();
+      }
+    }
+
     function onFieldChange(name) {
       applyShowWhen();
       refreshDependentOptions(name);

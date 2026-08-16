@@ -31,9 +31,11 @@ const FILLED = {
   "caret-down": ["M12 19 3 6h18z"],
   dot: ["M12 4a8 8 0 1 1 0 16 8 8 0 0 1 0-16z"],
   // Hamburger — three solid bars, slightly inset from the carets' x 3–21
-  // extent so it reads a touch lighter; same 24-box, so the filter
-  // button's icon swap on sort keeps the same footprint.
-  filter: ["M4.5 5.5h15v3h-15z", "M4.5 10.5h15v3h-15z", "M4.5 15.5h15v3h-15z"],
+  // extent so it reads a touch lighter, and vertically a hair tighter than
+  // the carets so solid bars don't read taller than a triangle; same
+  // 24-box, so the filter button's icon swap on sort keeps the same
+  // footprint.
+  filter: ["M4.5 6h15v3h-15z", "M4.5 10.5h15v3h-15z", "M4.5 15h15v3h-15z"],
 };
 
 const NS = "http://www.w3.org/2000/svg";

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mkui"
-version = "0.1.53"
+version = "0.1.54"
 description = "Config-driven, zero-dependency web GUI framework with dockable panes"
 readme = "README.md"
 license = "Apache-2.0"
@@ -39,4 +39,5 @@ mkui = [
     "static/examples/**/*.json",
     "static/examples/**/*.toml",
     "static/examples/**/*.py",
+    "static/examples/**/*.csv",
 ]

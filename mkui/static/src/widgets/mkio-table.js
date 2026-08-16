@@ -2078,13 +2078,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   const callbacks = {
     onSnapshot: (snap) => {
+      const follow = shouldFollowTail();
       applySnapshot(snap);
       if (protocol === "stream" && snap.length > 0) {
         const ref = snap[snap.length - 1]._mkio_ref;
         if (ref) lastRef = ref;
       }
+      if (follow) scrollToTail();
     },
     onDelta: (changes) => {
+      const follow = shouldFollowTail();
       for (const ch of changes) {
         if (ch.op === "insert") applyInsert(ch.row);
         else if (ch.op === "delete") applyDelete(ch.row);
@@ -2094,14 +2097,17 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         const ref = changes[changes.length - 1].row._mkio_ref;
         if (ref) lastRef = ref;
       }
-      maybeRestoreScroll();
+      if (follow) scrollToTail();
+      else maybeRestoreScroll();
     },
     onUpdate: (op, row) => {
+      const follow = shouldFollowTail();
       if (op === "insert") applyInsert(row);
       else if (op === "delete") applyDelete(row);
       else applyReplace(row);
       if (protocol === "stream" && row._mkio_ref) lastRef = row._mkio_ref;
-      maybeRestoreScroll();
+      if (follow) scrollToTail();
+      else maybeRestoreScroll();
     },
   };
 
@@ -2113,6 +2119,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   let savedScrollTop = 0;
   let restoreScrollTarget = 0;
+  let tailPending = false;
 
   scrollHost.addEventListener("scroll", () => {
     savedScrollTop = scrollHost.scrollTop;
@@ -2124,6 +2131,24 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const target = restoreScrollTarget;
     restoreScrollTarget = 0;
     requestAnimationFrame(() => { scrollHost.scrollTop = target; render(); });
+  }
+
+  // A live stream reads like a terminal: keep the newest row in view while
+  // the user is parked at the tail, but never yank a viewport they have
+  // scrolled up to inspect. `tailPending` forces one jump on entering live.
+  function shouldFollowTail() {
+    if (protocol !== "stream" || !liveMode) return false;
+    if (tailPending) return true;
+    return scrollHost.scrollTop + scrollHost.clientHeight >= scrollHost.scrollHeight - 8;
+  }
+
+  function scrollToTail() {
+    tailPending = false;
+    restoreScrollTarget = 0;
+    requestAnimationFrame(() => {
+      scrollHost.scrollTop = scrollHost.scrollHeight;
+      render();
+    });
   }
 
   function sub() {
@@ -2225,8 +2250,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     savedPageState = { pageLoadRef, pageLoadBefore };
     liveMode = true;
     hasEarlierPages = false;
+    tailPending = true;
     unsub();
     sub();
+    scrollToTail();
     updatePagingUI();
   }
 
