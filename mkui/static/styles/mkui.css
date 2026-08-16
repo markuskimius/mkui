@@ -396,7 +396,9 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   border-radius: 0;
   color: var(--mkui-fg);
   font-weight: 600;
-  pointer-events: none;
+  /* The tab doubles as titlebar text: frame.js wires it to move the
+     frame, so it must receive pointer events and advertise the drag. */
+  cursor: move;
 }
 .mkui-tabbar-nodock .mkui-tab::before,
 .mkui-tabbar-nodock .mkui-tab::after { display: none; }

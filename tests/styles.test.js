@@ -126,6 +126,14 @@ test("nodock (dialog) tab bars opt out of the tab silhouette", () => {
   assert.equal(declaration(".mkui-tabbar-nodock .mkui-tab", "margin"), "0");
 });
 
+test("nodock tab is a live drag surface (titlebar text moves the frame)", () => {
+  // frame.js wires mousedown on the nodock tab to _beginFrameMove; a
+  // pointer-events: none here would silently disconnect that.
+  const rule = ruleContaining(".mkui-tabbar-nodock .mkui-tab {");
+  assert.doesNotMatch(rule, /pointer-events:\s*none/);
+  assert.equal(declaration(".mkui-tabbar-nodock .mkui-tab", "cursor"), "move");
+});
+
 // ── Tab overflow (shrink → arrows) ────────────────────────────────────────
 // Tabs shrink to fit their bar before anything overflows; past the 3em
 // label minimum the strip clips with no scrollbar and the ‹ › scroll

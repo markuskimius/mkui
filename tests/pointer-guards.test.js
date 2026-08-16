@@ -199,6 +199,58 @@ test("tab pointerdown starts a pane drag on the left button only", () => {
   assert.deepEqual(frame._workspace.calls, [["paneDrag", "a"]], "left click starts the drag");
 });
 
+test("noDock tab moves the frame (titlebar text) on the left button only", () => {
+  const frame = makeBuiltFrame();
+  Object.assign(frame._bodyEl, { clientWidth: 400, clientHeight: 300, children: [] });
+  const origAppend = frame._bodyEl.appendChild;
+  frame._bodyEl.appendChild = (el) => { frame._bodyEl.children.push(el); return origAppend(el); };
+  frame._workspace = {
+    calls: [],
+    getPaneSpec: () => null,
+    _ensurePaneEl: (id) => Object.assign(makeEl("mkui-pane"), { getAttribute: () => id }),
+    _beginFrameMove() { this.calls.push(["move"]); },
+    _beginPaneDrag(_ev, _frame, id) { this.calls.push(["paneDrag", id]); },
+  };
+  frame._noDock = true;
+  frame._tree = normalize({ type: "tabs", active: 0, children: ["dlg"] });
+  frame._renderInternal();
+
+  const bars = frame._chromeEls.filter((c) => String(c.className).includes("mkui-tabbar"));
+  const tab = findAll(bars[0], (c) => /(^| )mkui-tab( |$)/.test(String(c.className)))[0];
+  assert.ok(tab, "tab rendered");
+  assert.equal(tab._listeners.pointerdown, undefined, "noDock tab must not wire a pane drag");
+
+  fire(tab, "mousedown", { button: 2 });
+  fire(tab, "mousedown", { button: 1 });
+  assert.deepEqual(frame._workspace.calls, [], "right/middle must not move");
+  fire(tab, "mousedown", { button: 0 });
+  assert.deepEqual(frame._workspace.calls, [["move"]], "left click starts the frame move");
+});
+
+test("noDock tab click activates an inactive tab without a pane drag", () => {
+  const frame = makeBuiltFrame();
+  Object.assign(frame._bodyEl, { clientWidth: 400, clientHeight: 300, children: [] });
+  const origAppend = frame._bodyEl.appendChild;
+  frame._bodyEl.appendChild = (el) => { frame._bodyEl.children.push(el); return origAppend(el); };
+  frame._workspace = {
+    getPaneSpec: () => null,
+    _ensurePaneEl: (id) => Object.assign(makeEl("mkui-pane"), { getAttribute: () => id }),
+    _beginFrameMove() {},
+  };
+  frame._noDock = true;
+  frame._tree = normalize({ type: "tabs", active: 0, children: ["a", "b"] });
+  frame._renderInternal();
+
+  const bars = frame._chromeEls.filter((c) => String(c.className).includes("mkui-tabbar"));
+  const tabs = findAll(bars[0], (c) => /(^| )mkui-tab( |$)/.test(String(c.className)));
+  assert.equal(tabs.length, 2);
+  const tabGroup = frame._tree;
+  fire(tabs[1], "click", {});
+  assert.equal(tabGroup.active, 1, "clicking the inactive tab activates it");
+  fire(tabs[1], "click", {});
+  assert.equal(tabGroup.active, 1, "clicking the active tab is a no-op");
+});
+
 test("frame raise fires on any button (matches OS convention)", () => {
   // The capture-phase raise handler is intentionally unguarded: right-click
   // raising the window under the cursor is standard window-manager behavior.

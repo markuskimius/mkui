@@ -251,6 +251,21 @@ class MkuiFrame extends HTMLElement {
           ev.stopPropagation();
           this._beginTabRename(id, tabGroup);
         });
+      } else {
+        // noDock frames (dialogs, login) never dock or tear out, so their
+        // tab is effectively titlebar text: dragging it moves the frame.
+        // A plain click still activates the tab, mirroring the no-drag
+        // path of _beginPaneDrag.
+        tab.addEventListener("mousedown", (ev) => {
+          if (ev.button !== 0) return;
+          this._workspace?._beginFrameMove(ev, this);
+        });
+        tab.addEventListener("click", () => {
+          if (i !== tabGroup.active) {
+            tabGroup.active = i;
+            this._renderInternal();
+          }
+        });
       }
       tabs.appendChild(tab);
     }
