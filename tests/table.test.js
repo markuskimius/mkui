@@ -204,7 +204,7 @@ globalThis.MkioClient = class {
 
 /* ── Import modules (after globals) ───────────────────────────────────── */
 
-const { getPaneType, registerFormatter } = await import("../mkui/static/src/core.js");
+const { getPaneType, registerFormatter, registerStyler } = await import("../mkui/static/src/core.js");
 await import("../mkui/static/src/widgets/mkio-table.js");
 
 const factory = getPaneType("mkio-table");
@@ -2590,6 +2590,96 @@ test("a numeric column that flips to text grows to its widest string", async () 
     "text width drives the column after the numeric flip");
 });
 
+// Double-click auto-size arithmetic (canvas mock measures 6px/char):
+// content fit = chars*6 + 17 cell chrome; header fit = chars*6 + 33 chrome.
+function dblclickGrip(host, i) {
+  getGrips(host)[i]._ev.dblclick[0]({ stopPropagation() {}, preventDefault() {} });
+}
+
+test("double-clicking a divider grip auto-sizes the column to its content", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(3));
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "x", name: "x".repeat(40), value: 5 });
+  assert.equal(getColgroup(host)._ch[0].style.width, "200px", "auto-grow capped at half pane");
+  dblclickGrip(host, 0);
+  assert.equal(getColgroup(host)._ch[0].style.width, (40 * 6 + 17) + "px",
+    "fit to the widest value, past the half-pane cap");
+});
+
+test("auto-size shrinks a column and falls back to the header width", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(3)); // header-measured 100px
+  dblclickGrip(host, 0);
+  // "row-N" values (5 chars → 47px) are narrower than the "name" header fit.
+  assert.equal(getColgroup(host)._ch[0].style.width, (4 * 6 + 33) + "px",
+    "shrunk to the header label + icon");
+});
+
+test("auto-size is capped at 80% of the viewport width", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(3));
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "x", name: "y".repeat(200), value: 5 });
+  globalThis.innerWidth = 500;
+  try {
+    dblclickGrip(host, 0);
+    assert.equal(getColgroup(host)._ch[0].style.width, "400px", "80% of the 500px viewport");
+  } finally {
+    delete globalThis.innerWidth;
+  }
+});
+
+test("auto-size re-enables auto-grow after a manual resize", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(3));
+  const resizer = getGrips(host)[0];
+  resizer._ev.pointerdown[0]({
+    button: 0, pointerId: 13, clientX: 100,
+    stopPropagation() {}, preventDefault() {},
+  });
+  document._ev.pointermove.at(-1)({ pointerId: 13, clientX: 300 });
+  document._ev.pointerup.at(-1)({ pointerId: 13 });
+  dblclickGrip(host, 0);
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "x", name: "z".repeat(30), value: 5 });
+  assert.equal(getColgroup(host)._ch[0].style.width, (30 * 6 + 17) + "px",
+    "manual-resize opt-out cleared by auto-size");
+});
+
+test("with all rows selected, one double-click auto-sizes every column", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(3));
+  assert.equal(getColgroup(host)._ch[0].style.width, "100px");
+  assert.equal(getColgroup(host)._ch[1].style.width, "100px");
+  host._paneEl._editActions.selectAll(); // Ctrl+A path (selectAllRows)
+  dblclickGrip(host, 0);
+  assert.equal(getColgroup(host)._ch[0].style.width, (4 * 6 + 33) + "px",
+    "clicked column fitted");
+  assert.equal(getColgroup(host)._ch[1].style.width, (5 * 6 + 33) + "px",
+    "other selected column fitted too");
+});
+
+test("cell-mode selection scopes auto-size to the selected columns", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(3));
+  const trs = getTbody(host)._ch;
+  pointerDown(trs[0], 0);                      // focus "name" cell
+  pointerDown(trs[1], 0, { shiftKey: true });  // rect spanning column 0 only
+  dblclickGrip(host, 0);
+  assert.equal(getColgroup(host)._ch[0].style.width, (4 * 6 + 33) + "px",
+    "selected column fitted");
+  assert.equal(getColgroup(host)._ch[1].style.width, "100px",
+    "unselected column untouched");
+  dblclickGrip(host, 1); // divider of a column outside the selection
+  assert.equal(getColgroup(host)._ch[1].style.width, (5 * 6 + 33) + "px",
+    "fits only itself when outside the selection");
+  assert.equal(getColgroup(host)._ch[0].style.width, (4 * 6 + 33) + "px");
+});
+
 test("pane reopen re-enables auto-grow after a manual resize", async () => {
   const { host, io } = await createTable({ protocol: "query" });
   triggerVisible(io);
@@ -3808,6 +3898,122 @@ test("cell-unit button payloads carry the raw cell value", async () => {
   } finally {
     delete fakeClient.send;
   }
+});
+
+/* ── Conditional styling (styles / rowStyle) ─────────────────────────── */
+
+test("declarative cell rules style only the matching cells", async () => {
+  const { host } = await createFmtTable({
+    styles: { value: [{ gt: 1, color: "red", bold: true, underline: true, strike: true }] },
+  });
+  const tds = colCells(host, "value");
+  assert.equal(tds[2].style.color, "red");
+  assert.equal(tds[2].style.fontWeight, "bold");
+  assert.equal(tds[2].style.textDecoration, "underline line-through");
+  assert.equal(tds[0].style.color, "", "non-matching cell untouched");
+  assert.equal(tds[1].style.color, "", "gt is strict");
+});
+
+test("cell rules are first-match-wins with a condition-free fallback", async () => {
+  const { host } = await createFmtTable({
+    styles: { value: [{ eq: 1, color: "blue" }, { color: "gray" }] },
+  });
+  const tds = colCells(host, "value");
+  assert.deepEqual(tds.map(td => td.style.color), ["gray", "blue", "gray"]);
+});
+
+test("styled backgrounds ride the marker class + custom property", async () => {
+  const { host } = await createFmtTable({
+    styles: { name: [{ match: "row-1", background: "#400" }] },
+  });
+  const tds = colCells(host, "name");
+  assert.ok(tds[1].classList.contains("mkui-cell-styled"));
+  assert.equal(tds[1].style["--mkui-cell-bg"], "#400");
+  assert.equal(tds[1].style.background, "", "no inline background — CSS keeps precedence");
+  assert.ok(!tds[0].classList.contains("mkui-cell-styled"));
+});
+
+test("row rules condition on multiple columns via when", async () => {
+  const { host } = await createFmtTable({
+    rowStyle: [{ when: { name: ["row-0", "row-2"], value: { lte: 0 } },
+                 background: "green", class: "alert" }],
+  });
+  const trs = getTbody(host)._ch;
+  assert.ok(trs[0].classList.contains("mkui-row-styled"), "row-0 matches both conditions");
+  assert.equal(trs[0].style["--mkui-row-bg"], "green");
+  assert.ok(trs[0].classList.contains("alert"), "custom class applied");
+  assert.ok(!trs[2].classList.contains("mkui-row-styled"), "row-2 fails the value condition");
+  assert.ok(!trs[1].classList.contains("mkui-row-styled"), "row-1 fails the name condition");
+});
+
+test("registered stylers style cells and rows programmatically", async () => {
+  registerStyler("hotCell", (v) => Number(v) > 1 ? { italic: true } : null);
+  registerStyler("hotRow", (row) => row.value > 1 ? { css: { opacity: "0.5" } } : null);
+  const { host } = await createFmtTable({
+    styles: { value: "hotCell" }, rowStyle: "hotRow",
+  });
+  const tds = colCells(host, "value");
+  assert.equal(tds[2].style.fontStyle, "italic");
+  assert.equal(tds[0].style.fontStyle, "");
+  const trs = getTbody(host)._ch;
+  assert.equal(trs[2].style.opacity, "0.5", "css escape hatch applies inline");
+  assert.equal(trs[0].style.opacity, "");
+});
+
+test("a live replace restyles the row and its cells both ways", async () => {
+  const { host } = await createFmtTable({
+    styles: { value: [{ gt: 1, color: "red" }] },
+    rowStyle: [{ when: { value: { gt: 1 } }, class: "warn" }],
+  });
+  const trs = getTbody(host)._ch;
+  assert.equal(colCells(host, "value")[0].style.color, "");
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "0", name: "row-0", value: 5 });
+  assert.equal(colCells(host, "value")[0].style.color, "red", "style gained on update");
+  assert.ok(trs[0].classList.contains("warn"), "row class gained on update");
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "2", name: "row-2", value: 0 });
+  assert.equal(colCells(host, "value")[2].style.color, "", "style cleared on update");
+  assert.ok(!trs[2].classList.contains("warn"), "row class cleared on update");
+});
+
+test("an unknown styler warns once and applies nothing", async () => {
+  const warned = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warned.push(a.join(" "));
+  try {
+    const { host } = await createFmtTable({ styles: { value: "no-such-styler" } });
+    const tds = colCells(host, "value");
+    assert.ok(tds.every(td => td.style.color === "" && !td.classList.contains("mkui-cell-styled")));
+    assert.equal(warned.filter(w => w.includes("no-such-styler")).length, 1,
+      "one warning, not one per cell");
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test("a rule with an invalid regex is disabled instead of throwing", async () => {
+  const warned = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warned.push(a.join(" "));
+  try {
+    const { host } = await createFmtTable({
+      styles: { name: [{ match: "(", color: "red" }, { eq: "row-1", color: "blue" }] },
+    });
+    const tds = colCells(host, "name");
+    assert.deepEqual(tds.map(td => td.style.color), ["", "blue", ""],
+      "bad rule never matches; later rules still apply");
+    assert.equal(warned.filter(w => w.includes("bad style rule regex")).length, 1);
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test("cell rules test the formatted value", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name", "value"], formatters: { value: "millis" },
+    styles: { value: [{ match: "^2 ms$", color: "red" }] },
+  });
+  const tds = colCells(host, "value");
+  assert.deepEqual(tds.map(td => td.style.color), ["", "", "red"]);
 });
 
 /* ── select: publishing the current row to app state ─────────────────── */

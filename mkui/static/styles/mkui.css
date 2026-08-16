@@ -804,6 +804,13 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 
 .mkui-table tbody tr { cursor: default; }
 
+/* Conditional styling (mkio-table `styles` / `rowStyle`): backgrounds ride
+   custom properties on marker classes, declared BEFORE the selection rules
+   so an equal-specificity selection tint wins outright on unstyled parts;
+   where both apply, the color-mix rules further down blend the two. */
+.mkui-table tr.mkui-row-styled { background: var(--mkui-row-bg); }
+.mkui-table td.mkui-cell-styled { background: var(--mkui-cell-bg); }
+
 /* Explicit row selection — the strong style. */
 .mkui-table tr.mkui-selected {
   background: rgba(14, 99, 156, 0.25);
@@ -828,6 +835,24 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-table td.mkui-cell-focus {
   outline: 1px solid var(--mkui-accent);
   outline-offset: -1px;
+}
+
+/* Selection/highlight over a conditional background: blend instead of
+   replace, so the styled color and the selection both stay readable. An
+   opaque styled cell would also hide its row's tr-level tint, so the
+   tr-scoped cell rules re-blend it in. */
+.mkui-table tr.mkui-row-hl.mkui-row-styled {
+  background: color-mix(in srgb, var(--mkui-row-bg) 92%, rgb(14, 99, 156));
+}
+.mkui-table tr.mkui-selected.mkui-row-styled {
+  background: color-mix(in srgb, var(--mkui-row-bg) 75%, rgb(14, 99, 156));
+}
+.mkui-table td.mkui-cell-sel.mkui-cell-styled,
+.mkui-table tr.mkui-selected td.mkui-cell-styled {
+  background: color-mix(in srgb, var(--mkui-cell-bg) 75%, rgb(14, 99, 156));
+}
+.mkui-table tr.mkui-row-hl td.mkui-cell-styled {
+  background: color-mix(in srgb, var(--mkui-cell-bg) 92%, rgb(14, 99, 156));
 }
 
 /* Row-number column: sticky-left so numbers survive horizontal scroll

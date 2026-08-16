@@ -220,6 +220,26 @@ test("filter dropdown numeric values align like the cells", () => {
     /var\(--mkui-num-pad/);
 });
 
+test("conditional-style backgrounds ride custom properties and yield to selection", () => {
+  // Stylers set --mkui-row-bg/--mkui-cell-bg + a marker class instead of an
+  // inline background: an inline background would beat every class-based
+  // selection tint. Precedence is source order, so the base styled rules
+  // must appear BEFORE the selection rules they are meant to lose to.
+  assert.equal(declaration(".mkui-table tr.mkui-row-styled", "background"),
+    "var(--mkui-row-bg)");
+  assert.equal(declaration(".mkui-table td.mkui-cell-styled", "background"),
+    "var(--mkui-cell-bg)");
+  assert.ok(css.indexOf(".mkui-table tr.mkui-row-styled")
+    < css.indexOf(".mkui-table tr.mkui-selected"),
+    "row-styled background must precede the row-selection tint");
+  assert.ok(css.indexOf(".mkui-table td.mkui-cell-styled")
+    < css.indexOf(".mkui-table td.mkui-cell-sel"),
+    "cell-styled background must precede the cell-selection tint");
+  // Where both apply, the tint blends with the styled background.
+  assert.match(declaration(".mkui-table tr.mkui-selected.mkui-row-styled", "background"),
+    /color-mix.*--mkui-row-bg/);
+});
+
 test("columns are separated by subtle dividers", () => {
   const div = declaration(".mkui-table th, .mkui-table td", "border-right");
   assert.match(div, /1px solid/);

@@ -4,12 +4,13 @@
 // The state store is intentionally tiny: it's a Proxy over a plain object,
 // supports dot-path get/set, and notifies subscribers per path.
 
-export const VERSION = "0.1.48";
+export const VERSION = "0.1.55";
 export function version() { return VERSION; }
 
 const widgetTypes = new Map();
 const paneTypes = new Map();
 const formatters = new Map();
+const stylers = new Map();
 
 export function registerWidget(name, factory) {
   widgetTypes.set(name, factory);
@@ -25,9 +26,18 @@ export function registerPaneType(name, factory) {
 export function registerFormatter(name, fn) {
   formatters.set(name, fn);
 }
+// A styler derives conditional styling for a table cell or row. Cell form:
+// (value, row, col) => style; row form: (row) => style. The style is an
+// object of { color, background, bold, italic, underline, strike, class,
+// css } (or null/undefined for none). Reference from a table spec with
+// `styles = { col = "<name>" }` or `rowStyle = "<name>"`.
+export function registerStyler(name, fn) {
+  stylers.set(name, fn);
+}
 export function getWidget(name) { return widgetTypes.get(name); }
 export function getPaneType(name) { return paneTypes.get(name); }
 export function getFormatter(name) { return formatters.get(name); }
+export function getStyler(name) { return stylers.get(name); }
 
 export class State {
   constructor(initial = {}) {

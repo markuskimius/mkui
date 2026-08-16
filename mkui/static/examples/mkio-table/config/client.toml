@@ -65,6 +65,14 @@ columns = ["id", "side", "symbol", "qty", "price", "notional", "status"]
 formatters = { notional = "notional" }
 # Mirror the current row into app state; the order-detail pane follows it.
 select = { state = "selected_order" }
+# Conditional styling, config-only: cell rules test the cell's (formatted)
+# value first-match-wins; row rules condition on any columns via `when`.
+# Programmatic alternative: registerStyler + `styles = { side = "<name>" }`.
+styles = { side = [ { eq = "Buy", color = "#4caf50" }, { eq = "Sell", color = "#e05252" } ] }
+
+[[panes.all-orders.rowStyle]]
+when = { notional = { gte = 50000 } }
+background = "#3a2f1b"
 
 [[panes.all-orders.buttons]]
 label = "+ New Order"

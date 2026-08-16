@@ -1,4 +1,4 @@
-import { registerPaneType, getFormatter } from "../core.js";
+import { registerPaneType, getFormatter, getStyler } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
 import { resolveExpr, resolveObject } from "../lib/expressions.js";
 import { icon } from "../lib/icons.js";
@@ -252,6 +252,143 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function cellText(row, col) {
     const v = cellValue(row, col);
     return v == null ? "" : String(v);
+  }
+
+  /* ── Conditional styling ──────────────────────────────────────────── */
+
+  // `styles = { col = <styler> }` styles a cell from its value; `rowStyle`
+  // styles the whole row from any of its values. A styler is either the
+  // name of a function registered with registerStyler, or a declarative
+  // rule array evaluated first-match-wins. A rule mixes condition keys —
+  // eq, ne, lt, lte, gt, gte, in (array), match (regex); a rule with none
+  // always matches (fallback). Row rules condition via
+  // `when = { col = <cond> }` (plain value = eq, array = in, object =
+  // operators; all columns must match) — with style keys: color,
+  // background, bold, italic, underline, strike, class (own CSS classes),
+  // css (extra inline properties). Conditions test cellValue — the same
+  // value the table displays, sorts, and filters.
+
+  const warnedStylers = new Set();
+  function namedStyler(name) {
+    return (...args) => {
+      const fn = getStyler(name);
+      if (fn) return fn(...args);
+      if (!warnedStylers.has(name)) {
+        warnedStylers.add(name);
+        console.warn("[mkio-table] unknown styler:", name);
+      }
+      return null;
+    };
+  }
+
+  const eqVal = (v, c) => v === c || String(v ?? "") === String(c ?? "");
+  function compileCond(rule) {
+    let re = null;
+    if ("match" in rule) {
+      try { re = new RegExp(rule.match); }
+      catch {
+        console.warn("[mkio-table] bad style rule regex:", rule.match);
+        return () => false;
+      }
+    }
+    return (v) => {
+      if ("eq" in rule && !eqVal(v, rule.eq)) return false;
+      if ("ne" in rule && eqVal(v, rule.ne)) return false;
+      if ("lt" in rule && !(Number(v) < Number(rule.lt))) return false;
+      if ("lte" in rule && !(Number(v) <= Number(rule.lte))) return false;
+      if ("gt" in rule && !(Number(v) > Number(rule.gt))) return false;
+      if ("gte" in rule && !(Number(v) >= Number(rule.gte))) return false;
+      if ("in" in rule && !rule.in.some((c) => eqVal(v, c))) return false;
+      if (re && !re.test(String(v ?? ""))) return false;
+      return true;
+    };
+  }
+
+  function compileCellRules(rules) {
+    const tests = rules.map(compileCond);
+    return (v) => {
+      for (let i = 0; i < tests.length; i++) if (tests[i](v)) return rules[i];
+      return null;
+    };
+  }
+
+  function compileRowRules(rules) {
+    const tests = rules.map((r) => {
+      const conds = Object.entries(r.when ?? {}).map(([c, cond]) => {
+        const asRule = Array.isArray(cond) ? { in: cond }
+          : cond !== null && typeof cond === "object" ? cond : { eq: cond };
+        return [c, compileCond(asRule)];
+      });
+      return (row) => conds.every(([c, t]) => t(cellValue(row, c)));
+    });
+    return (row) => {
+      for (let i = 0; i < tests.length; i++) if (tests[i](row)) return rules[i];
+      return null;
+    };
+  }
+
+  const cellStylers = {}; // col -> (value, row, col) => style | null
+  for (const [c, s] of Object.entries(spec.styles ?? {}))
+    cellStylers[c] = Array.isArray(s) ? compileCellRules(s) : namedStyler(s);
+  const rowStyler = spec.rowStyle == null ? null // (row) => style | null
+    : Array.isArray(spec.rowStyle) ? compileRowRules(spec.rowStyle)
+    : namedStyler(spec.rowStyle);
+  const hasStylers = rowStyler != null || Object.keys(cellStylers).length > 0;
+
+  // Apply a style result to a cell/row element, first clearing whatever
+  // the previous one set. Backgrounds ride a custom property + marker
+  // class so the stylesheet stays in charge of precedence — selection
+  // tints blend with (rather than vanish under) a styled background.
+  function applyStyle(el, style, bgProp, bgClass) {
+    const prev = el._mkuiStyle;
+    if (!prev && !style) return;
+    if (prev) {
+      el.style.color = "";
+      el.style.fontWeight = "";
+      el.style.fontStyle = "";
+      el.style.textDecoration = "";
+      el.style.removeProperty(bgProp);
+      el.classList.remove(bgClass);
+      if (prev.class) el.classList.remove(...String(prev.class).split(/\s+/));
+      if (prev.css) for (const k of Object.keys(prev.css)) el.style.removeProperty(k);
+    }
+    el._mkuiStyle = style ?? null;
+    if (!style) return;
+    if (style.color) el.style.color = style.color;
+    if (style.bold) el.style.fontWeight = "bold";
+    if (style.italic) el.style.fontStyle = "italic";
+    const deco = [style.underline && "underline", style.strike && "line-through"]
+      .filter(Boolean).join(" ");
+    if (deco) el.style.textDecoration = deco;
+    if (style.background) {
+      el.style.setProperty(bgProp, style.background);
+      el.classList.add(bgClass);
+    }
+    if (style.class) el.classList.add(...String(style.class).split(/\s+/));
+    if (style.css)
+      for (const [k, v] of Object.entries(style.css)) el.style.setProperty(k, v);
+  }
+
+  function styleCellStyler(td, row, col) {
+    const fn = cellStylers[col];
+    if (fn)
+      applyStyle(td, fn(cellValue(row, col), row, col), "--mkui-cell-bg", "mkui-cell-styled");
+  }
+
+  function styleRowStyler(tr, row) {
+    if (rowStyler) applyStyle(tr, rowStyler(row), "--mkui-row-bg", "mkui-row-styled");
+  }
+
+  // Recompute every styler-driven style on a rendered row — a replace can
+  // flip the row's or any cell's styling even where the text didn't change
+  // (both may condition on other columns).
+  function restyleRowStylers(tr, row) {
+    if (!hasStylers) return;
+    styleRowStyler(tr, row);
+    for (const col of Object.keys(cellStylers)) {
+      const td = tr.querySelector(`td[data-col="${CSS.escape(col)}"]`);
+      if (td) styleCellStyler(td, row, col);
+    }
   }
 
   // Raw row keys plus formatter-only columns, so derived values feed the
@@ -1505,11 +1642,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     table.style.width = "";
   }
 
-  function initColResize(col, e) {
-    closeDropdown();
-    // Sync stored widths to what's actually rendered, so the drag starts
-    // from the on-screen width (a drag may precede the first measurement,
-    // where columns are still auto-laid-out).
+  // Sync stored widths to what's actually rendered, so a resize starts
+  // from the on-screen width (it may precede the first measurement, where
+  // columns are still auto-laid-out).
+  function syncRenderedWidths() {
     for (const th of thead.querySelectorAll("th")) {
       if (!th.dataset.col) continue; // filler cell
       const w = th.getBoundingClientRect().width;
@@ -1517,6 +1653,52 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     widthsInited = true;
     renderColgroup();
+  }
+
+  // Width that exactly fits a column: the widest ingested value (colStats,
+  // numeric columns keep decimal alignment) or the header label + its icon,
+  // whichever is wider — capped at 80% of the viewport, unlike auto-grow's
+  // half-pane cap, since an explicit fit request means "show it all".
+  const HEADER_CHROME = 33; // 8px + 4px th padding + 4px gap + 16px icon + 1px divider
+  function fitColWidth(col) {
+    const st = colStats.get(col);
+    let w = st
+      ? (st.numeric ? st.maxIntW + st.maxFrac * chW : st.maxTextW) + CELL_CHROME
+      : 0;
+    if (ensureMeasureCtx())
+      w = Math.max(w, measureCtx.measureText(label(col)).width + HEADER_CHROME);
+    const viewportW = window.innerWidth || scrollHost.clientWidth || 0;
+    const cap = viewportW > 0 ? Math.ceil(viewportW * 0.8) : Infinity;
+    return Math.max(MIN_COL_W, Math.min(Math.ceil(w), cap));
+  }
+
+  // Columns covered by the current selection: row mode spans every visible
+  // column, cell mode is the union of the rects' column ranges.
+  function selectedColumns() {
+    const cols = visibleColumns();
+    const out = new Set();
+    if (selectedKeys.size) for (const c of cols) out.add(c);
+    else for (const b of rectBounds())
+      for (let ci = b.c1; ci <= b.c2; ci++) out.add(cols[ci]);
+    return out;
+  }
+
+  // Double-click on a divider grip: auto-size to fit. When the divider's
+  // column is part of the selection (select-all via Ctrl+A or the corner
+  // cell spans every column), the whole selection is fitted at once.
+  function autoSizeColumn(col) {
+    if (!widthsInited) syncRenderedWidths(); // baseline for non-target columns
+    const sel = selectedColumns();
+    for (const c of sel.has(col) ? sel : [col]) {
+      userSized.delete(c); // fitted width tracks incoming data again
+      colWidths.set(c, fitColWidth(c));
+    }
+    renderColgroup();
+  }
+
+  function initColResize(col, e) {
+    closeDropdown();
+    syncRenderedWidths();
 
     const pid = e.pointerId;
     const startX = e.clientX;
@@ -1553,6 +1735,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       initColResize(col, e);
     });
     r.addEventListener("click", (e) => e.stopPropagation());
+    r.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      autoSizeColumn(col);
+    });
     return r;
   }
 
@@ -1912,8 +2099,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       td.dataset.col = c;
       td.textContent = cellText(row, c);
       styleCell(td, c);
+      styleCellStyler(td, row, c);
       tr.appendChild(td);
     }
+    styleRowStyler(tr, row);
     tr.addEventListener("pointerdown", (e) => handleRowPointerDown(key, e));
     return tr;
   }
@@ -2058,6 +2247,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
           flash(td, "mkui-flash-update");
         }
       }
+      restyleRowStylers(tr, row);
     }
     // A live update to the published row replaces the object it points at,
     // so followers see the new values instead of a snapshot.
