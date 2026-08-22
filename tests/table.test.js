@@ -2590,6 +2590,98 @@ test("a numeric column that flips to text grows to its widest string", async () 
     "text width drives the column after the numeric flip");
 });
 
+// Paging: the first page (or live data) sizes the columns; later page
+// loads leave them alone, so navigating doesn't make the layout jump.
+function wideStreamRows(n, startId) {
+  const rows = makeStreamRows(n, startId);
+  rows[0].name = "w".repeat(30);
+  return rows;
+}
+
+test("the first page of a paged stream sizes the columns", async () => {
+  const { host, io } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(wideStreamRows(50, 0), { hasmore: true, ref: "r1" });
+  assert.equal(getColgroup(host)._ch[0].style.width, (30 * 6 + 17) + "px",
+    "first page grows the column to its widest value");
+});
+
+test("navigating to another page does not resize columns", async () => {
+  const { host, io } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+  assert.equal(getColgroup(host)._ch[0].style.width, "100px", "first page fits the header width");
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const [prevBtn, , nextBtn, , refreshBtn] = toolbar._ch;
+  nextBtn._ev.click[0]();
+  lastSubscribe().opts.onPage(wideStreamRows(50, 50), { hasmore: true, ref: "r2" });
+  flushRaf();
+  assert.equal(getColgroup(host)._ch[0].style.width, "100px", "next page leaves the width alone");
+
+  prevBtn._ev.click[0]();
+  lastSubscribe().opts.onPage(wideStreamRows(50, 0), { hasmore: true, ref: "r1b" });
+  flushRaf();
+  assert.equal(getColgroup(host)._ch[0].style.width, "100px", "prev page leaves the width alone");
+
+  refreshBtn._ev.click[0]();
+  lastSubscribe().opts.onPage(wideStreamRows(50, 0), { hasmore: true, ref: "r1c" });
+  flushRaf();
+  assert.equal(getColgroup(host)._ch[0].style.width, "100px", "refresh leaves the width alone");
+});
+
+test("Earlier in live mode and exit-live refetch do not resize columns", async () => {
+  const { host, io } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: true, ref: "r2" });
+  assert.equal(getColgroup(host)._ch[0].style.width, "100px");
+
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const [prevBtn, , , liveBtn] = toolbar._ch;
+  liveBtn._ev.click[0]();
+  lastSubscribe().opts.onSnapshot(makeStreamRows(5, 100));
+  flushRaf();
+
+  prevBtn._ev.click[0]();
+  lastSubscribeBySubid("-page").opts.onPage(wideStreamRows(50, 0), { hasmore: false, ref: "r1" });
+  flushRaf();
+  assert.equal(getColgroup(host)._ch[0].style.width, "100px", "earlier page leaves the width alone");
+
+  liveBtn._ev.click[0]();
+  lastSubscribe().opts.onPage(wideStreamRows(50, 50), { hasmore: true, ref: "r2b" });
+  flushRaf();
+  assert.equal(getColgroup(host)._ch[0].style.width, "100px", "exit-live refetch leaves the width alone");
+});
+
+test("live rows still grow columns after paging", async () => {
+  const { host, io } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+  const toolbar = findByClass(host, "mkui-table-paging");
+  const [, , nextBtn, liveBtn] = toolbar._ch;
+  nextBtn._ev.click[0]();
+  lastSubscribe().opts.onPage(makeStreamRows(50, 50), { hasmore: false, ref: "r2" });
+  liveBtn._ev.click[0]();
+  lastSubscribe().opts.onUpdate("insert",
+    { _mkio_ref: streamRef(100), name: "w".repeat(30), value: 100 });
+  flushRaf();
+  assert.equal(getColgroup(host)._ch[0].style.width, (30 * 6 + 17) + "px",
+    "a live row widens the column as before");
+});
+
+test("pane reopen re-arms first-page sizing", async () => {
+  const { host, io } = await createTable({ protocol: "stream", maxcount: 50 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(makeStreamRows(50), { hasmore: true, ref: "r1" });
+  const paneEl = host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+  for (const fn of paneEl._ev["mkui-pane-open"] ?? []) fn();
+  triggerVisible(io);
+  lastSubscribe().opts.onPage(wideStreamRows(50, 0), { hasmore: true, ref: "r1b" });
+  assert.equal(getColgroup(host)._ch[0].style.width, (30 * 6 + 17) + "px",
+    "the reopened pane's first page sizes the columns again");
+});
+
 // Double-click auto-size arithmetic (canvas mock measures 6px/char):
 // content fit = chars*6 + 17 cell chrome; header fit = chars*6 + 33 chrome.
 function dblclickGrip(host, i) {

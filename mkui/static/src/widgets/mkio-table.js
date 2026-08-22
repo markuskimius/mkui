@@ -216,6 +216,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   let widthsInited = false;
   let widthsDirty = false;     // a ratchet grew a column — colgroup refresh pending
   const userSized = new Set(); // manually resized columns: auto-grow keeps hands off
+  let dataSeen = false;        // some row has been measured since the last width reset
+  let growSuspended = false;   // page load after first data: ratchet off, widths hold
   let rowNumDigits = 2;        // row-number column width follows the digit count
   const MIN_COL_W = 40;
   const CELL_CHROME = 17;      // 8px cell padding each side + 1px divider (mkui.css)
@@ -457,6 +459,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function bumpStats(row) {
+    dataSeen = true;
     const canMeasure = ensureMeasureCtx();
     for (const k of statColumns(row)) {
       if (k.startsWith("_mkio_")) continue;
@@ -1592,10 +1595,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // Ratchet a column up to fit its widest measured content: numeric columns
   // need max-integer + max-fraction so decimal points align, text columns
   // just the widest string. Never shrinks, never overrides a manual resize,
-  // capped at half the pane. The colgroup refresh is deferred to the next
+  // capped at half the pane. Paging suspends it once any data has been
+  // measured (growSuspended): the first page sizes the columns, later pages
+  // — next/prev, Earlier in live mode, exit-live refetch — must not make
+  // them jump. The colgroup refresh is deferred to the next
   // render() so a snapshot chunk costs one refresh, not one per row.
   function growColWidth(col, st) {
-    if (userSized.has(col)) return;
+    if (userSized.has(col) || growSuspended) return;
     const content = st.numeric ? st.maxIntW + st.maxFrac * chW : st.maxTextW;
     const needed = Math.min(Math.ceil(content) + CELL_CHROME, maxColWidth());
     if (needed > (colWidths.get(col) ?? 0)) {
@@ -1635,6 +1641,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function resetColWidths() {
     colWidths.clear();
     userSized.clear();
+    dataSeen = false;
+    growSuspended = false;
     widthsInited = false;
     widthsDirty = false;
     colgroup.innerHTML = "";
@@ -2411,7 +2419,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         if (pageRows.length > 0) {
           if (!columns) { columns = Object.keys(pageRows[0]); renderHead(); }
           maybeInitWidths(); // lock header widths before rows render
+          growSuspended = dataSeen; // only the first data sizes the columns
           for (const row of pageRows) insertRow(row);
+          growSuspended = false;
           render();
           firstRef = pageRows[0]._mkio_ref;
           lastRef = pageRows[pageRows.length - 1]._mkio_ref;
@@ -2493,12 +2503,14 @@ registerPaneType("mkio-table", async (spec, app, host) => {
           // Prepend the earlier page in display order without disturbing
           // the live rows below it.
           const keys = [];
+          growSuspended = dataSeen;
           for (const row of pageRows) {
             bumpStats(row);
             const key = row[idKey];
             if (!rows.has(key)) keys.push(key);
             rows.set(key, row);
           }
+          growSuspended = false;
           baseOrder = keys.concat(baseOrder);
           markViewDirty();
           render();
