@@ -412,3 +412,24 @@ test("icons inside rich text flow inline (the base rule is display:block)", () =
 test("display errors are visibly marked", () => {
   assert.ok(rule(".mkui-table td.mkui-cell-err").includes("color"));
 });
+
+// ── Range filter dropdown ─────────────────────────────────────────────────
+
+test("hidden mode controls stay hidden despite their flex display", () => {
+  assert.match(declaration(".mkui-filter-dropdown [hidden]", "display"), /none\s*!important/);
+  assert.equal(declaration(".mkui-filter-dropdown.mkui-filter-wide", "width"), "280px");
+});
+
+test("range bounds use the mono font like the value list", () => {
+  assert.equal(declaration(".mkui-filter-bound-input", "font-family"), "var(--mkui-font-mono)");
+});
+
+test("mode switch and presets mark the active choice with the accent", () => {
+  assert.equal(declaration(".mkui-filter-mode.active", "border-bottom-color"), "var(--mkui-accent)");
+  assert.equal(declaration(".mkui-filter-preset.active", "color"), "var(--mkui-accent)");
+});
+
+test("native date/time pickers follow the theme", () => {
+  assert.equal(declaration("mkui-app", "color-scheme"), "dark");
+  assert.equal(declaration('mkui-app[theme="light"]', "color-scheme"), "light");
+});

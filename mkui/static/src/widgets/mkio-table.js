@@ -4,6 +4,10 @@ import { resolveExpr, resolveObject, evalExpr, compileExpr, compileTemplate, exp
 import { icon } from "../lib/icons.js";
 import { gridToTSV, gridToHTML } from "../lib/copy.js";
 import { isRich, richText, richToHTML, renderRich } from "../lib/rich.js";
+import {
+  detectTimeKind, parseTime, kindForSpec, kindForFormat, inputToBound, boundToInput,
+  inputTypeForKind, presetBounds, PRESETS,
+} from "../lib/timeparse.js";
 
 function midnightRef() {
   const d = new Date();
@@ -224,6 +228,26 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   const CELL_CHROME = 17;      // 8px cell padding each side + 1px divider (mkui.css)
   const labels = spec.labels ?? {};
   const label = (col) => labels[col] ?? col;
+
+  // Column filter types. Range filtering is offered on numeric columns and
+  // on columns whose every value is a time (see lib/timeparse.js for what
+  // is recognised natively); `types = { col = "time" | "number" | "text" |
+  // { type = "time", parse = "%d/%m/%Y", tz = "local", unit = "ms" } }`
+  // overrides that inference — the only way to range-filter a column in a
+  // format the table would otherwise refuse to guess.
+  const colTypes = {}; // col -> { type, parse?, tz?, unit? }
+  for (const [c, t] of Object.entries(spec.types ?? {})) {
+    const o = typeof t === "string" ? { type: t } : { ...t };
+    if (!["number", "time", "text"].includes(o.type)) {
+      console.warn(`[mkio-table] bad types.${c}: type must be number, time, or text`);
+      continue;
+    }
+    if (o.type === "time" && o.parse && !kindForFormat(String(o.parse))) {
+      console.warn(`[mkio-table] bad types.${c}: parse format has no date or time fields`);
+      continue;
+    }
+    colTypes[c] = o;
+  }
   const visibleColumns = () =>
     displayOrder || columns.filter((c) => !c.startsWith("_mkio_"));
 
@@ -536,7 +560,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // pad is (column's widest fraction - this cell's fraction) in ch, which
   // is exact in the table's monospace font. maxFrac is a one-way ratchet
   // (deletes don't shrink it), reset when the data is cleared.
-  const colStats = new Map(); // col -> { numeric, maxFrac, maxIntW, maxTextW }
+  // `temporal`/`timeKind` ratchet the same way for time columns (see
+  // lib/timeparse.js), and `min`/`max` track the value range of numeric and
+  // temporal columns for the range filter's placeholders.
+  const colStats = new Map(); // col -> { numeric, maxFrac, maxIntW, maxTextW, temporal, timeKind, min, max }
 
   // Canvas text measurement in the table font — lets ingestion grow column
   // widths from raw values without touching DOM layout. chW is the width of
@@ -584,6 +611,25 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
   }
 
+  // Temporal detection: every non-empty value must be a natively recognised
+  // time string, and their kinds must agree (dates and date-times mix as
+  // date-times; a clock time next to a date is not a time column).
+  function bumpTemporal(st, v) {
+    const kind = typeof v === "string" ? detectTimeKind(v) : null;
+    if (!kind || (st.timeKind && st.timeKind !== kind && (kind === "time" || st.timeKind === "time"))) {
+      st.temporal = false;
+      st.timeKind = null;
+      if (!st.numeric) st.min = st.max = null;
+      return;
+    }
+    if (!st.timeKind || kind === "datetime") st.timeKind = kind;
+    if (st.numeric) return; // a numeric column keeps its numeric range
+    const secs = parseTime(v);
+    if (secs === null) return;
+    if (st.min === null || secs < st.min) st.min = secs;
+    if (st.max === null || secs > st.max) st.max = secs;
+  }
+
   function bumpStats(row) {
     dataSeen = true;
     const canMeasure = ensureMeasureCtx();
@@ -592,7 +638,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const v = cellValue(row, k);
       if (v == null || v === "") continue;
       let st = colStats.get(k);
-      if (!st) { st = { numeric: true, maxFrac: 0, maxIntW: 0, maxTextW: 0 }; colStats.set(k, st); }
+      if (!st) {
+        st = { numeric: true, maxFrac: 0, maxIntW: 0, maxTextW: 0, temporal: true, timeKind: null, min: null, max: null };
+        colStats.set(k, st);
+      }
       // Widths and decimal padding measure what's shown (the display text,
       // plus the boxes icons and bars occupy); whether the column is numeric
       // is judged on the value.
@@ -602,15 +651,20 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       let grew = false;
       if (st.numeric) {
         let changed = false;
-        if (isNaN(Number(String(v)))) {
+        const n = Number(String(v));
+        if (isNaN(n)) {
           st.numeric = false;
+          st.min = st.max = null;
           changed = true;
         } else {
           const f = fracLen(s);
           if (f > st.maxFrac) { st.maxFrac = f; changed = grew = true; }
+          if (st.min === null || n < st.min) st.min = n;
+          if (st.max === null || n > st.max) st.max = n;
         }
         if (changed) restyleColumn(k);
       }
+      if (st.temporal) bumpTemporal(st, v);
       if (!canMeasure) continue;
       // Width ratchet: numeric strings are ASCII, exactly 1ch per char in
       // the mono table font; text is canvas-measured, skipped when even at
@@ -778,6 +832,17 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   /* ── Sort & filter state ──────────────────────────────────────────── */
 
   const sortKeys = [];
+  // col -> { kind: "values", allowed: Set<string> }
+  //      | { kind: "range", type: "number" | "time", lo, hi, preset, empty,
+  //          timeKind, spec, localTz }
+  // A values filter keeps the checked display texts; a range filter keeps
+  // bounds in the column's frame (numbers, or seconds — see
+  // lib/timeparse.js; a number `hi` is inclusive, a time `hi` exclusive
+  // so that a typed date/minute covers its whole unit), the typed bound
+  // texts (`loText`/`hiText`) for restoring the inputs, `preset` naming a
+  // relative range resolved against the clock on each evaluation, and
+  // `empty` whether unparseable/blank values pass. One filter per column:
+  // the dropdown's Values/Range modes replace each other.
   const filters = new Map();
   let dropdown = null;
   let dropdownCol = null;
@@ -1644,12 +1709,81 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function matchesFilters(row) {
-    for (const [col, allowed] of filters) {
-      if (!allowed) continue;
-      const v = cellText(row, col);
-      if (!allowed.has(v)) return false;
+    for (const [col, f] of filters) {
+      if (f.kind === "range") { if (!inRange(row, col, f)) return false; }
+      else if (!f.allowed.has(cellText(row, col))) return false;
     }
     return true;
+  }
+
+  // The filter type a column offers: explicit `types` first, then the
+  // ratchets in colStats (numeric wins over temporal — a column of epoch
+  // numbers is a number column unless `types` says `time`).
+  function filterType(col) {
+    const t = colTypes[col];
+    if (t) return t.type;
+    const st = colStats.get(col);
+    if (!st) return "text";
+    return st.numeric ? "number" : st.temporal ? "time" : "text";
+  }
+  const timeSpec = (col) => colTypes[col]?.type === "time" ? colTypes[col] : {};
+  const timeKindOf = (col) => kindForSpec(timeSpec(col)) ?? colStats.get(col)?.timeKind ?? "datetime";
+  const isLocalCol = (col) => colTypes[col]?.tz === "local";
+
+  // Preset bounds move with the clock; memoised per second so a full view
+  // rebuild costs one resolution, not one per row.
+  function rangeBounds(f) {
+    if (!f.preset) return f;
+    const sec = Math.floor(Date.now() / 1000);
+    if (f._at !== sec) {
+      f._at = sec;
+      f._bounds = presetBounds(f.preset, f.timeKind, sec, f.localTz);
+    }
+    return f._bounds;
+  }
+
+  function rangeValue(v, f) {
+    if (f.type === "number") {
+      if (v == null || v === "") return null;
+      const n = Number(v);
+      return isNaN(n) ? null : n;
+    }
+    try { return parseTime(v, f.spec); } catch { return null; }
+  }
+
+  function inRange(row, col, f) {
+    const n = rangeValue(cellValue(row, col), f);
+    if (n === null) return f.empty;
+    const { lo, hi } = rangeBounds(f);
+    if (lo != null && n < lo) return false;
+    if (hi == null) return true;
+    return f.type === "time" ? n < hi : n <= hi;
+  }
+
+  // While a relative preset ("last hour") is active, re-apply the view
+  // periodically so rows age out even when no data arrives to trigger it.
+  let presetTimer = null;
+  function syncPresetTimer() {
+    const active = [...filters.values()].some((f) => f.kind === "range" && f.preset);
+    if (!active) { if (presetTimer) { clearTimeout(presetTimer); presetTimer = null; } return; }
+    if (presetTimer) return;
+    const tick = () => {
+      presetTimer = null;
+      if (closed) return;
+      applyVisibility();
+      syncPresetTimer();
+    };
+    presetTimer = setTimeout(tick, 30000);
+  }
+
+  // Human-readable summary of a range filter for the header tooltip.
+  function describeRange(f) {
+    if (f.preset) return PRESETS[f.preset].label;
+    const lo = f.lo == null ? null : f.loText.replace("T", " ");
+    const hi = f.hi == null ? null : f.hiText.replace("T", " ");
+    let s = lo !== null && hi !== null ? `${lo} – ${hi}` : lo !== null ? `≥ ${lo}` : hi !== null ? `≤ ${hi}` : "";
+    if (f.empty) s += " (+ empty)";
+    return s;
   }
 
   function applyVisibility() {
@@ -2008,7 +2142,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       } else {
         btn.appendChild(icon("filter"));
       }
-      btn.classList.toggle("active", filters.has(col));
+      const f = filters.get(col);
+      btn.classList.toggle("active", !!f);
+      btn.title = f?.kind === "range" ? describeRange(f) : f ? `${f.allowed.size} values` : "";
     }
   }
 
@@ -2114,11 +2250,52 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     dd.style.position = "fixed";
     dd.style.zIndex = "10001";
 
-    let left = rect.right - 200;
+    const cur = filters.get(col);
+    const type = filterType(col);
+    // Numeric and time columns get a Values | Range mode switch; text
+    // columns look exactly as before. A range filter on a column that has
+    // since ratcheted to text still opens in Range so it can be cleared.
+    const rangeable = type !== "text" || cur?.kind === "range";
+    let mode = cur?.kind === "range" ? "range" : "values";
+    // Time columns widen the dropdown for the native date/time pickers
+    // (matches .mkui-filter-wide in the stylesheet).
+    const wide = type === "time" || cur?.kind === "range" && cur.type === "time";
+    const width = wide ? 280 : 200;
+    if (wide) dd.classList.add("mkui-filter-wide");
+
+    let left = rect.right - width;
     if (left < 4) left = 4;
-    if (left + 200 > window.innerWidth) left = Math.max(4, window.innerWidth - 204);
+    if (left + width > window.innerWidth) left = Math.max(4, window.innerWidth - width - 4);
     dd.style.left = left + "px";
     dd.style.top = (rect.bottom + 1) + "px";
+
+    const rangePanel = document.createElement("div");
+    rangePanel.className = "mkui-filter-range";
+
+    if (rangeable) {
+      const modes = document.createElement("div");
+      modes.className = "mkui-filter-modes";
+      const mk = (m, text) => {
+        const b = document.createElement("span");
+        b.className = "mkui-filter-mode";
+        b.dataset.mode = m;
+        b.textContent = text;
+        b.addEventListener("click", () => setMode(m));
+        return b;
+      };
+      const btns = [mk("values", "Values"), mk("range", "Range")];
+      modes.append(...btns);
+      dd.appendChild(modes);
+      var setMode = (m) => {
+        mode = m;
+        for (const b of btns) b.classList.toggle("active", b.dataset.mode === m);
+        for (const el of [search, actions, list]) el.hidden = m !== "values";
+        rangePanel.hidden = m !== "range";
+        (m === "range" ? loInput : search).focus();
+      };
+    }
+
+    /* ── Values mode (checkbox per unique value) ── */
 
     const search = document.createElement("input");
     search.type = "text";
@@ -2141,7 +2318,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     list.className = "mkui-filter-list";
 
     const vals = getUniqueValues(col);
-    const cur = filters.get(col);
+    const allowed = cur?.kind === "values" ? cur.allowed : null;
     const cbs = [];
 
     // Decimal-align numeric values, matching the column's cells: values are
@@ -2162,7 +2339,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       lbl.className = "mkui-filter-item";
       const cb = document.createElement("input");
       cb.type = "checkbox";
-      cb.checked = !cur || cur.has(v);
+      cb.checked = !allowed || allowed.has(v);
       cb.dataset.val = v;
       const txt = document.createElement("span");
       txt.textContent = v === "" ? "(empty)" : v;
@@ -2174,25 +2351,26 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       lbl.append(cb, txt);
       list.appendChild(lbl);
       cbs.push(cb);
-      cb.addEventListener("change", commit);
+      cb.addEventListener("change", commitValues);
     }
     dd.appendChild(list);
 
-    function commit() {
+    function commitValues() {
       const checked = cbs.filter((c) => c.checked).map((c) => c.dataset.val);
       if (checked.length === vals.length) filters.delete(col);
-      else filters.set(col, new Set(checked));
+      else filters.set(col, { kind: "values", allowed: new Set(checked) });
       updateHeaderState();
       applyVisibility();
+      syncPresetTimer();
     }
 
     selAll.addEventListener("click", () => {
       for (const c of cbs) c.checked = true;
-      commit();
+      commitValues();
     });
     clrAll.addEventListener("click", () => {
       for (const c of cbs) c.checked = false;
-      commit();
+      commitValues();
     });
 
     search.addEventListener("input", () => {
@@ -2202,13 +2380,140 @@ registerPaneType("mkio-table", async (spec, app, host) => {
           c.dataset.val.toLowerCase().includes(q) ? "" : "none";
     });
 
+    /* ── Range mode (lo/hi bounds, presets for time columns) ── */
+
+    const rType = cur?.kind === "range" ? cur.type : type;
+    const kind = rType === "time" ? (cur?.kind === "range" ? cur.timeKind : timeKindOf(col)) : null;
+    const localTz = cur?.kind === "range" ? cur.localTz : isLocalCol(col);
+    let preset = cur?.kind === "range" ? cur.preset : null;
+    const presetBtns = [];
+
+    if (rType === "time") {
+      const row = document.createElement("div");
+      row.className = "mkui-filter-presets";
+      for (const [name, p] of Object.entries(PRESETS)) {
+        const b = document.createElement("span");
+        b.className = "mkui-filter-preset";
+        b.dataset.preset = name;
+        b.textContent = p.label;
+        b.addEventListener("click", () => {
+          preset = preset === name ? null : name;
+          loInput.value = hiInput.value = "";
+          commitRange();
+        });
+        presetBtns.push(b);
+        row.appendChild(b);
+      }
+      rangePanel.appendChild(row);
+    }
+
+    const mkBound = (labelText, edge) => {
+      const wrap = document.createElement("label");
+      wrap.className = "mkui-filter-bound";
+      const l = document.createElement("span");
+      l.textContent = labelText;
+      const inp = document.createElement("input");
+      inp.className = "mkui-filter-bound-input";
+      inp.dataset.edge = edge;
+      if (rType === "number") {
+        inp.type = "number";
+        inp.step = "any";
+        const b = edge === "lo" ? st?.min : st?.max;
+        if (b != null) inp.placeholder = String(b);
+      } else {
+        inp.type = inputTypeForKind(kind);
+        inp.step = "1";
+        const b = edge === "lo" ? st?.min : st?.max;
+        if (b != null && !st?.numeric) inp.placeholder = boundToInput(b, kind, localTz);
+      }
+      wrap.append(l, inp);
+      return [wrap, inp];
+    };
+    const [loWrap, loInput] = mkBound("From", "lo");
+    const [hiWrap, hiInput] = mkBound("To", "hi");
+    rangePanel.append(loWrap, hiWrap);
+
+    const emptyWrap = document.createElement("label");
+    emptyWrap.className = "mkui-filter-item mkui-filter-empty";
+    const emptyCb = document.createElement("input");
+    emptyCb.type = "checkbox";
+    emptyCb.checked = cur?.kind === "range" ? cur.empty : false;
+    const emptyTxt = document.createElement("span");
+    emptyTxt.textContent = "Include empty";
+    emptyWrap.append(emptyCb, emptyTxt);
+    rangePanel.appendChild(emptyWrap);
+
+    const rangeActions = document.createElement("div");
+    rangeActions.className = "mkui-filter-actions";
+    const clrRange = document.createElement("span");
+    clrRange.className = "mkui-filter-action";
+    clrRange.textContent = "Clear";
+    rangeActions.appendChild(clrRange);
+    rangePanel.appendChild(rangeActions);
+
+    if (cur?.kind === "range" && !cur.preset) {
+      loInput.value = cur.loText;
+      hiInput.value = cur.hiText;
+    }
+
+    function readBound(inp, edge) {
+      const v = inp.value;
+      if (v === "" || v == null) return null;
+      if (rType === "number") { const n = Number(v); return isNaN(n) ? null : n; }
+      return inputToBound(v, kind, edge, localTz);
+    }
+
+    function commitRange() {
+      const lo = readBound(loInput, "lo"), hi = readBound(hiInput, "hi");
+      for (const b of presetBtns) b.classList.toggle("active", b.dataset.preset === preset);
+      if (preset === null && lo === null && hi === null && !emptyCb.checked) filters.delete(col);
+      else filters.set(col, {
+        kind: "range", type: rType, lo, hi, preset, empty: emptyCb.checked,
+        loText: lo === null ? "" : String(loInput.value), hiText: hi === null ? "" : String(hiInput.value),
+        timeKind: kind, spec: timeSpec(col), localTz,
+      });
+      updateHeaderState();
+      applyVisibility();
+      syncPresetTimer();
+    }
+
+    // Typing applies after a short pause (a keystroke-per-rebuild would
+    // hurt on big tables); Enter applies at once. Typing a bound drops the
+    // preset — the two are alternative ways of saying the same thing.
+    let typeTimer = null;
+    const onType = () => {
+      preset = null;
+      if (typeTimer) clearTimeout(typeTimer);
+      typeTimer = setTimeout(() => { typeTimer = null; commitRange(); }, 150);
+    };
+    for (const inp of [loInput, hiInput]) {
+      inp.addEventListener("input", onType);
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          if (typeTimer) { clearTimeout(typeTimer); typeTimer = null; }
+          preset = null;
+          commitRange();
+        }
+      });
+    }
+    emptyCb.addEventListener("change", commitRange);
+    clrRange.addEventListener("click", () => {
+      preset = null;
+      loInput.value = hiInput.value = "";
+      emptyCb.checked = false;
+      commitRange();
+    });
+    for (const b of presetBtns) b.classList.toggle("active", b.dataset.preset === preset);
+
+    if (rangeable) dd.appendChild(rangePanel);
+
     dd.addEventListener("keydown", (e) => {
       if (e.key === "Escape") { closeDropdown(); e.stopPropagation(); }
     });
 
     host.appendChild(dd);
     dropdown = dd;
-    search.focus();
+    if (rangeable) setMode(mode); else search.focus();
 
     requestAnimationFrame(() => {
       const onDown = (e) => {
@@ -2727,6 +3032,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     };
     paneEl.addEventListener("mkui-pane-close", () => {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+      if (presetTimer) { clearTimeout(presetTimer); presetTimer = null; }
       closed = true;
       io.disconnect();
       ro.disconnect();
@@ -2747,6 +3053,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       displayOrder = null;
       sortKeys.length = 0;
       filters.clear();
+      syncPresetTimer();
       resetColWidths();
       clearSelection();
       if (isPaged) {

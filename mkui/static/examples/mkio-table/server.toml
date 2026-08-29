@@ -3,9 +3,13 @@ version = "1.0.0"
 port = 8080
 host = "0.0.0.0"
 db_path = "orders.db"
+# Apply safe schema changes (like adding a column) to an existing orders.db.
+auto_migrate = "safe"
 
 [tables.orders]
-columns = { id = "INTEGER PRIMARY KEY AUTOINCREMENT", side = "TEXT NOT NULL", symbol = "TEXT NOT NULL", qty = "INTEGER", price = "REAL DEFAULT 0", status = "TEXT DEFAULT 'pending'" }
+# `ts` is stamped by SQLite in UTC (`YYYY-MM-DD HH:MM:SS`), a format the
+# table recognises as a time, so its filter dropdown offers a date range.
+columns = { id = "INTEGER PRIMARY KEY AUTOINCREMENT", ts = "TEXT DEFAULT CURRENT_TIMESTAMP", side = "TEXT NOT NULL", symbol = "TEXT NOT NULL", qty = "INTEGER", price = "REAL DEFAULT 0", status = "TEXT DEFAULT 'pending'" }
 
 # Write endpoint: place and manage orders
 [services.orders]

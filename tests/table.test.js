@@ -4383,3 +4383,262 @@ test("select writes only when the tracked row changes", async () => {
   pointerDown(dataRows(host)[1], 0);         // same row again
   assert.equal(state.writes("current"), before, "re-selecting the same row is a no-op");
 });
+
+/* ── Range filters ───────────────────────────────────────────────────── */
+// Numeric columns and columns whose every value is a time offer a Range
+// mode next to the Values checkboxes. Bounds are typed into From/To
+// inputs (applied after a short debounce, or at once on Enter); time
+// columns also get relative presets. `types` overrides the inference.
+
+// The mock querySelector matches on substring, so pick by exact class.
+function byClass(el, cls) {
+  const out = [];
+  const walk = (n) => { for (const c of n._ch ?? []) { if (c.className === cls) out.push(c); walk(c); } };
+  walk(el);
+  return out;
+}
+function openDropdown(host, col) {
+  const th = getThs(host).find(t => t.dataset.col === col);
+  clickFilterBtn(th);
+  const dd = host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).at(-1);
+  const modes = dd._ch.find(c => c.className === "mkui-filter-modes");
+  const range = dd._ch.find(c => c.className === "mkui-filter-range");
+  const bounds = range ? byClass(range, "mkui-filter-bound-input") : [];
+  const presets = range ? byClass(range, "mkui-filter-preset") : [];
+  const empty = range ? byClass(range, "mkui-filter-item mkui-filter-empty")[0]._ch.find(n => n.tagName === "INPUT") : null;
+  const clear = range ? byClass(range, "mkui-filter-action")[0] : null;
+  const list = dd._ch.find(c => c.className === "mkui-filter-list");
+  return { th, dd, modes, range, lo: bounds[0], hi: bounds[1], presets, empty, clear, list,
+    modeBtn: (m) => modes?._ch.find(b => b.dataset.mode === m) };
+}
+function typeBound(inp, v) { inp.value = v; inp._ev.input[0](); advanceTimers(); }
+function enterBound(inp, v) { inp.value = v; inp._ev.keydown[0]({ key: "Enter" }); }
+const shownNames = (host) => colCells(host, "name").map(td => td.textContent);
+
+async function numericTable() {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", value: "5" },
+    { _mkio_row: "2", name: "b", value: "10" },
+    { _mkio_row: "3", name: "c", value: "15.5" },
+    { _mkio_row: "4", name: "d", value: "" },
+  ]);
+  return host;
+}
+
+test("numeric columns offer a Range mode; text columns do not", async () => {
+  const host = await numericTable();
+  const num = openDropdown(host, "value");
+  assert.ok(num.modes, "mode switch present");
+  assert.ok(num.range, "range panel present");
+  assert.equal(num.lo.type, "number");
+  assert.equal(num.lo.placeholder, "5", "placeholders show the column's min/max");
+  assert.equal(num.hi.placeholder, "15.5");
+  assert.equal(num.presets.length, 0, "no time presets on a number column");
+  assert.equal(num.range.hidden, true, "opens in Values mode");
+  assert.ok(num.modeBtn("values").classList.contains("active"));
+  const txt = openDropdown(host, "name");
+  assert.equal(txt.modes, undefined);
+  assert.equal(txt.range, undefined);
+});
+
+test("numeric range filters the view with inclusive open-ended bounds", async () => {
+  const host = await numericTable();
+  const d = openDropdown(host, "value");
+  d.modeBtn("range")._ev.click[0]();
+  assert.equal(d.range.hidden, false);
+  assert.equal(d.list.hidden, true, "values list hidden in Range mode");
+  typeBound(d.lo, "10");
+  assert.deepEqual(shownNames(host), ["b", "c"], "≥ 10 keeps 10 and 15.5, drops the blank");
+  const btn = d.th.querySelector(".mkui-filter-btn");
+  assert.ok(btn.classList.contains("active"));
+  assert.equal(btn.title, "≥ 10");
+  enterBound(d.hi, "10");
+  assert.deepEqual(shownNames(host), ["b"], "hi is inclusive for numbers");
+  assert.equal(btn.title, "10 – 10");
+  d.empty.checked = true;
+  d.empty._ev.change[0]();
+  assert.deepEqual(shownNames(host), ["b", "d"], "include empty admits the blank");
+  assert.equal(btn.title, "10 – 10 (+ empty)");
+  // Clear removes the filter entirely
+  d.clear._ev.click[0]();
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"]);
+  assert.ok(!btn.classList.contains("active"));
+});
+
+test("reopening restores the typed bounds; a Values choice replaces the range", async () => {
+  const host = await numericTable();
+  let d = openDropdown(host, "value");
+  d.modeBtn("range")._ev.click[0]();
+  typeBound(d.lo, "6");
+  clickFilterBtn(d.th); // the button toggles: close, then reopen
+  d = openDropdown(host, "value");
+  assert.equal(d.range.hidden, false, "reopens in Range mode when a range is active");
+  assert.equal(d.lo.value, "6");
+  d.modeBtn("values")._ev.click[0]();
+  const cbs = d.list._ch.map(item => item._ch.find(n => n.tagName === "INPUT"));
+  assert.ok(cbs.every(cb => cb.checked), "values list starts unfiltered");
+  cbs[0].checked = false;
+  cbs[0]._ev.change[0]();
+  assert.deepEqual(shownNames(host), ["a", "b", "c"], "values filter replaced the range (blank first in value order)");
+});
+
+test("live inserts and updates respect an active numeric range", async () => {
+  const host = await numericTable();
+  const d = openDropdown(host, "value");
+  d.modeBtn("range")._ev.click[0]();
+  typeBound(d.lo, "10");
+  const sub = lastSubscribe();
+  sub.opts.onUpdate("insert", { _mkio_row: "5", name: "e", value: "3" });
+  sub.opts.onUpdate("insert", { _mkio_row: "6", name: "f", value: "30" });
+  assert.deepEqual(shownNames(host), ["b", "c", "f"]);
+  sub.opts.onUpdate("replace", { _mkio_row: "5", name: "e", value: "12" });
+  assert.deepEqual(shownNames(host), ["b", "c", "f", "e"], "an update into range joins the view");
+});
+
+async function timeTable(extra = {}) {
+  const { host, io } = await createTable({ protocol: "query", ...extra });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", ts: "2026-08-29T09:00:00Z" },
+    { _mkio_row: "2", name: "b", ts: "2026-08-29 09:30:15" },
+    { _mkio_row: "3", name: "c", ts: "20260829 10:00:00.250000" },
+    { _mkio_row: "4", name: "d", ts: "" },
+  ]);
+  return host;
+}
+
+test("time columns are detected and range-filter on parsed instants", async () => {
+  const host = await timeTable();
+  const d = openDropdown(host, "ts");
+  assert.ok(d.modes, "a column of ISO/ref strings offers Range");
+  assert.equal(d.lo.type, "datetime-local");
+  assert.equal(d.lo.placeholder, "2026-08-29T09:00:00", "placeholders show the parsed min/max");
+  assert.equal(d.hi.placeholder, "2026-08-29T10:00:00");
+  assert.deepEqual(d.presets.map(p => p.textContent), ["Today", "Last hour", "Last 15 min"]);
+  d.modeBtn("range")._ev.click[0]();
+  typeBound(d.lo, "2026-08-29T09:30");
+  assert.deepEqual(shownNames(host), ["b", "c"], "mixed ISO/ref formats compare as instants");
+  enterBound(d.hi, "2026-08-29T09:30");
+  assert.deepEqual(shownNames(host), ["b"], "a minute bound covers the whole minute");
+  enterBound(d.hi, "2026-08-29T09:30:14");
+  assert.deepEqual(shownNames(host), [], "…but a second bound is exact");
+  assert.equal(d.th.querySelector(".mkui-filter-btn").title, "2026-08-29 09:30 – 2026-08-29 09:30:14");
+});
+
+test("time presets resolve against the clock and schedule a refresh", async () => {
+  const realNow = Date.now;
+  Date.now = () => Date.UTC(2026, 7, 29, 10, 20, 0);
+  try {
+    const host = await timeTable();
+    const d = openDropdown(host, "ts");
+    d.modeBtn("range")._ev.click[0]();
+    d.presets[1]._ev.click[0](); // Last hour: 09:20 – 10:20
+    assert.deepEqual(shownNames(host), ["b", "c"]);
+    assert.ok(d.presets[1].classList.contains("active"));
+    assert.equal(d.th.querySelector(".mkui-filter-btn").title, "Last hour");
+    const tick = [...pendingTimers.entries()].find(([, t]) => t.ms === 30000);
+    assert.ok(tick, "periodic re-apply scheduled");
+    Date.now = () => Date.UTC(2026, 7, 29, 10, 45, 0);
+    pendingTimers.delete(tick[0]);
+    tick[1].fn(); // fires and reschedules itself
+    assert.deepEqual(shownNames(host), ["c"], "rows age out as time passes");
+    d.presets[0]._ev.click[0](); // Today (UTC day for a UTC column)
+    assert.deepEqual(shownNames(host), ["a", "b", "c"]);
+    typeBound(d.lo, "2026-08-29T10:00");
+    assert.ok(!d.presets[0].classList.contains("active"), "typing a bound drops the preset");
+    assert.deepEqual(shownNames(host), ["c"]);
+    assert.ok(![...pendingTimers.values()].some(t => t.ms === 30000), "no preset, no timer");
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("clock-time columns filter by time of day", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", t: "08:59:59" },
+    { _mkio_row: "2", name: "b", t: "09:00" },
+    { _mkio_row: "3", name: "c", t: "16:00:00.5" },
+  ]);
+  const d = openDropdown(host, "t");
+  assert.equal(d.lo.type, "time");
+  d.modeBtn("range")._ev.click[0]();
+  typeBound(d.lo, "09:00");
+  enterBound(d.hi, "16:00");
+  assert.deepEqual(shownNames(host), ["b", "c"]);
+});
+
+test("a column mixing dates with clock times, or with text, is not temporal", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", d: "2026-08-29", t: "2026-08-29" },
+    { _mkio_row: "2", name: "b", d: "09:30", t: "tomorrow" },
+  ]);
+  assert.equal(openDropdown(host, "d").modes, undefined);
+  assert.equal(openDropdown(host, "t").modes, undefined);
+});
+
+test("types declares how an unrecognised format parses", async () => {
+  const { host, io } = await createTable({
+    protocol: "query",
+    types: { when: { type: "time", parse: "%d/%m/%Y %H:%M" }, epoch: { type: "time", unit: "ms" }, name: "text" },
+  });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", when: "29/08/2026 09:00", epoch: 1787994000000 },
+    { _mkio_row: "2", name: "b", when: "29/08/2026 09:30", epoch: 1787995800000 },
+    { _mkio_row: "3", name: "c", when: "bad", epoch: 1787997600000 },
+  ]);
+  const w = openDropdown(host, "when");
+  assert.ok(w.modes, "locale dates are rangeable once declared");
+  w.modeBtn("range")._ev.click[0]();
+  typeBound(w.lo, "2026-08-29T09:30");
+  assert.deepEqual(shownNames(host), ["b"], "unparseable values drop out of a range");
+  w.empty.checked = true; w.empty._ev.change[0]();
+  assert.deepEqual(shownNames(host), ["b", "c"], "…unless empty/unparseable is included");
+  w.clear._ev.click[0]();
+
+  const e = openDropdown(host, "epoch");
+  assert.equal(e.lo.type, "datetime-local", "a numeric column typed as time gets time inputs");
+  e.modeBtn("range")._ev.click[0]();
+  enterBound(e.hi, "2026-08-29T09:00");
+  assert.deepEqual(shownNames(host), ["a"]);
+});
+
+test("types.tz = local reads naive strings in the browser's zone", async () => {
+  const { host, io } = await createTable({ protocol: "query", types: { ts: { type: "time", tz: "local" } } });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", ts: "2026-08-29 09:00:00" },
+    { _mkio_row: "2", name: "2", ts: "2026-08-29 09:30:00" },
+  ]);
+  const d = openDropdown(host, "ts");
+  d.modeBtn("range")._ev.click[0]();
+  typeBound(d.lo, "2026-08-29T09:30");
+  assert.deepEqual(shownNames(host), ["2"], "picker and cells share the local frame");
+});
+
+test("range filters see the derived value and reset on pane reopen", async () => {
+  const { host, io } = await createTable({ protocol: "query", values: { value: "NUM_OF(value) * 2" } });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", value: "1" },
+    { _mkio_row: "2", name: "b", value: "4" },
+  ]);
+  const d = openDropdown(host, "value");
+  d.modeBtn("range")._ev.click[0]();
+  typeBound(d.lo, "3");
+  assert.deepEqual(shownNames(host), ["b"], "2 < 3 ≤ 8");
+  for (const fn of host._paneEl._ev["mkui-pane-close"] ?? []) fn();
+  for (const fn of host._paneEl._ev["mkui-pane-open"] ?? []) fn();
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", value: "1" },
+    { _mkio_row: "2", name: "b", value: "4" },
+  ]);
+  assert.deepEqual(shownNames(host), ["a", "b"], "reopen cleared the range");
+});

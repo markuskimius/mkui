@@ -63,7 +63,8 @@ protocol = "query"
 # exists in no row, so it must be listed in `columns` explicitly. Derived
 # values are what the table sorts, filters, and copies. SPREAD_BPS is an
 # application function registered in static/app.js.
-columns = ["id", "side", "symbol", "qty", "price", "notional", "status"]
+columns = ["id", "ts", "side", "symbol", "qty", "price", "notional", "status"]
+labels = { ts = "Time" }
 values = { notional = "ROUND(qty * price, 2)" }
 # Mirror the current row into app state; the order-detail pane follows it.
 select = { state = "selected_order" }

@@ -30,6 +30,7 @@ mkui-app[theme="light"] {
   --mkui-accent-fg: #ffffff;
   --mkui-focus:     #000000;
   --mkui-frame-shadow: 0 10px 30px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.08);
+  color-scheme: light;
 }
 
 /* ─── Shell ──────────────────────────────────────────────────────────── */
@@ -38,6 +39,9 @@ mkui-app {
   display: block;
   position: fixed;
   inset: 0;
+  /* Native controls (the filter dropdown's date/time pickers) follow the
+     theme; the light theme flips this above. */
+  color-scheme: dark;
   font-family: var(--mkui-font);
   font-size: 13px;
   color: var(--mkui-fg);
@@ -652,6 +656,75 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 }
 .mkui-filter-item:hover { background: var(--mkui-bg-hover); }
 .mkui-filter-item input[type="checkbox"] { margin: 0; accent-color: var(--mkui-accent); }
+
+/* Mode switching hides the other mode's controls with the `hidden`
+   attribute; it must beat the flex/grid display of those controls. */
+.mkui-filter-dropdown [hidden] { display: none !important; }
+/* Native date/time pickers need more room than the value list. */
+.mkui-filter-dropdown.mkui-filter-wide { width: 280px; }
+
+/* Values | Range switch on numeric and time columns. */
+.mkui-filter-modes {
+  display: flex;
+  border-bottom: 1px solid var(--mkui-border);
+}
+.mkui-filter-mode {
+  flex: 1;
+  text-align: center;
+  padding: 5px 0;
+  color: var(--mkui-fg-mute);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.mkui-filter-mode:hover { color: var(--mkui-fg); }
+.mkui-filter-mode.active { color: var(--mkui-fg); border-bottom-color: var(--mkui-accent); }
+
+/* Range panel: relative presets (time columns), From/To bounds, include-
+   empty toggle. Bounds use the table's mono font like the value list. */
+.mkui-filter-range { padding: 6px 0 2px; }
+.mkui-filter-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 8px 6px;
+}
+.mkui-filter-preset {
+  font-size: 11px;
+  padding: 1px 7px;
+  border: 1px solid var(--mkui-border);
+  border-radius: 9px;
+  color: var(--mkui-fg-mute);
+  cursor: pointer;
+}
+.mkui-filter-preset:hover { color: var(--mkui-fg); background: var(--mkui-bg-hover); }
+.mkui-filter-preset.active {
+  color: var(--mkui-accent);
+  border-color: var(--mkui-accent);
+}
+.mkui-filter-bound {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+}
+.mkui-filter-bound > span { width: 3em; color: var(--mkui-fg-mute); font-size: 11px; }
+.mkui-filter-bound-input {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  padding: 3px 5px;
+  background: var(--mkui-bg);
+  border: 1px solid var(--mkui-border);
+  color: var(--mkui-fg);
+  font-family: var(--mkui-font-mono);
+  font-size: 11px;
+  border-radius: 2px;
+  outline: none;
+  color-scheme: inherit;
+}
+.mkui-filter-bound-input:focus { border-color: var(--mkui-accent); }
+.mkui-filter-empty { margin-top: 2px; }
+.mkui-filter-range .mkui-filter-actions { border-bottom: none; padding-top: 4px; }
 
 .mkui-col-drag-ghost {
   position: fixed;
