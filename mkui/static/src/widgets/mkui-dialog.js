@@ -1,4 +1,4 @@
-import { resolveExpr, resolveObject } from "../lib/expressions.js";
+import { resolveExpr, resolveObject, evalExpr, expr } from "../lib/expressions.js";
 import { icon } from "../lib/icons.js";
 
 let dialogSeq = 0;
@@ -260,14 +260,23 @@ export function openDialog(spec, context, app, extra = {}) {
       refreshDependentOptions(name);
     }
 
+    // `showWhen = "<expr>"` — scope: the form's fields at the root (shadowing
+    // the dialog context), plus `form`, the context (row, rows, selection,
+    // state, ...). A literal boolean works too.
+    function formScope() {
+      return { ...context, ...fieldState, form: fieldState };
+    }
+    function shown(cond) {
+      if (typeof cond === "boolean") return cond;
+      return expr.truthy(evalExpr(String(cond), formScope()));
+    }
+
     function applyShowWhen() {
       for (const f of allFields) {
-        if (!f.showWhen || !f.name) continue;
+        if (f.showWhen == null || !f.name) continue;
         const el = fieldEls[f.name];
         if (!el) continue;
-        const dep = fieldState[f.showWhen.field];
-        const visible = String(dep) === String(f.showWhen.equals);
-        el.style.display = visible ? "" : "none";
+        el.style.display = shown(f.showWhen) ? "" : "none";
       }
 
       for (const f of allFields) {
@@ -279,10 +288,7 @@ export function openDialog(spec, context, app, extra = {}) {
         const prev = sel.value;
         sel.innerHTML = "";
         for (const o of opts) {
-          if (o.showWhen) {
-            const dep = fieldState[o.showWhen.field];
-            if (String(dep) !== String(o.showWhen.equals)) continue;
-          }
+          if (o.showWhen != null && !shown(o.showWhen)) continue;
           const opt = document.createElement("option");
           opt.value = o.value;
           opt.textContent = o.label;
@@ -350,10 +356,7 @@ export function openDialog(spec, context, app, extra = {}) {
       for (const f of allFields) {
         if (!f.name || f.name.startsWith("_")) continue;
         if (f.type === "readonly") continue;
-        if (f.showWhen) {
-          const dep = fieldState[f.showWhen.field];
-          if (String(dep) !== String(f.showWhen.equals)) continue;
-        }
+        if (f.showWhen != null && !shown(f.showWhen)) continue;
         data[f.name] = fieldState[f.name] ?? "";
       }
 

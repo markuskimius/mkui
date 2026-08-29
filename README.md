@@ -182,7 +182,8 @@ mkio server and verifies its identity. Connection is two-phase:
     "name": "order-book",
     "version": "1.0",
     "protocol": "1.0",
-    "mkio": "0.1"
+    "mkio": "0.2",
+    "expr": "1"
   },
   "connected":    { "status.message": "Connected", "status.background": null },
   "incompatible": { "status.message": "Wrong server", "status.background": "#cc0000" },
@@ -190,7 +191,8 @@ mkio server and verifies its identity. Connection is two-phase:
 }
 ```
 
-The `expect` keys are all optional. `name` is checked by exact match;
+The `expect` keys are all optional. `name` and `expr` (the expression
+language version — mkui vendors version `1`) are checked by exact match;
 `version`, `protocol`, and `mkio` use semver-compatible matching (delegated
 to the server's `_mkio` service). When `expect` is absent, the `_mkio`
 query still runs to confirm it is an mkio server and to populate
@@ -395,21 +397,75 @@ root.workspace.addFrame({ x: 0.5, y: 0.1, w: 0.4, h: 0.4,
   - `text` — static or `bind`-ed to a state path
   - `button` — fires an action by name
 - Pane types (whole-pane custom rendering):
-  - `mkio-table` — subscribes to an mkio service (query, subpub, or stream) and renders a live-updating table with flash animations for inserts, deletes, and field changes. Row identity is per-protocol: query uses `_mkio_row`, stream uses `_mkio_ref`, subpub uses `_mkio_topic`. Column headers render immediately when `columns` is configured; optional `labels` maps column keys to display text (e.g. `{ "ts": "Timestamp" }`). Rows are **virtualized** — only the slice overlapping the viewport exists in the DOM, so scrolling, window moves, and window resizes stay fast into the millions of rows. Columns are fully interactive: click a header to sort (shift+click adds secondary sort keys), the hamburger button opens a per-column filter dropdown with search and value checkboxes — when a column is sorted, that button's icon becomes the sort caret (still opening the filter dropdown, and showing the sort priority as a digit knocked out of the caret under multi-sort) — dragging a header reorders columns, and dragging the grip centered on a column divider resizes the column to its left — double-click the grip to auto-size the column to fit its content (capped at 80% of the viewport; with a selection active, all selected columns fit at once, so select-all + double-click fits the whole table). Column widths start at the header row's width and grow to fit records as they arrive (capped at 50% of the pane width, never shrinking, and never overriding a manual resize) — paging to another page never resizes them, and they don't change when the window resizes — extra pane width flows into a filler column that extends the header row to the pane's right edge, and subtle dividers separate the columns. Columns whose values are all numeric right-align with each value padded so decimal points line up down the column, in the cells and in the filter dropdown's value list alike. Subscriptions are deferred until the pane is first visible, unsubscribed immediately when the frame is closed, and dropped after 5 minutes of being hidden (e.g. inactive tab) — brief tab switches preserve the live connection. Large query snapshots render progressively in chunked batches to avoid freezing the UI. Stream tables support time-anchored paged navigation with a toolbar showing `◀ Earlier | time range | Later ▶ | ● Live | ⟳`. By default, the initial fetch starts from local midnight (`start: "today"`); `start: ""` starts from the beginning of the buffer. The toolbar displays the time range of visible rows in the browser's local timezone with adaptive precision — `HH:MM` down to nanoseconds in 3-digit increments depending on how close the boundary timestamps are; cross-day ranges include the date. Boundary indicators (`(start)`, `(end)`, `(all)`) show when you've reached the edges of the dataset. The `⟳` button re-fetches the current page. Navigation is ref-based (each page fetches relative to the first or last row's `_mkio_ref`), with `before: true` for backward fetches, so pages stay correct even when records are added or deleted mid-session. When navigating backward yields no data, the previous page is automatically restored and the Earlier button is disabled. A toggleable "Live" button switches to real-time streaming from the current page's last ref; in live mode, clicking Earlier uses a separate subscription to fetch and prepend historical pages without interrupting the live stream (toolbar shows `HH:mm – Live`). Live streams follow the tail like a terminal: entering live jumps to the newest row, and while the viewport is parked at the bottom, arriving rows keep scrolling into view — scroll up to inspect history and the viewport stays put. Set `live: true` to start in live mode: the start page loads first and then hands off to the live stream, so `start` is still honored rather than the whole buffer being replayed; exiting live returns to that start page, and reopening the pane re-arms it. Exiting live mode re-fetches the saved page from the server so that rows inserted or deleted during live mode are reflected. When the WebSocket disconnects while live mode is active, the toolbar shows "Disconnected" (or `HH:mm – Disconnected` with earlier pages) in muted text instead of the green blinking "Live" indicator — live mode stays active for seamless reconnect. Stream tables track the last received ref and use it on re-subscribe to avoid duplicate data transfer — existing rows are preserved and only new records are fetched. Query and subpub snapshots fully replace the table on each arrival, so records deleted on the server between disconnect and reconnect are properly removed. Tables are fully selectable, Excel-style: a sticky **row-number column** (disable with `rowColumn: false`) selects rows — click, ctrl/cmd-click to toggle, shift-click for ranges, drag for a range, or click the header corner to select all — while clicking a cell places the **focused cell** (accent outline; its whole row gets a subtle highlight so the record stays readable, distinct from the stronger row-selection tint). Drag across cells for a rectangle, ctrl/cmd-click to add or remove individual cells, shift-click or shift+arrows to extend; arrows/Home/End/PageUp/PageDown move the cursor, Space (or Shift+Space) selects the focused row, ctrl/cmd+Space toggles it, Ctrl/Cmd+A selects all visible rows, and Escape clears the selection. **Ctrl/Cmd+C copies** the selection to the OS clipboard in both TSV and HTML flavors, so pasting into Excel/Sheets preserves cell and row structure — row selections include a header row of column labels; cell selections copy values only, with blanks outside the selected rectangles; the copied cells pulse and the statusbar briefly shows "Copied N rows/cells" (via the `status.message` state path). Selection follows the filtered view (hidden rows are never selected or copied) and tracks records rather than positions: re-sorting moves the selection with its rows (rows that sort into the middle of a selected block don't join it), rows inserted live inside a selected range stay unselected, and members hidden by a filter rejoin the selection when the filter is relaxed. Table toolbar buttons can declare a selection `unit` (`"rows"` default, `"row"`, `"cells"`, `"cell"` — singular units imply exactly-one): row-unit buttons receive the rows containing the cell selection (or the focused cell) even when no row is explicitly selected, and cell-unit buttons get a `cells` array of `{ row, column, value }` in their action context. Set `select = { state = "<path>" }` to mirror the current row into app state as the selection moves, so a detail pane or chart can follow the table without any custom code; clearing the cursor publishes `null` (as do deleting that row and closing the pane), and a live update to that row republishes it. Set `formatters = { col = "<name>" }` to route a column through a function registered with `registerFormatter` — the derived value is what the table renders, sorts, filters, and copies, and a formatter may produce a virtual column that no row carries. **Conditional styling** colors cells and rows from their values: `styles = { col = <styler> }` styles a cell, `rowStyle = <styler>` styles the whole row, where a styler is either the name of a function registered with `registerStyler` or a config-only rule array evaluated first-match-wins — each rule mixes conditions (`eq`, `ne`, `lt`/`lte`/`gt`/`gte`, `in`, `match` regex; row rules condition on any columns via `when`) with styling (`color`, `background`, `bold`, `italic`, `underline`, `strike`, custom `class`, arbitrary `css`); styled backgrounds blend with, rather than hide, the selection tint, and styles are recomputed on every live update.
+  - `mkio-table` — subscribes to an mkio service (query, subpub, or stream) and renders a live-updating table with flash animations for inserts, deletes, and field changes. Row identity is per-protocol: query uses `_mkio_row`, stream uses `_mkio_ref`, subpub uses `_mkio_topic`. Column headers render immediately when `columns` is configured; optional `labels` maps column keys to display text (e.g. `{ "ts": "Timestamp" }`). Rows are **virtualized** — only the slice overlapping the viewport exists in the DOM, so scrolling, window moves, and window resizes stay fast into the millions of rows. Columns are fully interactive: click a header to sort (shift+click adds secondary sort keys), the hamburger button opens a per-column filter dropdown with search and value checkboxes — when a column is sorted, that button's icon becomes the sort caret (still opening the filter dropdown, and showing the sort priority as a digit knocked out of the caret under multi-sort) — dragging a header reorders columns, and dragging the grip centered on a column divider resizes the column to its left — double-click the grip to auto-size the column to fit its content (capped at 80% of the viewport; with a selection active, all selected columns fit at once, so select-all + double-click fits the whole table). Column widths start at the header row's width and grow to fit records as they arrive (capped at 50% of the pane width, never shrinking, and never overriding a manual resize) — paging to another page never resizes them, and they don't change when the window resizes — extra pane width flows into a filler column that extends the header row to the pane's right edge, and subtle dividers separate the columns. Columns whose values are all numeric right-align with each value padded so decimal points line up down the column, in the cells and in the filter dropdown's value list alike. Subscriptions are deferred until the pane is first visible, unsubscribed immediately when the frame is closed, and dropped after 5 minutes of being hidden (e.g. inactive tab) — brief tab switches preserve the live connection. Large query snapshots render progressively in chunked batches to avoid freezing the UI. Stream tables support time-anchored paged navigation with a toolbar showing `◀ Earlier | time range | Later ▶ | ● Live | ⟳`. By default, the initial fetch starts from local midnight (`start: "today"`); `start: ""` starts from the beginning of the buffer. The toolbar displays the time range of visible rows in the browser's local timezone with adaptive precision — `HH:MM` down to nanoseconds in 3-digit increments depending on how close the boundary timestamps are; cross-day ranges include the date. Boundary indicators (`(start)`, `(end)`, `(all)`) show when you've reached the edges of the dataset. The `⟳` button re-fetches the current page. Navigation is ref-based (each page fetches relative to the first or last row's `_mkio_ref`), with `before: true` for backward fetches, so pages stay correct even when records are added or deleted mid-session. When navigating backward yields no data, the previous page is automatically restored and the Earlier button is disabled. A toggleable "Live" button switches to real-time streaming from the current page's last ref; in live mode, clicking Earlier uses a separate subscription to fetch and prepend historical pages without interrupting the live stream (toolbar shows `HH:mm – Live`). Live streams follow the tail like a terminal: entering live jumps to the newest row, and while the viewport is parked at the bottom, arriving rows keep scrolling into view — scroll up to inspect history and the viewport stays put. Set `live: true` to start in live mode: the start page loads first and then hands off to the live stream, so `start` is still honored rather than the whole buffer being replayed; exiting live returns to that start page, and reopening the pane re-arms it. Exiting live mode re-fetches the saved page from the server so that rows inserted or deleted during live mode are reflected. When the WebSocket disconnects while live mode is active, the toolbar shows "Disconnected" (or `HH:mm – Disconnected` with earlier pages) in muted text instead of the green blinking "Live" indicator — live mode stays active for seamless reconnect. Stream tables track the last received ref and use it on re-subscribe to avoid duplicate data transfer — existing rows are preserved and only new records are fetched. Query and subpub snapshots fully replace the table on each arrival, so records deleted on the server between disconnect and reconnect are properly removed. Tables are fully selectable, Excel-style: a sticky **row-number column** (disable with `rowColumn: false`) selects rows — click, ctrl/cmd-click to toggle, shift-click for ranges, drag for a range, or click the header corner to select all — while clicking a cell places the **focused cell** (accent outline; its whole row gets a subtle highlight so the record stays readable, distinct from the stronger row-selection tint). Drag across cells for a rectangle, ctrl/cmd-click to add or remove individual cells, shift-click or shift+arrows to extend; arrows/Home/End/PageUp/PageDown move the cursor, Space (or Shift+Space) selects the focused row, ctrl/cmd+Space toggles it, Ctrl/Cmd+A selects all visible rows, and Escape clears the selection. **Ctrl/Cmd+C copies** the selection to the OS clipboard in both TSV and HTML flavors, so pasting into Excel/Sheets preserves cell and row structure — row selections include a header row of column labels; cell selections copy values only, with blanks outside the selected rectangles; the copied cells pulse and the statusbar briefly shows "Copied N rows/cells" (via the `status.message` state path). Selection follows the filtered view (hidden rows are never selected or copied) and tracks records rather than positions: re-sorting moves the selection with its rows (rows that sort into the middle of a selected block don't join it), rows inserted live inside a selected range stay unselected, and members hidden by a filter rejoin the selection when the filter is relaxed. Table toolbar buttons can declare a selection `unit` (`"rows"` default, `"row"`, `"cells"`, `"cell"` — singular units imply exactly-one): row-unit buttons receive the rows containing the cell selection (or the focused cell) even when no row is explicitly selected, and cell-unit buttons get a `cells` array of `{ row, column, value }` in their action context. Set `select = { state = "<path>" }` to mirror the current row into app state as the selection moves, so a detail pane or chart can follow the table without any custom code; clearing the cursor publishes `null` (as do deleting that row and closing the pane), and a live update to that row republishes it. Set `values = { col = "<expr>" }` to derive a column with an expression over the row — the derived value is what the table renders, sorts, filters, and copies, and it may be a virtual column that no row carries (list it in `columns`). **Conditional styling** colors cells and rows from their values: `styles = { col = <styler> }` styles a cell, `rowStyle = <styler>` styles the whole row, where a styler is a rule array evaluated first-match-wins — each rule is `{ when = "<expr>", ...style keys }`, a rule without `when` being the fallback — or a single expression yielding a style map; style keys are `color`, `background`, `bold`, `italic`, `underline`, `strike`, custom `class`, and arbitrary `css`, and any string value may be a `${...}` template. Styled backgrounds blend with, rather than hide, the selection tint, and styles are recomputed on every live update. Toolbar buttons take `enable.when = "<expr>"` over the selected rows. **Display templates** (`display = { col = "${...}" }`) control presentation without touching the value the table sorts and filters by: `${NUM(value, digits: 2, group: TRUE)}` formats, and the `mkui` function library produces rich text — `BOLD`, `ITALIC`, `COLOR`, `MUTED`, `MONO`, `BADGE(x, color)`, `ICON(name)`, `BAR(frac, color)`, `LINK(x, url)`, `HEAT(v, lo, hi)` — which renders as styled spans in the cell, pastes into spreadsheets with its colors and weights intact, and flattens to plain text everywhere else; a template that errors shows `#ERR` with the message on hover.
 - Dialogs:
   - `openDialog(spec, context, app, extra)` — config-driven modal dialog with typed fields (text, number, select, checkbox, textarea, readonly, hidden), validation, conditional visibility (`showWhen`), async service-backed options (`optionsFrom`), and RPC submission with error handling. The dialog floats as a non-docking frame whose title text doubles as a drag handle; if the rendered form is taller than the initial frame, the frame grows to fit it (capped at 90% of the workspace) and re-centers. A **pin button** (SVG pin icon) in the titlebar keeps the dialog open after successful submission — when active, the pin rotates 45° counterclockwise with a smooth transition; the form resets to defaults only after the server confirms success; errors leave the form intact for retry.
 - Custom pane types are the primary extensibility surface. Register with
   `registerPaneType(name, factory)`; reference from config as `type = "<name>"`.
-- Column formatters let a declarative `mkio-table` show a derived value without
-  becoming a custom pane. Register with `registerFormatter(name, fn)` — called as
-  `(value, row, col)` — and reference it as `formatters = { col = "<name>" }`. The
-  formatted value is what the table renders, sorts, filters, measures, and copies;
-  a formatter can also produce a virtual column that no row carries (list it in
-  `columns`). Button action payloads always carry raw row fields.
-- Stylers do the same for looks: `registerStyler(name, fn)` — cell form
-  `(value, row, col) => style`, row form `(row) => style` — referenced as
-  `styles = { col = "<name>" }` or `rowStyle = "<name>"`, or written declaratively
-  in config as rule arrays with no code at all (see the mkio-table example).
+- Everything conditional or derived in config is written in the [mkio
+  expression language](#expressions) — derived columns (`values`), styling
+  rules (`styles` / `rowStyle`), button enablement (`enable.when`), dialog
+  field visibility (`showWhen`), and `${...}` templates in titles, notes,
+  action payloads, and statusbar text. Applications extend it with
+  `registerExprFunction(name, fn)`; there is no separate formatter or styler
+  registry.
+
+## Expressions
+
+mkui evaluates the same expression language as mkio — `lib/expr.js` is
+mkio's `mkio-expr.js`, vendored verbatim — so a condition reads identically
+whether it is a server-side `where`, a client `filter` sent to the server,
+or a styling rule in `client.toml`. The grammar, operators, and standard
+library are documented in [mkio's README](../mkio/README.md#expression-language);
+in short: `&& || !`, `== != < <= > >=`, `??`, arithmetic, `[...]`/`{k: v}`
+literals, `a.b[0]` access, `F(x, name: v)` calls (`IF`, `CASE`, `LET`,
+`NUM`, `DATE`, `MAP`, `SUM`, …), lambdas `x -> …`, and pipes
+`value |> (x -> …)`. Strings in config may embed expressions as `${...}`
+templates.
+
+mkui evaluates leniently: an unknown name is `NULL` rather than an error
+(rows and forms are heterogeneous), and an expression that fails logs one
+warning and yields nothing, so a typo degrades a cell or a rule instead of
+the pane. Each surface supplies its own scope:
+
+| Surface | Scope (bare names resolve to) |
+|---|---|
+| `values.<col>`, `styles.<col>`, `display.<col>` | `value` (the cell's value — raw for `values`, derived for `styles`/`display`), `row`, `col`, `state`, then the row's fields by name |
+| `rowStyle` | `row`, `state`, then the row's fields |
+| `enable.when` | `rows` (the rows the selection implies), `row` (the first), `cells`, `selection` (`count`, `rowCount`, `cellCount`, `unit`), `connected`, `state` |
+| dialog `showWhen`, field `value`, `title`, `footer.note` | the form's fields by name, `form`, plus the opening context (`row`, `rows`, `cell`, `cells`, `selection`, `state`) |
+| action `data`, `dialogService.data`, `rowData` | `row`, `rows`, `cell`, `cells`, `selection`, `state` (raw row fields — never derived values) |
+| statusbar / text widget `text` | `state` — the widget re-renders when any `state.<path>` it reads changes |
+
+```toml
+[panes.orders]
+type = "mkio-table"
+columns = ["id", "side", "symbol", "qty", "price", "notional", "status"]
+values  = { notional = "ROUND(qty * price, 2)" }
+styles  = { side = [ { when = "value == 'Buy'", color = "#4caf50" }, { color = "#e05252" } ],
+            qty  = [ { background = "${IF(value > 5000, '#3a2f1b', '')}" } ] }
+rowStyle = [ { when = "notional >= 50000 && side == 'Sell'", bold = true } ]
+display = { notional = "${NUM(value, digits: 2, group: TRUE)}",
+            side     = "${BADGE(value, IF(value == 'Buy', 'green', 'red'))}",
+            status   = "${ICON(IF(value == 'filled', 'check', 'clock'))} ${TITLE(value)}",
+            fill     = "${BAR(row.filled / qty, '#4caf50')} ${row.filled}/${qty}" }
+
+[[panes.orders.buttons]]
+label  = "Fill"
+enable = { connected = true, when = "LEN(rows) > 0 && ALL(rows, r -> r.status == 'pending')" }
+action = { type = "transaction", service = "orders", op = "fill", data = { id = "${row.id}" } }
+
+[statusbar]
+left = [{ type = "text", text = "${state.auth.user ?? 'anonymous'} · ${state.status.message}" }]
+```
+
+Extend from JavaScript with the same hooks mkio offers in Python:
+
+```js
+import { registerExprFunction, registerExprLibrary, registerExprType } from "/mkui/src/index.js";
+registerExprFunction("SPREAD_BPS", (bid, ask) => ((ask - bid) / ask) * 1e4, { numeric: true, params: ["bid", "ask"] });
+// client.toml:  values = { spread = "SPREAD_BPS(bid, ask)" }
+```
 
 ## Quick start
 
@@ -500,7 +556,9 @@ mkui/                    Python package (pip install mkui)
         tree.js          Normalized tree math
         drag.js          clampToDock, snap, dropZoneFor, frac↔rect
       lib/
-        expressions.js   ${path} expression resolution
+        expr.js          mkio's expression language (vendored from mkio, kept in sync by tests)
+        expressions.js   mkui's lenient environment, ${...} templates, state-path analysis
+        rich.js          rich cell text: the `rich` type, the mkui UI function library, renderers
         icons.js         SVG icon library (vendored Lucide paths)
       components/
         app.js           <mkui-app> — the shell
@@ -517,8 +575,9 @@ mkui/                    Python package (pip install mkui)
       standalone-json/   Loaded from a static config
       library-js/        Built imperatively from JS
       mkio-table/        Live table backed by mkio query/subpub services
-                         (static/app.js registers the notional formatter
-                         and the order-detail follower pane)
+                         (config-only derived columns, styling rules, and
+                         enable conditions; static/app.js registers an
+                         expression function and the order-detail pane)
 pyproject.toml           Python build config
 tests/
   layout.test.js         Layout tree unit tests (node:test)
@@ -526,7 +585,9 @@ tests/
   table.test.js          mkio-table pane tests (node:test)
   dialog.test.js         Dialog expression + submission tests (node:test)
   auth.test.js           Authentication module + state lifecycle tests (node:test)
-  expressions.test.js    ${...} expression resolver tests (node:test)
+  expressions.test.js    Expression conformance fixtures + mkui wrapper tests (node:test)
+  vendor-sync.test.js    lib/expr.js and expr_cases.json match the installed mkio (node:test)
+  rich.test.js           Rich text type, mkui function library, clipboard HTML (node:test)
   styles.test.js         mkui.css layout invariants (node:test)
   test_cli.py            CLI init/serve tests (unittest)
 ```

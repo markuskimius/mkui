@@ -24,6 +24,9 @@ const OUTLINE = {
   ],
   "chevron-left": ["m15 18-6-6 6-6"],
   "chevron-right": ["m9 18 6-6-6-6"],
+  // Status glyphs for rich cell text (ICON('check') / ICON('clock')).
+  check: ["M20 6 9 17l-5-5"],
+  clock: ["M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20z", "M12 6v6l4 2"],
 };
 
 const FILLED = {

@@ -59,20 +59,33 @@ title = "All Orders"
 type = "mkio-table"
 service = "all_orders"
 protocol = "query"
-# "notional" is a virtual column produced by a registered formatter (see
-# static/app.js) — it exists in no row, so it must be listed explicitly.
+# "notional" is a derived column — an expression over the row's fields. It
+# exists in no row, so it must be listed in `columns` explicitly. Derived
+# values are what the table sorts, filters, and copies. SPREAD_BPS is an
+# application function registered in static/app.js.
 columns = ["id", "side", "symbol", "qty", "price", "notional", "status"]
-formatters = { notional = "notional" }
+values = { notional = "ROUND(qty * price, 2)" }
 # Mirror the current row into app state; the order-detail pane follows it.
 select = { state = "selected_order" }
-# Conditional styling, config-only: cell rules test the cell's (formatted)
-# value first-match-wins; row rules condition on any columns via `when`.
-# Programmatic alternative: registerStyler + `styles = { side = "<name>" }`.
-styles = { side = [ { eq = "Buy", color = "#4caf50" }, { eq = "Sell", color = "#e05252" } ] }
+# Conditional styling, config-only: rules are evaluated first-match-wins;
+# `value` is the cell's value, row fields are in scope by name, and string
+# values may be ${...} templates. A rule without `when` is the fallback.
+[panes.all-orders.styles]
+side = [ { when = "value == 'Buy'", color = "#4caf50" }, { color = "#e05252" } ]
+qty = [ { background = "${IF(value >= 500, '#2b3a4a', '')}" } ]
 
 [[panes.all-orders.rowStyle]]
-when = { notional = { gte = 50000 } }
+when = "notional >= 50000 && side == 'Sell'"
 background = "#3a2f1b"
+
+# Display templates control presentation only — sorting, filtering, and
+# alignment still use the value. The `mkui` library adds rich segments:
+# BOLD/ITALIC/COLOR/MUTED/MONO, BADGE, ICON, BAR, LINK, HEAT.
+[panes.all-orders.display]
+symbol = "${BOLD(value)}"
+side = "${BADGE(value, IF(value == 'Buy', 'green', 'red'))}"
+notional = "${NUM(value, digits: 2, group: TRUE)}"
+status = "${ICON(CASE(value == 'filled', 'check', value == 'cancelled', 'close', 'clock'))} ${TITLE(value)}"
 
 [[panes.all-orders.buttons]]
 label = "+ New Order"
@@ -105,12 +118,12 @@ op = "new"
 
 [[panes.all-orders.buttons]]
 label = "Fill"
-enable = { connected = true, minSelected = 1, rowMatch = { status = "pending" } }
+enable = { connected = true, when = "LEN(rows) > 0 && ALL(rows, r -> r.status == 'pending')" }
 action = { type = "transaction", service = "orders", op = "fill", data = { id = "${row.id}" } }
 
 [[panes.all-orders.buttons]]
 label = "Cancel"
-enable = { connected = true, minSelected = 1, rowMatch = { status = "pending" } }
+enable = { connected = true, when = "LEN(rows) > 0 && ALL(rows, r -> r.status == 'pending')" }
 action = { type = "transaction", service = "orders", op = "cancel", data = { id = "${row.id}" } }
 
 [panes.pending]
@@ -170,7 +183,8 @@ url = "ws://localhost:8080/ws"
 name = "order-book"
 version = "1.0"
 protocol = "1.0"
-mkio = "0.1"
+mkio = "0.2"
+expr = "1"
 
 [mkio.connected]
 "status.message" = "Connected"

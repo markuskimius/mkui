@@ -4,9 +4,16 @@
 // prefer — it keeps cell structure even when values contain tabs or
 // newlines, which TSV can only approximate with quoting).
 
+// A grid cell is a string, or { text, html } when the table rendered rich
+// content — TSV takes the flattened text, the HTML flavor the markup.
+export function cellText(c) {
+  return c != null && typeof c === "object" ? (c.text ?? "") : c;
+}
+
 // Quote a TSV field the way Excel expects: only when it contains a tab,
 // newline, or quote; inner quotes are doubled.
 export function tsvQuote(v) {
+  v = cellText(v);
   const s = v == null ? "" : String(v);
   return /[\t\n\r"]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
@@ -29,7 +36,10 @@ export function gridToHTML(grid, headerRows = 0) {
   for (let i = 0; i < grid.length; i++) {
     const tag = i < headerRows ? "th" : "td";
     out += "<tr>";
-    for (const c of grid[i]) out += `<${tag}>${escapeHTML(c)}</${tag}>`;
+    for (const c of grid[i]) {
+      const inner = c != null && typeof c === "object" && c.html != null ? c.html : escapeHTML(cellText(c));
+      out += `<${tag}>${inner}</${tag}>`;
+    }
     out += "</tr>";
   }
   return out + "</table>";

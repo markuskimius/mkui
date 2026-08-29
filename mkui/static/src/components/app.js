@@ -90,6 +90,7 @@ class MkuiApp extends HTMLElement {
         if (expect?.version)  reqData.version  = expect.version;
         if (expect?.protocol) reqData.protocol = expect.protocol;
         if (expect?.mkio)     reqData.mkio     = expect.mkio;
+        if (expect?.expr)     reqData.expr     = String(expect.expr);
 
         let reply;
         try {

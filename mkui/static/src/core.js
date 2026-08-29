@@ -4,13 +4,19 @@
 // The state store is intentionally tiny: it's a Proxy over a plain object,
 // supports dot-path get/set, and notifies subscribers per path.
 
-export const VERSION = "0.1.55";
+export const VERSION = "0.2.0";
 export function version() { return VERSION; }
+
+import { registerExprFunction, registerExprLibrary, registerExprType, expr } from "./lib/expressions.js";
 
 const widgetTypes = new Map();
 const paneTypes = new Map();
-const formatters = new Map();
-const stylers = new Map();
+
+// The expression language (mkio's, vendored in lib/expr.js) is the
+// extension surface for derived values, styling rules, enable/showWhen
+// conditions, and ${...} templates. Applications add functions with
+// registerExprFunction(name, fn, meta) and call them from config.
+export { registerExprFunction, registerExprLibrary, registerExprType, expr };
 
 export function registerWidget(name, factory) {
   widgetTypes.set(name, factory);
@@ -20,24 +26,8 @@ export function registerWidget(name, factory) {
 export function registerPaneType(name, factory) {
   paneTypes.set(name, factory);
 }
-// A formatter derives a column's displayed value: (value, row, col) => any.
-// `value` is row[col], undefined for a virtual column that exists only in
-// config. Reference from a table spec with `formatters = { col = "<name>" }`.
-export function registerFormatter(name, fn) {
-  formatters.set(name, fn);
-}
-// A styler derives conditional styling for a table cell or row. Cell form:
-// (value, row, col) => style; row form: (row) => style. The style is an
-// object of { color, background, bold, italic, underline, strike, class,
-// css } (or null/undefined for none). Reference from a table spec with
-// `styles = { col = "<name>" }` or `rowStyle = "<name>"`.
-export function registerStyler(name, fn) {
-  stylers.set(name, fn);
-}
 export function getWidget(name) { return widgetTypes.get(name); }
 export function getPaneType(name) { return paneTypes.get(name); }
-export function getFormatter(name) { return formatters.get(name); }
-export function getStyler(name) { return stylers.get(name); }
 
 export class State {
   constructor(initial = {}) {

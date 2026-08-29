@@ -1,8 +1,9 @@
-import { registerPaneType, getFormatter, getStyler } from "../core.js";
+import { registerPaneType } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
-import { resolveExpr, resolveObject } from "../lib/expressions.js";
+import { resolveExpr, resolveObject, evalExpr, compileExpr, compileTemplate, expr } from "../lib/expressions.js";
 import { icon } from "../lib/icons.js";
 import { gridToTSV, gridToHTML } from "../lib/copy.js";
+import { isRich, richText, richToHTML, renderRich } from "../lib/rich.js";
 
 function midnightRef() {
   const d = new Date();
@@ -229,25 +230,69 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   /* ── Cell values ──────────────────────────────────────────────────── */
 
   // Every column value the table shows, sorts, filters, measures, or copies
-  // goes through cellValue, so a formatted column behaves like a real field
-  // everywhere. A formatter may also invent a column that no row carries —
-  // list it in `columns` (inference only sees keys present on the data).
+  // goes through cellValue, so a derived column behaves like a real field
+  // everywhere. `values = { col = "<expr>" }` derives a column with an
+  // expression over the row — it may invent a column that no row carries
+  // (list it in `columns`; inference only sees keys present on the data).
   // Button action payloads deliberately bypass this: they carry raw row
   // fields so a display format can't change what gets sent to a service.
-  const formatterNames = spec.formatters ?? {};
-  const hasFormatters = Object.keys(formatterNames).length > 0;
-  const warnedFormatters = new Set();
+  //
+  // Cell scope: `value` (the raw row[col]), `row`, `col`, and `state` (app
+  // state) first, then (for style rules) the derived columns, then the row's
+  // own fields by name — so a column that happens to be called `value` or
+  // `state` is reached as `row.value`. Built as a Scope chain rather than a
+  // spread so per-cell cost stays at a few small objects.
+  const valueExprs = {}; // col -> Compiled
+  for (const [c, src] of Object.entries(spec.values ?? {})) {
+    try { valueExprs[c] = compileExpr(String(src)); }
+    catch (e) { console.warn(`[mkio-table] bad values expression for ${c}: ${e.message}`); }
+  }
+  const hasValues = Object.keys(valueExprs).length > 0;
+  const warnedExprs = new Set();
+  const stateRoot = () => app.state?.get?.() ?? {};
+
+  // Derived columns as a lazy frame: own getters so `notional` resolves in
+  // style rules without computing every derived column per lookup. Not used
+  // for `values` expressions themselves (a derived column can't depend on
+  // another — that would recurse).
+  function derivedFrame(row) {
+    const frame = {};
+    for (const c of Object.keys(valueExprs)) {
+      Object.defineProperty(frame, c, { enumerable: true, get: () => cellValue(row, c) });
+    }
+    return frame;
+  }
+
+  function cellScope(row, col, withDerived = false) {
+    const specials = { value: row?.[col] ?? null, row: row ?? null, col, state: stateRoot() };
+    const fields = new expr.Scope(row ?? {}, null, false);
+    const parent = withDerived && hasValues ? new expr.Scope(derivedFrame(row), fields, false) : fields;
+    return new expr.Scope(specials, parent, false);
+  }
+
+  // Row scope (rowStyle, and anything else about the whole record): `row`
+  // and `state` first, then derived columns, then the row's fields — no
+  // `value`/`col`, so a column called `value` is reachable by its plain name.
+  function rowScope(row) {
+    const fields = new expr.Scope(row ?? {}, null, false);
+    const parent = hasValues ? new expr.Scope(derivedFrame(row), fields, false) : fields;
+    return new expr.Scope({ row: row ?? null, state: stateRoot() }, parent, false);
+  }
+
+  function runCompiled(c, scope, label) {
+    try { return c.evaluate(scope); }
+    catch (e) {
+      if (!warnedExprs.has(label)) {
+        warnedExprs.add(label);
+        console.warn(`[mkio-table] expression error in ${label}: ${e.message}`);
+      }
+      return null;
+    }
+  }
 
   function cellValue(row, col) {
-    const name = formatterNames[col];
-    if (name) {
-      const fn = getFormatter(name);
-      if (fn) return fn(row?.[col], row, col);
-      if (!warnedFormatters.has(name)) {
-        warnedFormatters.add(name);
-        console.warn("[mkio-table] unknown formatter:", name);
-      }
-    }
+    const c = valueExprs[col];
+    if (c) return runCompiled(c, cellScope(row, col), `values.${col}`);
     return row?.[col];
   }
 
@@ -256,85 +301,166 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return v == null ? "" : String(v);
   }
 
+  /* ── Display templates ────────────────────────────────────────────── */
+
+  // `display = { col = "<template>" }` controls presentation only: what the
+  // cell shows (plain text or rich segments from the `mkui` library —
+  // BOLD, COLOR, ICON, BADGE, BAR, …), what width stats measure, and what
+  // the clipboard carries. Sorting, filtering, and numeric alignment still
+  // use the (derived) value. Scope: the cell scope with `value` = cellValue
+  // and derived columns visible. An evaluation error renders `#ERR` with
+  // the message as the cell's tooltip.
+  const displayExprs = {}; // col -> CompiledTemplate
+  for (const [c, src] of Object.entries(spec.display ?? {})) {
+    try { displayExprs[c] = compileTemplate(String(src)); }
+    catch (e) { console.warn(`[mkio-table] bad display template for ${c}: ${e.message}`); }
+  }
+  const hasDisplay = Object.keys(displayExprs).length > 0;
+
+  // -> { text, rich | null, error | null }
+  function cellDisplay(row, col) {
+    const t = displayExprs[col];
+    if (!t) return { text: cellText(row, col), rich: null, error: null };
+    const scope = cellScope(row, col, true);
+    scope.vars.value = cellValue(row, col);
+    try {
+      const v = t.evaluate(scope);
+      if (isRich(v)) return { text: richText(v), rich: v, error: null };
+      return { text: v == null ? "" : expr.toString(v), rich: null, error: null };
+    } catch (e) {
+      const label = `display.${col}`;
+      if (!warnedExprs.has(label)) {
+        warnedExprs.add(label);
+        console.warn(`[mkio-table] expression error in ${label}: ${e.message}`);
+      }
+      return { text: "#ERR", rich: null, error: e.message };
+    }
+  }
+
+  const displayText = (row, col) => cellDisplay(row, col).text;
+
+  // Width that icon and bar segments add beyond the flattened text (the
+  // CSS sizes in mkui.css: 12px icons, 60px bars, plus a little air).
+  function richExtraWidth(rich) {
+    let w = 0;
+    for (const s of rich.segments) {
+      if (s.icon != null) w += 14;
+      else if (s.bar != null) w += 64;
+    }
+    return w;
+  }
+
+  // Render a cell's content; remembers the flattened text on the element
+  // so live updates can skip cells whose display didn't change.
+  function renderCell(td, row, col) {
+    const d = cellDisplay(row, col);
+    td._mkuiText = d.text;
+    if (d.error) {
+      td.textContent = "#ERR";
+      td.classList.add("mkui-cell-err");
+      td.title = d.error;
+      return;
+    }
+    if (td.classList.contains("mkui-cell-err")) { td.classList.remove("mkui-cell-err"); td.title = ""; }
+    if (d.rich) renderRich(td, d.rich);
+    else td.textContent = d.text;
+  }
+
   /* ── Conditional styling ──────────────────────────────────────────── */
 
-  // `styles = { col = <styler> }` styles a cell from its value; `rowStyle`
-  // styles the whole row from any of its values. A styler is either the
-  // name of a function registered with registerStyler, or a declarative
-  // rule array evaluated first-match-wins. A rule mixes condition keys —
-  // eq, ne, lt, lte, gt, gte, in (array), match (regex); a rule with none
-  // always matches (fallback). Row rules condition via
-  // `when = { col = <cond> }` (plain value = eq, array = in, object =
-  // operators; all columns must match) — with style keys: color,
-  // background, bold, italic, underline, strike, class (own CSS classes),
-  // css (extra inline properties). Conditions test cellValue — the same
-  // value the table displays, sorts, and filters.
+  // `styles = { col = <styler> }` styles a cell; `rowStyle = <styler>` styles
+  // the whole row. A styler is a rule array evaluated first-match-wins —
+  // each rule is `{ when = "<expr>", ...style keys }`, and a rule with no
+  // `when` always matches (fallback) — or a single expression string that
+  // yields a style map (or NULL). Style keys: color, background, bold,
+  // italic, underline, strike, class (own CSS classes), css (extra inline
+  // properties); string values may be ${...} templates. Cell expressions see
+  // the cell scope with `value` = cellValue (the derived value); row
+  // expressions see the row scope.
+  const STYLE_KEYS = ["color", "background", "bold", "italic", "underline", "strike", "class", "css"];
 
-  const warnedStylers = new Set();
-  function namedStyler(name) {
-    return (...args) => {
-      const fn = getStyler(name);
-      if (fn) return fn(...args);
-      if (!warnedStylers.has(name)) {
-        warnedStylers.add(name);
-        console.warn("[mkio-table] unknown styler:", name);
+  function compileRules(rules, label) {
+    const compiled = rules.map((rule, i) => {
+      let test = null;
+      if (rule.when != null) {
+        try { test = compileExpr(String(rule.when)); }
+        catch (e) {
+          console.warn(`[mkio-table] bad style rule in ${label}: ${e.message}`);
+          test = { evaluate: () => false };
+        }
       }
-      return null;
-    };
-  }
-
-  const eqVal = (v, c) => v === c || String(v ?? "") === String(c ?? "");
-  function compileCond(rule) {
-    let re = null;
-    if ("match" in rule) {
-      try { re = new RegExp(rule.match); }
-      catch {
-        console.warn("[mkio-table] bad style rule regex:", rule.match);
-        return () => false;
+      const style = {};
+      const dynamic = [];
+      const dynamicCss = []; // [prop, CompiledTemplate] inside `css`
+      const tmpl = (v) => {
+        try { return compileTemplate(v); }
+        catch (e) { console.warn(`[mkio-table] bad style template in ${label}: ${e.message}`); return null; }
+      };
+      for (const k of STYLE_KEYS) {
+        if (!(k in rule)) continue;
+        const v = rule[k];
+        if (typeof v === "string" && v.includes("${")) {
+          const t = tmpl(v);
+          if (t) dynamic.push([k, t]);
+        } else if (k === "css" && v && typeof v === "object") {
+          const css = {};
+          for (const [prop, pv] of Object.entries(v)) {
+            if (typeof pv === "string" && pv.includes("${")) { const t = tmpl(pv); if (t) dynamicCss.push([prop, t]); }
+            else css[prop] = pv;
+          }
+          style.css = css;
+        } else style[k] = v;
       }
-    }
-    return (v) => {
-      if ("eq" in rule && !eqVal(v, rule.eq)) return false;
-      if ("ne" in rule && eqVal(v, rule.ne)) return false;
-      if ("lt" in rule && !(Number(v) < Number(rule.lt))) return false;
-      if ("lte" in rule && !(Number(v) <= Number(rule.lte))) return false;
-      if ("gt" in rule && !(Number(v) > Number(rule.gt))) return false;
-      if ("gte" in rule && !(Number(v) >= Number(rule.gte))) return false;
-      if ("in" in rule && !rule.in.some((c) => eqVal(v, c))) return false;
-      if (re && !re.test(String(v ?? ""))) return false;
-      return true;
-    };
-  }
-
-  function compileCellRules(rules) {
-    const tests = rules.map(compileCond);
-    return (v) => {
-      for (let i = 0; i < tests.length; i++) if (tests[i](v)) return rules[i];
-      return null;
-    };
-  }
-
-  function compileRowRules(rules) {
-    const tests = rules.map((r) => {
-      const conds = Object.entries(r.when ?? {}).map(([c, cond]) => {
-        const asRule = Array.isArray(cond) ? { in: cond }
-          : cond !== null && typeof cond === "object" ? cond : { eq: cond };
-        return [c, compileCond(asRule)];
-      });
-      return (row) => conds.every(([c, t]) => t(cellValue(row, c)));
+      return { test, style, dynamic, dynamicCss, label: `${label}[${i}]` };
     });
-    return (row) => {
-      for (let i = 0; i < tests.length; i++) if (tests[i](row)) return rules[i];
+    return (scope) => {
+      for (const r of compiled) {
+        if (r.test && !expr.truthy(runCompiled(r.test, scope, r.label))) continue;
+        if (!r.dynamic.length && !r.dynamicCss.length) return r.style;
+        const out = { ...r.style };
+        for (const [k, t] of r.dynamic) {
+          const v = runCompiled(t, scope, r.label);
+          if (v == null || v === "") continue;
+          out[k] = typeof v === "object" ? v : String(v);
+        }
+        if (r.dynamicCss.length) {
+          out.css = { ...(out.css ?? {}) };
+          for (const [prop, t] of r.dynamicCss) {
+            const v = runCompiled(t, scope, r.label);
+            if (v != null && v !== "") out.css[prop] = String(v);
+          }
+        }
+        return out;
+      }
       return null;
+    };
+  }
+
+  function compileStyler(spec_, label) {
+    if (Array.isArray(spec_)) return compileRules(spec_, label);
+    let c;
+    try { c = compileExpr(String(spec_)); }
+    catch (e) {
+      console.warn(`[mkio-table] bad styler expression in ${label}: ${e.message}`);
+      return () => null;
+    }
+    return (scope) => {
+      const v = runCompiled(c, scope, label);
+      return v && typeof v === "object" && !Array.isArray(v) ? v : null;
     };
   }
 
   const cellStylers = {}; // col -> (value, row, col) => style | null
-  for (const [c, s] of Object.entries(spec.styles ?? {}))
-    cellStylers[c] = Array.isArray(s) ? compileCellRules(s) : namedStyler(s);
+  for (const [c, s] of Object.entries(spec.styles ?? {})) {
+    const fn = compileStyler(s, `styles.${c}`);
+    cellStylers[c] = (value, row, col) => {
+      const scope = cellScope(row, col, true);
+      scope.vars.value = value;
+      return fn(scope);
+    };
+  }
   const rowStyler = spec.rowStyle == null ? null // (row) => style | null
-    : Array.isArray(spec.rowStyle) ? compileRowRules(spec.rowStyle)
-    : namedStyler(spec.rowStyle);
+    : (() => { const fn = compileStyler(spec.rowStyle, "rowStyle"); return (row) => fn(rowScope(row)); })();
   const hasStylers = rowStyler != null || Object.keys(cellStylers).length > 0;
 
   // Apply a style result to a cell/row element, first clearing whatever
@@ -397,8 +523,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // same numeric-alignment and width stats as real fields.
   function statColumns(row) {
     const cols = Object.keys(row);
-    if (hasFormatters) {
-      for (const k in formatterNames) if (!(k in row)) cols.push(k);
+    if (hasValues) {
+      for (const k in valueExprs) if (!(k in row)) cols.push(k);
     }
     return cols;
   }
@@ -467,11 +593,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (v == null || v === "") continue;
       let st = colStats.get(k);
       if (!st) { st = { numeric: true, maxFrac: 0, maxIntW: 0, maxTextW: 0 }; colStats.set(k, st); }
-      const s = String(v);
+      // Widths and decimal padding measure what's shown (the display text,
+      // plus the boxes icons and bars occupy); whether the column is numeric
+      // is judged on the value.
+      const d = displayExprs[k] ? cellDisplay(row, k) : null;
+      const s = d ? d.text : String(v);
+      const extraW = d?.rich ? richExtraWidth(d.rich) : 0;
       let grew = false;
       if (st.numeric) {
         let changed = false;
-        if (isNaN(Number(s))) {
+        if (isNaN(Number(String(v)))) {
           st.numeric = false;
           changed = true;
         } else {
@@ -486,8 +617,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       // 2ch per char (fullwidth glyphs) it can't beat the current max.
       let w;
       if (st.numeric) w = s.length * chW;
-      else if (2 * s.length * chW <= st.maxTextW) w = 0;
-      else w = measureCtx.measureText(s).width;
+      else if (2 * s.length * chW + extraW <= st.maxTextW) w = 0;
+      else w = measureCtx.measureText(s).width + extraW;
       if (w > st.maxTextW) { st.maxTextW = w; grew = true; }
       if (st.numeric) {
         const iw = w - fracLen(s) * chW; // width of the integer part
@@ -1218,7 +1349,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function buildCopyGrid() {
     if (!columns) return null;
     const cols = visibleColumns();
-    const cellVal = cellText;
+    // Clipboard cells carry the display: flattened text for TSV, styled
+    // markup for the HTML flavor when the cell rendered rich content.
+    const cellVal = (row, col) => {
+      const d = cellDisplay(row, col);
+      return d.rich ? { text: d.text, html: richToHTML(d.rich) } : d.text;
+    };
     if (selectedKeys.size) {
       const grid = [cols.map(label)];
       for (const key of view) {
@@ -1398,7 +1534,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function updateButtonStates() {
     const rowCount = effectiveRowCount();
-    let matRows = null; // materialized lazily, only for rowMatch
+    let matRows = null; // materialized lazily, only for `when`
     for (const { el, spec: bs } of buttonEls) {
       const en = bs.enable ?? {};
       const unit = buttonUnit(bs);
@@ -1418,18 +1554,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const max = en.maxSelected ?? (single ? 1 : null);
       if (ok && min != null && count < min) ok = false;
       if (ok && max != null && count > max) ok = false;
-      if (ok && en.rowMatch) {
-        if (count === 0) ok = false;
-        else {
-          matRows ??= getSelectedRows();
-          for (const [field, expected] of Object.entries(en.rowMatch)) {
-            const vals = Array.isArray(expected) ? expected : [expected];
-            if (!matRows.every((r) => vals.includes(r[field] == null ? "" : String(r[field])))) {
-              ok = false;
-              break;
-            }
-          }
-        }
+      // `when = "<expr>"` — scope: rows (the rows the selection implies),
+      // row (the first of them or NULL), cells, selection, connected, state.
+      if (ok && en.when != null) {
+        matRows ??= getSelectedRows();
+        const cells = cellUnit ? getSelectedCells() : [];
+        ok = expr.truthy(evalExpr(String(en.when), {
+          rows: matRows, row: matRows[0] ?? null, cells,
+          selection: { count, rowCount: matRows.length, cellCount: cellUnit ? cells.length : undefined, unit },
+          connected: mkioConnected, state: stateRoot(),
+        }));
       }
       el.disabled = !ok;
     }
@@ -2105,7 +2239,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     for (const c of visibleColumns()) {
       const td = document.createElement("td");
       td.dataset.col = c;
-      td.textContent = cellText(row, c);
+      renderCell(td, row, c);
       styleCell(td, c);
       styleCellStyler(td, row, c);
       tr.appendChild(td);
@@ -2247,13 +2381,18 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     const tr = rowEls.get(key);
     if (tr) {
-      for (const [c, newVal] of changed) {
+      const changedCols = new Set(changed.map(([c]) => c));
+      for (const c of visibleColumns()) {
+        // Cells whose value changed re-render; display cells also re-render
+        // when their template's output changed (it may read other columns).
+        const isChanged = changedCols.has(c);
+        if (!isChanged && !displayExprs[c]) continue;
         const td = tr.querySelector(`td[data-col="${CSS.escape(c)}"]`);
-        if (td) {
-          td.textContent = newVal;
-          styleCell(td, c);
-          flash(td, "mkui-flash-update");
-        }
+        if (!td) continue;
+        if (!isChanged && displayText(row, c) === td._mkuiText) continue;
+        renderCell(td, row, c);
+        styleCell(td, c);
+        flash(td, "mkui-flash-update");
       }
       restyleRowStylers(tr, row);
     }

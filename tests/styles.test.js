@@ -390,3 +390,25 @@ test("copy flash fades to each element's own resting background", () => {
     "no end keyframe — the resting background is the implicit end state");
   assert.match(declaration(".mkui-flash-copy", "animation"), /mkui-flash-copy/);
 });
+
+
+// ── Rich cell content ─────────────────────────────────────────────────────
+
+test("rich badges and bars are driven by custom properties set per segment", () => {
+  assert.equal(declaration(".mkui-rich-badge", "background"), "var(--mkui-badge-color, var(--mkui-accent))");
+  assert.equal(declaration(".mkui-rich-bar::before", "width"), "var(--mkui-bar-frac, 0%)");
+  assert.equal(declaration(".mkui-rich-bar::before", "background"), "var(--mkui-bar-color, var(--mkui-accent))");
+});
+
+test("rich bars clip their fill and sit inline", () => {
+  assert.equal(declaration(".mkui-rich-bar", "display"), "inline-block");
+  assert.equal(declaration(".mkui-rich-bar", "overflow"), "hidden");
+});
+
+test("icons inside rich text flow inline (the base rule is display:block)", () => {
+  assert.equal(declaration(".mkui-rich-icon .mkui-icon", "display"), "inline-block");
+});
+
+test("display errors are visibly marked", () => {
+  assert.ok(rule(".mkui-table td.mkui-cell-err").includes("color"));
+});

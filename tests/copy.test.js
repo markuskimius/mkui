@@ -59,6 +59,13 @@ test("HTML flavor escapes cell values", () => {
     "<table><tr><td>&lt;b&gt;</td></tr></table>");
 });
 
+test("object cells carry text for TSV and markup for HTML", () => {
+  const grid = [["h"], [{ text: "a b", html: "<b>a</b> b" }], ["plain"]];
+  assert.equal(gridToTSV(grid), "h\r\na b\r\nplain");
+  assert.equal(gridToHTML(grid, 1), "<table><tr><th>h</th></tr><tr><td><b>a</b> b</td></tr><tr><td>plain</td></tr></table>");
+  assert.equal(tsvQuote({ text: "a\tb" }), '"a\tb"');
+});
+
 test("tabs and newlines survive as-is in HTML cells", () => {
   // This is exactly why the HTML flavor exists: structure is markup, so
   // whitespace inside a value can't split cells.

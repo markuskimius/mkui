@@ -204,7 +204,7 @@ globalThis.MkioClient = class {
 
 /* ── Import modules (after globals) ───────────────────────────────────── */
 
-const { getPaneType, registerFormatter, registerStyler } = await import("../mkui/static/src/core.js");
+const { getPaneType, registerExprFunction } = await import("../mkui/static/src/core.js");
 await import("../mkui/static/src/widgets/mkio-table.js");
 
 const factory = getPaneType("mkio-table");
@@ -216,7 +216,7 @@ function makeState(init) {
   const subs = new Map();
   const nWrites = new Map();
   return {
-    get: (k) => store.get(k),
+    get: (k) => k === undefined ? Object.fromEntries(store) : store.get(k),
     writes: (k) => nWrites.get(k) ?? 0,
     subscribe: (k, cb) => {
       if (!subs.has(k)) subs.set(k, []);
@@ -3800,12 +3800,17 @@ test("filtering out a selected row prunes it from the selection", async () => {
   assert.equal(written, "name\tvalue\r\nrow-1\t1");
 });
 
-/* ── Column formatters ────────────────────────────────────────────────── */
+/* ── Derived columns (values) ─────────────────────────────────────────── */
 
-registerFormatter("shout", (v) => String(v ?? "").toUpperCase());
-registerFormatter("double", (v) => Number(v) * 2);
+// `values = { col = "<expr>" }` derives a column with an expression over the
+// row: `value` is the raw row[col], row fields are in scope by name.
+const SHOUT = { name: "UPPER(value)" };
+const DOUBLE = { value: "NUM_OF(value) * 2" };
 // Virtual column: no row carries "combo"; it exists only in config.
-registerFormatter("combo", (_v, row) => `${row.name}:${row.value}`);
+// `value` in cell scope is the cell's own raw value (NULL here), so the
+// row's "value" column is reached as row.value.
+const COMBO = { combo: "name + ':' + STR(row.value)" };
+const MILLIS = { value: "STR(value) + ' ms'" };
 
 function cellsOf(tr) {
   return tr._ch.filter(td => td.dataset?.col != null).map(td => td.textContent);
@@ -3818,39 +3823,62 @@ async function createFmtTable(specOverrides = {}) {
   return t;
 }
 
-test("formatter transforms a column's displayed text", async () => {
+test("a values expression transforms a column's displayed text", async () => {
   const { host } = await createFmtTable({
-    columns: ["name", "value"], formatters: { name: "shout" },
+    columns: ["name", "value"], values: SHOUT,
   });
   assert.deepEqual(cellsOf(dataRows(host)[0]), ["ROW-0", "0"]);
 });
 
-test("columns without a formatter are untouched", async () => {
+test("columns without a values expression are untouched", async () => {
   const { host } = await createFmtTable({
-    columns: ["name", "value"], formatters: { name: "shout" },
+    columns: ["name", "value"], values: SHOUT,
   });
   assert.deepEqual(cellsOf(dataRows(host)[1]), ["ROW-1", "1"]);
 });
 
-test("formatter can create a virtual column absent from the row data", async () => {
+test("a values expression can create a virtual column absent from the row data", async () => {
   const { host } = await createFmtTable({
-    columns: ["name", "combo"], formatters: { combo: "combo" },
+    columns: ["name", "combo"], values: COMBO,
   });
   assert.deepEqual(cellsOf(dataRows(host)[2]), ["row-2", "row-2:2"]);
 });
 
-test("unknown formatter falls back to the raw value", async () => {
-  const { host } = await createFmtTable({
-    columns: ["name"], formatters: { name: "does-not-exist" },
-  });
-  assert.deepEqual(cellsOf(dataRows(host)[0]), ["row-0"]);
+test("an invalid values expression warns at init and falls back to the raw value", async () => {
+  const warned = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warned.push(a.join(" "));
+  try {
+    const { host } = await createFmtTable({
+      columns: ["name"], values: { name: "UPPER(" },
+    });
+    assert.deepEqual(cellsOf(dataRows(host)[0]), ["row-0"]);
+    assert.equal(warned.filter(w => w.includes("bad values expression for name")).length, 1);
+  } finally {
+    console.warn = origWarn;
+  }
 });
 
-test("formatted values drive sorting, not the raw ones", async () => {
+test("a values expression that errors at runtime warns once and yields empty", async () => {
+  const warned = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warned.push(a.join(" "));
+  try {
+    const { host } = await createFmtTable({
+      columns: ["name"], values: { name: "value / 0" },
+    });
+    assert.deepEqual(dataRows(host).map(tr => cellsOf(tr)[0]), ["", "", ""]);
+    assert.equal(warned.filter(w => w.includes("values.name")).length, 1, "one warning, not one per cell");
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test("derived values drive sorting, not the raw ones", async () => {
   // Raw ascending is 0,1,2; doubling keeps that order, so sort descending
   // and assert the formatted text to prove the comparator saw the doubles.
   const { host } = await createFmtTable({
-    columns: ["value"], formatters: { value: "double" },
+    columns: ["value"], values: DOUBLE,
   });
   const th = getThead(host)._ch[0]._ch.find(t => t.dataset.col === "value");
   clickHeader(th);                           // asc
@@ -3859,9 +3887,9 @@ test("formatted values drive sorting, not the raw ones", async () => {
   assert.deepEqual(dataRows(host).map(tr => cellsOf(tr)[0]), ["4", "2", "0"]);
 });
 
-test("filter dropdown lists formatted values", async () => {
+test("filter dropdown lists derived values", async () => {
   const { host } = await createFmtTable({
-    columns: ["name"], formatters: { name: "shout" },
+    columns: ["name"], values: SHOUT,
   });
   const th = getThead(host)._ch[0]._ch.find(t => t.dataset.col === "name");
   clickFilterBtn(th);
@@ -3871,9 +3899,9 @@ test("filter dropdown lists formatted values", async () => {
   assert.deepEqual(vals.sort(), ["ROW-0", "ROW-1", "ROW-2"]);
 });
 
-test("filtering matches on the formatted value", async () => {
+test("filtering matches on the derived value", async () => {
   const { host } = await createFmtTable({
-    columns: ["name"], formatters: { name: "shout" },
+    columns: ["name"], values: SHOUT,
   });
   const th = getThead(host)._ch[0]._ch.find(t => t.dataset.col === "name");
   clickFilterBtn(th);
@@ -3885,9 +3913,9 @@ test("filtering matches on the formatted value", async () => {
   assert.deepEqual(dataRows(host).map(tr => cellsOf(tr)[0]), ["ROW-1"]);
 });
 
-test("copy exports formatted values", async () => {
+test("copy exports derived values", async () => {
   const { host } = await createTable({
-    rowColumn: true, columns: ["name"], formatters: { name: "shout" },
+    rowColumn: true, columns: ["name"], values: SHOUT,
   });
   triggerVisible(host._paneEl && ioCallbacks[ioCallbacks.length - 1]);
   lastSubscribe().opts.onSnapshot(makeRows(2));
@@ -3899,27 +3927,37 @@ test("copy exports formatted values", async () => {
   assert.equal(written, "name\r\nROW-0\r\nROW-1");
 });
 
-test("live update re-runs the formatter", async () => {
+test("live update re-evaluates the values expression", async () => {
   const { host } = await createFmtTable({
-    columns: ["name"], formatters: { name: "shout" },
+    columns: ["name"], values: SHOUT,
   });
   lastSubscribe().opts.onUpdate("update", { _mkio_row: "1", name: "renamed", value: 1 });
   assert.deepEqual(dataRows(host).map(tr => cellsOf(tr)[0]),
                    ["ROW-0", "RENAMED", "ROW-2"]);
 });
 
-test("a formatter is called with the raw value, its row, and the column", async () => {
+test("cell scope exposes value, row, col, row fields, and app-registered functions", async () => {
   const seen = [];
-  registerFormatter("probe", (v, row, col) => { seen.push([v, row.name, col]); return v; });
-  await createFmtTable({ columns: ["value"], formatters: { value: "probe" } });
-  assert.deepEqual(seen[0], [0, "row-0", "value"]);
+  registerExprFunction("PROBE", (v, row, col, name) => { seen.push([v, row.name, col, name]); return v; });
+  await createFmtTable({ columns: ["value"], values: { value: "PROBE(value, row, col, name)" } });
+  assert.deepEqual(seen[0], [0, "row-0", "value", "row-0"]);
 });
 
-test("formatted numbers drive decimal alignment, not the raw ones", async () => {
+test("cell scope reads app state", async () => {
+  const { host, state } = await createFmtTable({
+    columns: ["value"], values: { value: "value * (state.mult ?? 1)" },
+  });
+  assert.deepEqual(colCells(host, "value").map(td => td.textContent), ["0", "1", "2"]);
+  state.set("mult", 10);
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "1", name: "row-1", value: 2 });
+  assert.equal(colCells(host, "value")[1].textContent, "20", "re-evaluated on update against current state");
+});
+
+test("derived numbers drive decimal alignment, not the raw ones", async () => {
   // Raw 1 / 2.5 / 3.25 would pad 3ch / 1ch / none; doubled to 2 / 5 / 6.5 the
   // column's widest fraction is one digit, so the integers pad 2ch instead.
   const { host, io } = await createTable({
-    columns: ["value"], formatters: { value: "double" },
+    columns: ["value"], values: DOUBLE,
   });
   triggerVisible(io);
   lastSubscribe().opts.onSnapshot([
@@ -3933,19 +3971,18 @@ test("formatted numbers drive decimal alignment, not the raw ones", async () => 
   assert.deepEqual(tds.map(td => td.style["--mkui-num-pad"]), ["2ch", "2ch", ""]);
 });
 
-test("a formatter that yields text turns off numeric alignment", async () => {
-  registerFormatter("millis", (v) => `${v} ms`);
+test("a values expression that yields text turns off numeric alignment", async () => {
   const { host } = await createFmtTable({
-    columns: ["value"], formatters: { value: "millis" },
+    columns: ["value"], values: MILLIS,
   });
   const tds = colCells(host, "value");
   assert.deepEqual(tds.map(td => td.textContent), ["0 ms", "1 ms", "2 ms"]);
   assert.ok(tds.every(td => !td.classList.contains("mkui-num")), "text column, no alignment");
 });
 
-test("cell-mode copy exports the formatted value", async () => {
+test("cell-mode copy exports the derived value", async () => {
   const { host } = await createSelTable({
-    columns: ["name", "value"], formatters: { name: "shout" },
+    columns: ["name", "value"], values: SHOUT,
   });
   pointerDown(dataRows(host)[1], 1);          // focused cell = name of row-1
   let written = null;
@@ -3955,9 +3992,9 @@ test("cell-mode copy exports the formatted value", async () => {
   assert.equal(written, "ROW-1");
 });
 
-test("row-unit button payloads carry the raw field, not the formatted one", async () => {
+test("row-unit button payloads carry the raw field, not the derived one", async () => {
   const { host } = await createSelTable({
-    columns: ["name", "value"], formatters: { name: "shout" },
+    columns: ["name", "value"], values: SHOUT,
     buttons: [{ label: "Act", enable: { minSelected: 1 },
                 action: { type: "transaction", service: "svc", data: { n: "${row.name}" } } }],
   });
@@ -3975,7 +4012,7 @@ test("row-unit button payloads carry the raw field, not the formatted one", asyn
 
 test("cell-unit button payloads carry the raw cell value", async () => {
   const { host } = await createSelTable({
-    columns: ["name", "value"], formatters: { name: "shout" },
+    columns: ["name", "value"], values: SHOUT,
     buttons: [{ label: "C", unit: "cell",
                 action: { type: "transaction", service: "svc",
                           data: { v: "${cell.value}" } } }],
@@ -3996,19 +4033,19 @@ test("cell-unit button payloads carry the raw cell value", async () => {
 
 test("declarative cell rules style only the matching cells", async () => {
   const { host } = await createFmtTable({
-    styles: { value: [{ gt: 1, color: "red", bold: true, underline: true, strike: true }] },
+    styles: { value: [{ when: "value > 1", color: "red", bold: true, underline: true, strike: true }] },
   });
   const tds = colCells(host, "value");
   assert.equal(tds[2].style.color, "red");
   assert.equal(tds[2].style.fontWeight, "bold");
   assert.equal(tds[2].style.textDecoration, "underline line-through");
   assert.equal(tds[0].style.color, "", "non-matching cell untouched");
-  assert.equal(tds[1].style.color, "", "gt is strict");
+  assert.equal(tds[1].style.color, "", "> is strict");
 });
 
 test("cell rules are first-match-wins with a condition-free fallback", async () => {
   const { host } = await createFmtTable({
-    styles: { value: [{ eq: 1, color: "blue" }, { color: "gray" }] },
+    styles: { value: [{ when: "value == 1", color: "blue" }, { color: "gray" }] },
   });
   const tds = colCells(host, "value");
   assert.deepEqual(tds.map(td => td.style.color), ["gray", "blue", "gray"]);
@@ -4016,7 +4053,7 @@ test("cell rules are first-match-wins with a condition-free fallback", async () 
 
 test("styled backgrounds ride the marker class + custom property", async () => {
   const { host } = await createFmtTable({
-    styles: { name: [{ match: "row-1", background: "#400" }] },
+    styles: { name: [{ when: "CONTAINS(value, 'row-1')", background: "#400" }] },
   });
   const tds = colCells(host, "name");
   assert.ok(tds[1].classList.contains("mkui-cell-styled"));
@@ -4027,7 +4064,7 @@ test("styled backgrounds ride the marker class + custom property", async () => {
 
 test("row rules condition on multiple columns via when", async () => {
   const { host } = await createFmtTable({
-    rowStyle: [{ when: { name: ["row-0", "row-2"], value: { lte: 0 } },
+    rowStyle: [{ when: "CONTAINS(['row-0', 'row-2'], name) && value <= 0",
                  background: "green", class: "alert" }],
   });
   const trs = getTbody(host)._ch;
@@ -4038,11 +4075,10 @@ test("row rules condition on multiple columns via when", async () => {
   assert.ok(!trs[1].classList.contains("mkui-row-styled"), "row-1 fails the name condition");
 });
 
-test("registered stylers style cells and rows programmatically", async () => {
-  registerStyler("hotCell", (v) => Number(v) > 1 ? { italic: true } : null);
-  registerStyler("hotRow", (row) => row.value > 1 ? { css: { opacity: "0.5" } } : null);
+test("a styler may be one expression yielding a style map or NULL", async () => {
   const { host } = await createFmtTable({
-    styles: { value: "hotCell" }, rowStyle: "hotRow",
+    styles: { value: "IF(value > 1, {italic: TRUE}, NULL)" },
+    rowStyle: "IF(value > 1, {css: {opacity: '0.5'}}, NULL)",
   });
   const tds = colCells(host, "value");
   assert.equal(tds[2].style.fontStyle, "italic");
@@ -4054,8 +4090,8 @@ test("registered stylers style cells and rows programmatically", async () => {
 
 test("a live replace restyles the row and its cells both ways", async () => {
   const { host } = await createFmtTable({
-    styles: { value: [{ gt: 1, color: "red" }] },
-    rowStyle: [{ when: { value: { gt: 1 } }, class: "warn" }],
+    styles: { value: [{ when: "value > 1", color: "red" }] },
+    rowStyle: [{ when: "value > 1", class: "warn" }],
   });
   const trs = getTbody(host)._ch;
   assert.equal(colCells(host, "value")[0].style.color, "");
@@ -4067,45 +4103,180 @@ test("a live replace restyles the row and its cells both ways", async () => {
   assert.ok(!trs[2].classList.contains("warn"), "row class cleared on update");
 });
 
-test("an unknown styler warns once and applies nothing", async () => {
+test("a styler calling an unknown function warns once and applies nothing", async () => {
   const warned = [];
   const origWarn = console.warn;
   console.warn = (...a) => warned.push(a.join(" "));
   try {
-    const { host } = await createFmtTable({ styles: { value: "no-such-styler" } });
+    const { host } = await createFmtTable({ styles: { value: "NO_SUCH_STYLER(value)" } });
     const tds = colCells(host, "value");
     assert.ok(tds.every(td => td.style.color === "" && !td.classList.contains("mkui-cell-styled")));
-    assert.equal(warned.filter(w => w.includes("no-such-styler")).length, 1,
+    assert.equal(warned.filter(w => w.includes("NO_SUCH_STYLER")).length, 1,
       "one warning, not one per cell");
   } finally {
     console.warn = origWarn;
   }
 });
 
-test("a rule with an invalid regex is disabled instead of throwing", async () => {
+test("a rule whose condition errors never matches; later rules still apply", async () => {
   const warned = [];
   const origWarn = console.warn;
   console.warn = (...a) => warned.push(a.join(" "));
   try {
     const { host } = await createFmtTable({
-      styles: { name: [{ match: "(", color: "red" }, { eq: "row-1", color: "blue" }] },
+      styles: { name: [{ when: "MATCHES(value, '(')", color: "red" }, { when: "value == 'row-1'", color: "blue" }] },
     });
     const tds = colCells(host, "name");
-    assert.deepEqual(tds.map(td => td.style.color), ["", "blue", ""],
-      "bad rule never matches; later rules still apply");
-    assert.equal(warned.filter(w => w.includes("bad style rule regex")).length, 1);
+    assert.deepEqual(tds.map(td => td.style.color), ["", "blue", ""]);
+    assert.equal(warned.filter(w => w.includes("styles.name[0]")).length, 1, "warned once, not per cell");
   } finally {
     console.warn = origWarn;
   }
 });
 
-test("cell rules test the formatted value", async () => {
+test("style values may be templates over the cell scope", async () => {
   const { host } = await createFmtTable({
-    columns: ["name", "value"], formatters: { value: "millis" },
-    styles: { value: [{ match: "^2 ms$", color: "red" }] },
+    styles: { value: [{ color: "${IF(value > 1, 'red', 'blue')}", css: { opacity: "${1 - value / 10}" } }] },
+  });
+  const tds = colCells(host, "value");
+  assert.deepEqual(tds.map(td => td.style.color), ["blue", "blue", "red"]);
+  assert.deepEqual(tds.map(td => td.style.opacity), ["1", "0.9", "0.8"]);
+});
+
+test("a button's enable.when sees the selected rows", async () => {
+  const { host } = await createSelTable({
+    columns: ["name", "value"],
+    buttons: [{ label: "Act", enable: { when: "LEN(rows) > 0 && ALL(rows, r -> r.value > 0)" } }],
+  });
+  const btn = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"))._ch[0];
+  assert.equal(btn.disabled, true, "nothing selected");
+  pointerDown(dataRows(host)[0], 0);
+  assert.equal(btn.disabled, true, "row-0 has value 0");
+  pointerDown(dataRows(host)[2], 0);
+  assert.equal(btn.disabled, false, "row-2 has value 2");
+});
+
+test("cell rules test the derived value", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name", "value"], values: MILLIS,
+    styles: { value: [{ when: "value == '2 ms'", color: "red" }] },
   });
   const tds = colCells(host, "value");
   assert.deepEqual(tds.map(td => td.style.color), ["", "", "red"]);
+});
+
+/* ── Display templates (rich cells) ───────────────────────────────────── */
+
+test("display templates control the shown text, not the value", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name", "value"], display: { value: "${NUM(value, digits: 2)} pts" },
+  });
+  const tds = colCells(host, "value");
+  assert.deepEqual(tds.map(td => td.textContent), ["0.00 pts", "1.00 pts", "2.00 pts"]);
+  assert.ok(tds.every(td => td.classList.contains("mkui-num")), "still numeric — alignment judged on the value");
+  const th = getThead(host)._ch[0]._ch.find(t => t.dataset.col === "value");
+  clickHeader(th); clickHeader(th);   // desc
+  assert.deepEqual(colCells(host, "value").map(td => td.textContent), ["2.00 pts", "1.00 pts", "0.00 pts"], "sorted numerically");
+});
+
+test("display sees the derived value and other columns", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name", "value"], values: DOUBLE,
+    display: { value: "${value}/${row.value} ${name}" },
+  });
+  assert.deepEqual(colCells(host, "value").map(td => td.textContent), ["0/0 row-0", "2/1 row-1", "4/2 row-2"]);
+});
+
+test("rich display renders styled spans and keeps the flattened text", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name", "value"],
+    display: { name: "${BOLD(value)} ${MUTED('#' + STR(row.value))}", value: "${BADGE(value, 'green')}" },
+  });
+  const td = colCells(host, "name")[1];
+  const spans = td._ch.filter(n => n.tagName === "SPAN");
+  assert.equal(spans.length, 3);
+  assert.equal(spans[0].textContent, "row-1");
+  assert.equal(spans[0].style.fontWeight, "bold");
+  assert.equal(spans[1].textContent, " ");
+  assert.ok(spans[2].classList.contains("mkui-muted"));
+  assert.equal(spans[2].textContent, "#1");
+  assert.equal(td._mkuiText, "row-1 #1");
+  const badge = colCells(host, "value")[2]._ch[0];
+  assert.ok(badge.classList.contains("mkui-rich-badge"));
+  assert.equal(badge.style["--mkui-badge-color"], "#4caf50");
+});
+
+test("ICON and BAR segments render their own elements", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name", "value"],
+    display: { name: "${ICON('check')}${value}", value: "${BAR(value / 2, '#4caf50')}" },
+  });
+  const nameTd = colCells(host, "name")[0];
+  assert.equal(nameTd._ch[0].className, "mkui-rich-icon");
+  assert.equal(nameTd._ch[1].textContent, "row-0");
+  const bar = colCells(host, "value")[1]._ch[0];
+  assert.equal(bar.className, "mkui-rich-bar");
+  assert.equal(bar.style["--mkui-bar-frac"], "50%");
+  assert.equal(bar.style["--mkui-bar-color"], "#4caf50");
+});
+
+test("a display error renders #ERR with the message as tooltip, warned once", async () => {
+  const warned = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warned.push(a.join(" "));
+  try {
+    const { host } = await createFmtTable({ columns: ["value"], display: { value: "${value / 0}" } });
+    const tds = colCells(host, "value");
+    assert.deepEqual(tds.map(td => td.textContent), ["#ERR", "#ERR", "#ERR"]);
+    assert.ok(tds[0].classList.contains("mkui-cell-err"));
+    assert.match(tds[0].title, /Division by zero/);
+    assert.equal(warned.filter(w => w.includes("display.value")).length, 1);
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test("a live update re-renders display cells that read the changed column", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name", "value"], display: { name: "${value} (${row.value})" },
+  });
+  assert.equal(colCells(host, "name")[1].textContent, "row-1 (1)");
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "1", name: "row-1", value: 9 });
+  assert.equal(colCells(host, "name")[1].textContent, "row-1 (9)", "name cell re-rendered though `name` didn't change");
+  assert.ok(colCells(host, "name")[1].classList.contains("mkui-flash-update"));
+});
+
+test("copy carries display text in TSV and styled markup in HTML", async () => {
+  const { host } = await createSelTable({
+    columns: ["name", "value"], display: { name: "${BOLD(value)}", value: "${value} pts" },
+  });
+  host._paneEl._editActions.selectAll();
+  let items = null, text = null;
+  globalThis.navigator = { clipboard: {
+    write: async (its) => { items = its; },
+    writeText: async (s) => { text = s; },
+  } };
+  globalThis.ClipboardItem = class { constructor(parts) { this.parts = parts; } };
+  globalThis.Blob = class { constructor(parts) { this.body = parts.join(""); } };
+  try {
+    host._paneEl._editActions.copy();
+    for (let i = 0; i < 8; i++) await Promise.resolve();   // the harness mocks setTimeout; flush microtasks only
+    assert.ok(items, "ClipboardItem path used");
+    assert.equal(items[0].parts["text/plain"].body, "name\tvalue\r\nrow-0\t0 pts\r\nrow-1\t1 pts\r\nrow-2\t2 pts\r\nrow-3\t3 pts");
+    assert.match(items[0].parts["text/html"].body, /<td><span style="font-weight:bold">row-0<\/span><\/td><td>0 pts<\/td>/);
+    assert.equal(text, null);
+  } finally {
+    delete globalThis.navigator; delete globalThis.ClipboardItem; delete globalThis.Blob;
+  }
+});
+
+test("width stats measure the display text", async () => {
+  const { host, io } = await createTable({ columns: ["value"], display: { value: "${value}0000" } });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", value: "1.5" }]);
+  const td = colCells(host, "value")[0];
+  assert.equal(td.textContent, "1.50000");
+  assert.ok(td.classList.contains("mkui-num"));
 });
 
 /* ── select: publishing the current row to app state ─────────────────── */

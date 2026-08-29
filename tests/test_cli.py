@@ -374,3 +374,29 @@ class TestTemplateConsistency(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExampleConfigsTest(unittest.TestCase):
+    """Every shipped example config must be valid TOML (an inline table that
+    spans lines is the classic slip) and declare the keys the docs promise."""
+
+    def test_example_client_configs_parse(self):
+        import glob
+        import tomllib
+        root = Path(__file__).resolve().parent.parent / "mkui" / "static" / "examples"
+        paths = glob.glob(str(root / "*" / "config" / "client.toml"))
+        self.assertTrue(paths)
+        for p in paths:
+            with open(p, "rb") as f:
+                cfg = tomllib.load(f)
+            self.assertIn("panes", cfg, p)
+
+    def test_mkio_table_example_uses_expressions(self):
+        import tomllib
+        p = Path(__file__).resolve().parent.parent / "mkui" / "static" / "examples" / "mkio-table" / "config" / "client.toml"
+        with open(p, "rb") as f:
+            cfg = tomllib.load(f)
+        pane = cfg["panes"]["all-orders"]
+        self.assertEqual(pane["values"], {"notional": "ROUND(qty * price, 2)"})
+        self.assertIn("when", pane["rowStyle"][0])
+        self.assertEqual(cfg["mkio"]["expect"]["expr"], "1")
