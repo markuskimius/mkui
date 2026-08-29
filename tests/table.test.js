@@ -4642,3 +4642,91 @@ test("range filters see the derived value and reset on pane reopen", async () =>
   ]);
   assert.deepEqual(shownNames(host), ["a", "b"], "reopen cleared the range");
 });
+
+/* ── Value filters: include vs exclude intent ────────────────────────── */
+
+function valueFilterCtl(host, col) {
+  const { dd, list } = openDropdown(host, col);
+  const cbs = list._ch.map(item => item._ch.find(n => n.tagName === "INPUT"));
+  const actions = dd._ch.find(c => c.className === "mkui-filter-actions")._ch;
+  return {
+    cbs,
+    set: (val, on) => { const cb = cbs.find(c => c.dataset.val === val); cb.checked = on; cb._ev.change[0](); },
+    selectAll: () => actions[0]._ev.click[0](),
+    clear: () => actions[1]._ev.click[0](),
+  };
+}
+const filterTitle = (host, col) =>
+  getThs(host).find(t => t.dataset.col === col).querySelector(".mkui-filter-btn").title;
+
+async function statusTable() {
+  const { host, io } = await createTable({ protocol: "stream", columns: ["name", "status"], maxcount: null });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_ref: streamRef(1), name: "a", status: "open" },
+    { _mkio_ref: streamRef(2), name: "b", status: "closed" },
+    { _mkio_ref: streamRef(3), name: "c", status: "held" },
+  ]);
+  return host;
+}
+
+test("unchecking values excludes them — unseen values in live rows stay visible", async () => {
+  const host = await statusTable();
+  const f = valueFilterCtl(host, "status");
+  f.set("closed", false);
+  assert.deepEqual(shownNames(host), ["a", "c"]);
+  assert.equal(filterTitle(host, "status"), "All but 1 values");
+  const opts = lastSubscribe().opts;
+  opts.onUpdate("insert", { _mkio_ref: streamRef(4), name: "d", status: "new" });
+  opts.onUpdate("insert", { _mkio_ref: streamRef(5), name: "e", status: "closed" });
+  assert.deepEqual(shownNames(host), ["a", "c", "d"], "a never-seen value passes an exclusion");
+  opts.onUpdate("update", { _mkio_ref: streamRef(5), name: "e", status: "reopened" });
+  assert.deepEqual(shownNames(host), ["a", "c", "d", "e"], "an update out of the excluded set shows the row");
+  opts.onUpdate("update", { _mkio_ref: streamRef(1), name: "a", status: "closed" });
+  assert.deepEqual(shownNames(host), ["c", "d", "e"], "an update into the excluded set hides the row");
+});
+
+test("Clear then checking values includes only them — unseen values stay hidden", async () => {
+  const host = await statusTable();
+  const f = valueFilterCtl(host, "status");
+  f.clear();
+  assert.deepEqual(shownNames(host), []);
+  f.set("open", true);
+  f.set("held", true);
+  assert.deepEqual(shownNames(host), ["a", "c"]);
+  assert.equal(filterTitle(host, "status"), "2 values");
+  const opts = lastSubscribe().opts;
+  opts.onUpdate("insert", { _mkio_ref: streamRef(4), name: "d", status: "new" });
+  assert.deepEqual(shownNames(host), ["a", "c"], "a never-seen value fails an inclusion");
+  opts.onUpdate("update", { _mkio_ref: streamRef(4), name: "d", status: "open" });
+  assert.deepEqual(shownNames(host), ["a", "c", "d"]);
+  // Re-checking every listed value keeps the inclusion (new values still hidden).
+  f.set("closed", true);
+  opts.onUpdate("insert", { _mkio_ref: streamRef(6), name: "f", status: "other" });
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"]);
+  // Select all flips back to an exclusion of nothing — no filter.
+  f.selectAll();
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d", "f"]);
+  assert.equal(filterTitle(host, "status"), "");
+});
+
+test("value filter intent survives reopening the dropdown and stream paging", async () => {
+  const { host, io } = await createTable({ protocol: "stream", columns: ["name", "status"], maxcount: 2 });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage([
+    { _mkio_ref: streamRef(1), name: "a", status: "open" },
+    { _mkio_ref: streamRef(2), name: "b", status: "closed" },
+  ], { hasmore: true, ref: "p1" });
+  let f = valueFilterCtl(host, "status");
+  f.set("closed", false);
+  clickFilterBtn(getThs(host).find(t => t.dataset.col === "status")); // toggle closed
+  f = valueFilterCtl(host, "status");
+  assert.deepEqual(f.cbs.map(c => [c.dataset.val, c.checked]), [["closed", false], ["open", true]]);
+  const [, , nextBtn] = byClass(host, "mkui-table-paging")[0]._ch;
+  nextBtn._ev.click[0]();
+  lastSubscribe().opts.onPage([
+    { _mkio_ref: streamRef(3), name: "c", status: "new" },
+    { _mkio_ref: streamRef(4), name: "d", status: "closed" },
+  ], { hasmore: false, ref: "p2" });
+  assert.deepEqual(shownNames(host), ["c"], "the next page is judged by the exclusion");
+});

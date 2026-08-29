@@ -832,10 +832,17 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   /* ── Sort & filter state ──────────────────────────────────────────── */
 
   const sortKeys = [];
-  // col -> { kind: "values", allowed: Set<string> }
+  // col -> { kind: "values", mode: "include" | "exclude", values: Set<string> }
   //      | { kind: "range", type: "number" | "time", lo, hi, preset, empty,
   //          timeKind, spec, localTz }
-  // A values filter keeps the checked display texts; a range filter keeps
+  // A values filter keeps display texts and the side they live on: `exclude`
+  // hides the listed values and lets everything else through (values the
+  // dropdown has never seen included), `include` shows only the listed
+  // ones. The dropdown picks the mode from the last bulk action — "Select
+  // all" (and the untouched all-checked start) then unchecking builds an
+  // exclusion; "Clear" then checking builds an inclusion — so live inserts,
+  // updates, and stream pages are judged by the intent, not by the value
+  // list at the time. A range filter keeps
   // bounds in the column's frame (numbers, or seconds — see
   // lib/timeparse.js; a number `hi` is inclusive, a time `hi` exclusive
   // so that a typed date/minute covers its whole unit), the typed bound
@@ -1711,7 +1718,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function matchesFilters(row) {
     for (const [col, f] of filters) {
       if (f.kind === "range") { if (!inRange(row, col, f)) return false; }
-      else if (!f.allowed.has(cellText(row, col))) return false;
+      else if (f.values.has(cellText(row, col)) === (f.mode === "exclude")) return false;
     }
     return true;
   }
@@ -2144,7 +2151,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       }
       const f = filters.get(col);
       btn.classList.toggle("active", !!f);
-      btn.title = f?.kind === "range" ? describeRange(f) : f ? `${f.allowed.size} values` : "";
+      btn.title = f?.kind === "range" ? describeRange(f)
+        : f ? (f.mode === "exclude" ? `All but ${f.values.size} values` : `${f.values.size} values`) : "";
     }
   }
 
@@ -2318,7 +2326,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     list.className = "mkui-filter-list";
 
     const vals = getUniqueValues(col);
-    const allowed = cur?.kind === "values" ? cur.allowed : null;
+    const curVals = cur?.kind === "values" ? cur.values : null;
+    // Which side the checkboxes describe: flipped by Select all / Clear.
+    let side = cur?.kind === "values" ? cur.mode : "exclude";
+    const isChecked = (v) => !curVals || curVals.has(v) === (side === "include");
     const cbs = [];
 
     // Decimal-align numeric values, matching the column's cells: values are
@@ -2339,7 +2350,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       lbl.className = "mkui-filter-item";
       const cb = document.createElement("input");
       cb.type = "checkbox";
-      cb.checked = !allowed || allowed.has(v);
+      cb.checked = isChecked(v);
       cb.dataset.val = v;
       const txt = document.createElement("span");
       txt.textContent = v === "" ? "(empty)" : v;
@@ -2356,19 +2367,25 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     dd.appendChild(list);
 
     function commitValues() {
-      const checked = cbs.filter((c) => c.checked).map((c) => c.dataset.val);
-      if (checked.length === vals.length) filters.delete(col);
-      else filters.set(col, { kind: "values", allowed: new Set(checked) });
+      const listed = cbs
+        .filter((c) => c.checked === (side === "include"))
+        .map((c) => c.dataset.val);
+      // An exclusion of nothing is no filter; an inclusion always is —
+      // "Clear, then tick every value" still means only those values.
+      if (side === "exclude" && listed.length === 0) filters.delete(col);
+      else filters.set(col, { kind: "values", mode: side, values: new Set(listed) });
       updateHeaderState();
       applyVisibility();
       syncPresetTimer();
     }
 
     selAll.addEventListener("click", () => {
+      side = "exclude";
       for (const c of cbs) c.checked = true;
       commitValues();
     });
     clrAll.addEventListener("click", () => {
+      side = "include";
       for (const c of cbs) c.checked = false;
       commitValues();
     });
