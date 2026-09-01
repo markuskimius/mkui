@@ -26,6 +26,16 @@ items = [
 ]
 
 [[menubar]]
+label = "View"
+items = [
+  # table.filter sets a pane's column filters; the shapes match `filters`
+  # under [panes.<id>]. `merge = true` leaves other columns' filters alone.
+  { label = "All Orders: hide cancelled", action = "table.filter", args = { pane = "all-orders", filters = { status = { exclude = ["cancelled"] } }, merge = true } },
+  { label = "All Orders: large sells", action = "table.filter", args = { pane = "all-orders", filters = { side = ["Sell"], notional = { from = 50000 } } } },
+  { label = "All Orders: show everything", action = "table.filter", args = { pane = "all-orders", filters = {} } },
+]
+
+[[menubar]]
 label = "Trades"
 items = [
   { label = "Last Trade", action = "pane.show", args = "last-trade" },
@@ -78,6 +88,18 @@ qty = [ { background = "${IF(value >= 500, '#2b3a4a', '')}" } ]
 [[panes.all-orders.rowStyle]]
 when = "notional >= 50000 && side == 'Sell'"
 background = "#3a2f1b"
+
+# Default column filters, in effect before the first row arrives and
+# restored when the pane is reopened (View → "show everything" clears them,
+# or use the header filter buttons). Each entry is a values filter — a bare
+# list shows only those values; `include`/`exclude` say which way — or a
+# range: `from`/`to` numbers make a number range, "2026-03-01" /
+# "2026-03-01 09:30" strings a time range (a date covers its whole day,
+# `empty = true` lets blank cells through), and `preset` is today, 1h,
+# or 15m. Ranges work on derived columns like `notional` too.
+[panes.all-orders.filters]
+status = { exclude = ["cancelled"] }   # statuses seen later still show
+notional = { from = 1000 }             # small orders start hidden
 
 # Display templates control presentation only — sorting, filtering, and
 # alignment still use the value. The `mkui` library adds rich segments:

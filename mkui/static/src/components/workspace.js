@@ -137,6 +137,26 @@ class MkuiWorkspace extends HTMLElement {
     return fn ? fn() !== false : false;
   }
 
+  // Column filters of a pane whose type exposes a `_filters` hook (mkio-
+  // table): `filters` maps column names to the config-shaped filters the
+  // pane's `filters` key takes, replacing the current set unless `merge`
+  // is set. A pane that was never shown is built first, so filters can be
+  // set ahead of opening it. Returns whether a pane took the filters. With
+  // no id, the focused frame's active pane is the target.
+  setPaneFilters(paneId, filters, opts = {}) {
+    const el = paneId == null ? this.activePaneEl()
+      : this._panes.has(paneId) ? this._ensurePaneEl(paneId) : null;
+    if (!el?._filters) return false;
+    el._filters.set(filters, opts);
+    return true;
+  }
+
+  // The same shape back, or null when the pane has no filters hook.
+  getPaneFilters(paneId) {
+    const el = paneId == null ? this.activePaneEl() : this._paneEls.get(paneId);
+    return el?._filters ? el._filters.get() : null;
+  }
+
   setApp(app) {
     this._app = app;
     this._panes = new Map(Object.entries(app.config.panes ?? {}));

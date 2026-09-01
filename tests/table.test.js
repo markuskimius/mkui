@@ -4730,3 +4730,265 @@ test("value filter intent survives reopening the dropdown and stream paging", as
   ], { hasmore: false, ref: "p2" });
   assert.deepEqual(shownNames(host), ["c"], "the next page is judged by the exclusion");
 });
+
+/* ── Configured and programmatic filters ─────────────────────────────── */
+// `filters = { col = <filter> }` seeds the table before any data and is
+// restored on pane reopen; the same shape drives `paneEl._filters.set/get`.
+
+function withWarnings(fn) {
+  const warned = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warned.push(a.join(" "));
+  return Promise.resolve().then(fn).then(
+    (r) => { console.warn = origWarn; return [r, warned]; },
+    (e) => { console.warn = origWarn; throw e; },
+  );
+}
+
+const orderRows = () => [
+  { _mkio_row: "1", name: "a", status: "open", qty: "50", ts: "2026-08-29T09:00:00Z" },
+  { _mkio_row: "2", name: "b", status: "closed", qty: "150", ts: "2026-08-29 09:30:15" },
+  { _mkio_row: "3", name: "c", status: "new", qty: "250", ts: "2026-08-30 10:00:00" },
+  { _mkio_row: "4", name: "d", status: "closed", qty: "", ts: "" },
+];
+
+async function filteredTable(filters, extra = {}) {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "status", "qty", "ts"], filters, ...extra });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  return host;
+}
+
+test("filters config: a value list includes, include/exclude record intent", async () => {
+  let host = await filteredTable({ status: ["open", "new"] });
+  assert.deepEqual(shownNames(host), ["a", "c"]);
+  assert.equal(filterTitle(host, "status"), "2 values");
+  host = await filteredTable({ status: { exclude: ["closed"] } });
+  assert.deepEqual(shownNames(host), ["a", "c"]);
+  assert.equal(filterTitle(host, "status"), "All but 1 values");
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "5", name: "e", status: "other" });
+  assert.deepEqual(shownNames(host), ["a", "c", "e"], "an exclusion lets unseen values through");
+  host = await filteredTable({ status: { include: ["open"] } });
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "5", name: "e", status: "other" });
+  assert.deepEqual(shownNames(host), ["a"], "an inclusion keeps unseen values hidden");
+});
+
+test("filters config is active before data and shows in the header and dropdown", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "status"], filters: { status: ["open"] } });
+  assert.equal(filterTitle(host, "status"), "1 values", "header rendered from `columns` shows the filter");
+  assert.ok(getThs(host).find(t => t.dataset.col === "status").querySelector(".mkui-filter-btn").classList.contains("active"));
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  assert.deepEqual(shownNames(host), ["a"]);
+  const f = valueFilterCtl(host, "status");
+  assert.deepEqual(f.cbs.map(c => [c.dataset.val, c.checked]), [["closed", false], ["new", false], ["open", true]]);
+  f.set("new", true);
+  assert.deepEqual(shownNames(host), ["a", "c"], "the dropdown edits the configured filter in place");
+});
+
+test("filters config: number ranges from numeric bounds, empty opt-in", async () => {
+  let host = await filteredTable({ qty: { from: 100, to: 250 } });
+  assert.deepEqual(shownNames(host), ["b", "c"]);
+  assert.equal(filterTitle(host, "qty"), "100 – 250");
+  host = await filteredTable({ qty: { to: 100, empty: true } });
+  assert.deepEqual(shownNames(host), ["a", "d"], "blank qty passes with empty = true");
+  const d = openDropdown(host, "qty");
+  assert.equal(d.range.hidden, false, "dropdown opens in Range mode");
+  assert.equal(d.hi.value, "100");
+  assert.equal(d.empty.checked, true);
+  host = await filteredTable({ qty: { from: "100", type: "number" } });
+  assert.deepEqual(shownNames(host), ["b", "c"], "type = number reads string bounds as numbers");
+});
+
+test("filters config: time ranges from strings, dates cover the day, presets tick", async () => {
+  let host = await filteredTable({ ts: { from: "2026-08-29 09:30", to: "2026-08-29" } });
+  assert.deepEqual(shownNames(host), ["b"], "a date `to` runs to the next midnight");
+  assert.equal(filterTitle(host, "ts"), "2026-08-29 09:30 – 2026-08-29 23:59:59");
+  let d = openDropdown(host, "ts");
+  assert.equal(d.lo.value, "2026-08-29T09:30");
+  assert.equal(d.hi.value, "2026-08-29T23:59:59", "a date bound restores as the last second of the day");
+  host = await filteredTable({ ts: { from: "2026-08-30" } });
+  assert.deepEqual(shownNames(host), ["c"]);
+  const realNow = Date.now;
+  Date.now = () => Date.UTC(2026, 7, 29, 10, 20, 0);
+  try {
+    host = await filteredTable({ ts: { preset: "1h" } });
+    assert.deepEqual(shownNames(host), ["b"], "09:20 – 10:20");
+    assert.equal(filterTitle(host, "ts"), "Last hour");
+    assert.ok([...pendingTimers.values()].some(t => t.ms === 30000), "preset re-apply scheduled at init");
+    d = openDropdown(host, "ts");
+    assert.ok(d.presets[1].classList.contains("active"));
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("filters config honors `types` and epoch bounds", async () => {
+  const { host, io } = await createTable({
+    protocol: "query", columns: ["name", "t"],
+    types: { t: { type: "time", unit: "ms" } },
+    filters: { t: { from: 1700000000000 } },
+  });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", t: 1699999999000 },
+    { _mkio_row: "2", name: "b", t: 1700000000000 },
+  ]);
+  assert.deepEqual(shownNames(host), ["b"], "a number bound on a unit column is an epoch, not a number range");
+  const d = openDropdown(host, "t");
+  assert.equal(d.lo.value, "2023-11-14T22:13:20");
+});
+
+test("filters config: bad entries warn and are skipped, others still apply", async () => {
+  const [host, warned] = await withWarnings(() => filteredTable({
+    status: ["open"],
+    qty: { from: "abc", type: "number" },
+    ts: { from: "2026-08-29T09:30Z" },
+    name: { preset: "yesterday" },
+    x: 42,
+  }));
+  assert.deepEqual(shownNames(host), ["a"], "the good filter applied");
+  assert.equal(Object.keys(host._paneEl._filters.get()).join(), "status");
+  assert.match(warned.find(w => w.includes("filters.qty")), /bad bound 'abc'/);
+  assert.match(warned.find(w => w.includes("filters.ts")), /bad from '2026-08-29T09:30Z' for a datetime column/);
+  assert.match(warned.find(w => w.includes("filters.name")), /unknown preset 'yesterday'/);
+  assert.match(warned.find(w => w.includes("filters.x")), /expected a value list or an object/);
+});
+
+test("pane reopen restores the configured filters, not the interactive ones", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "status"], filters: { status: { exclude: ["closed"] } } });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  const f = valueFilterCtl(host, "status");
+  f.set("open", false);
+  assert.deepEqual(shownNames(host), ["c"]);
+  for (const fn of host._paneEl._ev["mkui-pane-close"] ?? []) fn();
+  for (const fn of host._paneEl._ev["mkui-pane-open"] ?? []) fn();
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  assert.deepEqual(shownNames(host), ["a", "c"], "back to the config default");
+  assert.deepEqual(host._paneEl._filters.get(), { status: { exclude: ["closed"] } });
+});
+
+test("_filters.set replaces or merges, null clears a column, get round-trips", async () => {
+  const host = await filteredTable({ status: ["open", "new"] });
+  const api = host._paneEl._filters;
+  api.set({ qty: { from: 100 } });
+  assert.deepEqual(shownNames(host), ["b", "c"], "set replaces the whole map");
+  assert.equal(filterTitle(host, "status"), "", "the status filter is gone");
+  api.set({ status: { exclude: ["closed"] } }, { merge: true });
+  assert.deepEqual(shownNames(host), ["c"], "merge keeps the qty range");
+  api.set({ qty: null }, { merge: true });
+  assert.deepEqual(shownNames(host), ["a", "c"], "null clears one column under merge");
+  api.set({ ts: { from: "2026-08-29 09:30", to: "2026-08-30", empty: true }, qty: { to: 300 } }, { merge: true });
+  assert.deepEqual(shownNames(host), ["c"], "a is before 09:30, b and d are closed");
+  const got = api.get();
+  assert.deepEqual(got, {
+    status: { exclude: ["closed"] },
+    ts: { type: "time", from: "2026-08-29T09:30", to: "2026-08-30T23:59:59", empty: true },
+    qty: { type: "number", from: null, to: 300, empty: false },
+  });
+  // Round trip: feeding get() back yields the same view.
+  api.set({});
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"]);
+  api.set(got);
+  assert.deepEqual(shownNames(host), ["c"], "round-tripped filters reproduce the view");
+  // Interactive changes are visible through get().
+  valueFilterCtl(host, "status").selectAll();
+  assert.equal(api.get().status, undefined);
+});
+
+test("filters config judges stream pages and subpub snapshots by intent", async () => {
+  const { host, io } = await createTable({ protocol: "stream", columns: ["name", "status"], maxcount: 2, filters: { status: ["open", "new"] } });
+  triggerVisible(io);
+  lastSubscribe().opts.onPage([
+    { _mkio_ref: streamRef(1), name: "a", status: "open" },
+    { _mkio_ref: streamRef(2), name: "b", status: "closed" },
+  ], { hasmore: true, ref: "p1" });
+  assert.deepEqual(shownNames(host), ["a"]);
+  const [, , nextBtn] = byClass(host, "mkui-table-paging")[0]._ch;
+  nextBtn._ev.click[0]();
+  lastSubscribe().opts.onPage([
+    { _mkio_ref: streamRef(3), name: "c", status: "new" },
+    { _mkio_ref: streamRef(4), name: "d", status: "other" },
+  ], { hasmore: false, ref: "p2" });
+  assert.deepEqual(shownNames(host), ["c"], "the inclusion applies to the next page too");
+  const sp = await createTable({ protocol: "subpub", topic: ["x", "y"], filters: { status: { exclude: ["closed"] } } });
+  triggerVisible(sp.io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_topic: "x", name: "x", status: "open" },
+    { _mkio_topic: "y", name: "y", status: "closed" },
+  ]);
+  assert.deepEqual(shownNames(sp.host), ["x"]);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_topic: "x", name: "x", status: "closed" },
+    { _mkio_topic: "y", name: "y", status: "open" },
+  ]);
+  assert.deepEqual(shownNames(sp.host), ["y"], "a replacing snapshot is re-filtered");
+});
+
+test("filters config uses a `types` parse format and includes empties on time ranges", async () => {
+  const { host, io } = await createTable({
+    protocol: "query", columns: ["name", "d"],
+    types: { d: { type: "time", parse: "%d/%m/%Y %H:%M" } },
+    filters: { d: { from: "2026-03-04", empty: true } },
+  });
+  assert.equal(filterTitle(host, "d"), "≥ 2026-03-04 00:00:00 (+ empty)", "described before any data arrives");
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", d: "03/03/2026 23:59" },
+    { _mkio_row: "2", name: "b", d: "04/03/2026 00:00" },
+    { _mkio_row: "3", name: "c", d: "" },
+    { _mkio_row: "4", name: "d", d: "garbage" },
+  ]);
+  assert.deepEqual(shownNames(host), ["b", "c", "d"], "parsed by the declared format; blank and unparseable pass with empty");
+  const d = openDropdown(host, "d");
+  assert.equal(d.lo.type, "datetime-local", "the parse format has clock fields, so the column is a date-time");
+  assert.equal(d.lo.value, "2026-03-04T00:00:00", "a date bound restores as that day's midnight");
+  assert.equal(d.empty.checked, true);
+});
+
+test("filters config: local-tz columns read bounds as local time; a clock bound makes a time-of-day range", async () => {
+  const { host, io } = await createTable({
+    protocol: "query", columns: ["name", "t", "clock"],
+    types: { t: { type: "time", tz: "local" } },
+    filters: { t: { from: "2026-08-29 09:30" } },
+  });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", t: "2026-08-29 09:00:00", clock: "08:00" },
+    { _mkio_row: "2", name: "b", t: "2026-08-29 09:30:00", clock: "09:45" },
+    { _mkio_row: "3", name: "c", t: "2026-08-29 10:00:00", clock: "10:15" },
+  ]);
+  assert.deepEqual(shownNames(host), ["b", "c"], "naive local values compare against a local bound");
+  host._paneEl._filters.set({ clock: { from: "09:00", to: "10:00" } });
+  assert.deepEqual(shownNames(host), ["b"], "a HH:MM bound on a clock column filters by time of day");
+  assert.deepEqual(host._paneEl._filters.get(), { clock: { type: "time", from: "09:00", to: "10:00", empty: false } });
+  assert.equal(filterTitle(host, "clock"), "09:00 – 10:00");
+});
+
+test("setFilters closes an open dropdown, rejects non-object maps, and keeps sort order", async () => {
+  const host = await filteredTable({});
+  clickHeader(getThs(host).find(t => t.dataset.col === "name"));
+  clickHeader(getThs(host).find(t => t.dataset.col === "name")); // desc
+  assert.deepEqual(shownNames(host), ["d", "c", "b", "a"]);
+  openDropdown(host, "status");
+  assert.equal(host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).length, 1);
+  const [, warned] = await withWarnings(() => host._paneEl._filters.set(["open"]));
+  assert.equal(host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).length, 0, "dropdown closed");
+  assert.match(warned[0], /filters must map column names to filters/);
+  assert.deepEqual(shownNames(host), ["d", "c", "b", "a"], "a rejected map leaves the view alone");
+  host._paneEl._filters.set({ status: { exclude: ["closed"] } });
+  assert.deepEqual(shownNames(host), ["c", "a"], "sort order survives a programmatic filter");
+});
+
+test("filters config: an exclusion of nothing and an empty list behave like the dropdown", async () => {
+  let host = await filteredTable({ status: { exclude: [] } });
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"], "excluding nothing is no filter");
+  assert.equal(filterTitle(host, "status"), "");
+  host = await filteredTable({ status: [] });
+  assert.deepEqual(shownNames(host), [], "including nothing hides everything");
+  assert.equal(filterTitle(host, "status"), "0 values");
+  host = await filteredTable({ qty: { include: [50, null] } });
+  assert.deepEqual(shownNames(host), ["a", "d"], "non-string values are matched as cell text; null is the empty cell");
+});

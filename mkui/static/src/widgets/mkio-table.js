@@ -1793,6 +1793,139 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return s;
   }
 
+  /* ── Filter specs ─────────────────────────────────────────────────── */
+
+  // A filter can be described as well as clicked. `filters = { col =
+  // <filter> }` in the pane spec seeds the table — applied before any data
+  // arrives, and again on pane reopen, which drops whatever was set
+  // interactively. The same shape drives the programmatic hook
+  // (`paneEl._filters.set(map, { merge })` / `.get()`), the workspace's
+  // `setPaneFilters`, and the `table.filter` action. Shapes:
+  //   ["a", "b"]                            show only those values
+  //   { include = [...] } / { exclude = [...] }   values filter with intent
+  //   { from = 100, to = 500, empty = true }      number range
+  //   { from = "2026-03-01", to = "2026-03-02T09:30" }   time range
+  //   { preset = "today" | "1h" | "15m" }         relative time range
+  //   { type = "number" | "time", ... }     fixes a range's frame when the
+  //                                         bounds don't (`types` wins)
+  //   null / ""                              clears the column
+  // A range's frame is inferred from the bounds — numbers make a number
+  // range, strings a time range — because config is parsed before the data
+  // that would otherwise say. Time bounds take the input-control forms
+  // (`YYYY-MM-DD`, `YYYY-MM-DD HH:MM[:SS]`, `HH:MM[:SS]`; a date on a
+  // date-time column covers the whole day, like the dropdown), or epoch
+  // numbers on a `unit` column. A bad entry warns and is skipped.
+  function filterFromSpec(col, s) {
+    if (s == null || s === "") return null;
+    if (Array.isArray(s)) s = { include: s };
+    if (typeof s !== "object") throw new Error("expected a value list or an object");
+    const strs = (a) => (Array.isArray(a) ? a : [a]).map((v) => v == null ? "" : String(v));
+    if (s.include !== undefined || s.exclude !== undefined) {
+      if (s.include !== undefined && s.exclude !== undefined) throw new Error("include and exclude are exclusive");
+      const mode = s.include !== undefined ? "include" : "exclude";
+      const values = new Set(strs(s[mode]));
+      return mode === "exclude" && values.size === 0 ? null : { kind: "values", mode, values };
+    }
+    const preset = s.preset ?? null;
+    const empty = s.empty === true;
+    const blank = (v) => v == null || v === "";
+    if (blank(s.from) && blank(s.to) && !preset && !empty) throw new Error("expected include, exclude, from, to, or preset");
+    const declared = colTypes[col]?.type;
+    const type = declared ?? s.type ?? (preset ? "time" : typeof (blank(s.from) ? s.to : s.from) === "number" ? "number" : "time");
+    if (type === "text") throw new Error("a text column has no range");
+    if (type !== "number" && type !== "time") throw new Error(`unknown type '${type}'`);
+    if (type === "number") {
+      if (preset) throw new Error("presets need a time column");
+      const num = (v) => {
+        if (blank(v)) return null;
+        const n = Number(v);
+        if (!Number.isFinite(n)) throw new Error(`bad bound '${v}'`);
+        return n;
+      };
+      const lo = num(s.from), hi = num(s.to);
+      return {
+        kind: "range", type, lo, hi, preset: null, empty,
+        loText: lo === null ? "" : String(lo), hiText: hi === null ? "" : String(hi),
+        timeKind: null, spec: {}, localTz: false,
+      };
+    }
+    if (preset && !PRESETS[preset]) throw new Error(`unknown preset '${preset}': use ${Object.keys(PRESETS).join(", ")}`);
+    const tspec = timeSpec(col), localTz = isLocalCol(col);
+    const norm = (v) => blank(v) ? null : typeof v === "number" ? v : String(v).trim().replace(" ", "T");
+    const from = preset ? null : norm(s.from), to = preset ? null : norm(s.to);
+    const textKind = (v) => typeof v === "string" ? detectTimeKind(v) : null;
+    const kind = kindForSpec(tspec) ?? textKind(from) ?? textKind(to) ?? colStats.get(col)?.timeKind ?? "datetime";
+    // Seconds for a bound plus the text the dropdown restores: the typed
+    // text when it is already in the column's form, else the bound
+    // converted (a date on a date-time column ends the day at 23:59:59, so
+    // re-committing the text reproduces the exclusive midnight).
+    const bound = (v, edge) => {
+      if (v === null) return { secs: null, text: "" };
+      const name = edge === "lo" ? "from" : "to";
+      if (typeof v === "number") {
+        if (!tspec.unit) throw new Error(`${name} is a number but the column is not an epoch (types.${col}.unit)`);
+        const secs = parseTime(v, tspec);
+        return { secs, text: boundToInput(edge === "hi" ? secs - 1 : secs, kind, localTz) };
+      }
+      const k = detectTimeKind(v);
+      if (!k || (k === "time") !== (kind === "time")) throw new Error(`bad ${name} '${v}' for a ${kind} column`);
+      const secs = inputToBound(v, k, edge, localTz);
+      if (secs === null) throw new Error(`bad ${name} '${v}' for a ${kind} column`);
+      const text = k === kind ? v : boundToInput(edge === "hi" ? secs - 1 : secs, kind, localTz);
+      return { secs, text };
+    };
+    const lo = bound(from, "lo"), hi = bound(to, "hi");
+    return {
+      kind: "range", type, lo: lo.secs, hi: hi.secs, preset, empty,
+      loText: lo.text, hiText: hi.text, timeKind: kind, spec: tspec, localTz,
+    };
+  }
+
+  // The inverse: a filter in the shape filterFromSpec reads, so filters
+  // round-trip through get/set and can be saved as config.
+  function filterToSpec(f) {
+    if (f.kind === "values") return { [f.mode]: [...f.values] };
+    const out = { type: f.type };
+    if (f.preset) out.preset = f.preset;
+    else {
+      out.from = f.type === "number" ? f.lo : (f.loText || null);
+      out.to = f.type === "number" ? f.hi : (f.hiText || null);
+    }
+    out.empty = f.empty;
+    return out;
+  }
+
+  function loadFilterSpecs(map, merge = false) {
+    if (!merge) filters.clear();
+    if (map == null) return;
+    if (typeof map !== "object" || Array.isArray(map)) {
+      console.warn("[mkio-table] filters must map column names to filters");
+      return;
+    }
+    for (const [col, s] of Object.entries(map)) {
+      try {
+        const f = filterFromSpec(col, s);
+        if (f) filters.set(col, f); else filters.delete(col);
+      } catch (e) {
+        console.warn(`[mkio-table] bad filters.${col}: ${e.message}`);
+      }
+    }
+  }
+
+  function setFilters(map, { merge = false } = {}) {
+    closeDropdown();
+    loadFilterSpecs(map, merge);
+    updateHeaderState();
+    applyVisibility();
+    syncPresetTimer();
+  }
+
+  function getFilters() {
+    const out = {};
+    for (const [col, f] of filters) out[col] = filterToSpec(f);
+    return out;
+  }
+
   function applyVisibility() {
     markViewDirty();
     // Selection follows visibility: filtered-out rows drop from the row
@@ -3038,6 +3171,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   let hideTimer = null;
   const HIDE_TIMEOUT = 5 * 60 * 1000;
 
+  // Default filters from config, before any data (and before the observer
+  // can subscribe): the header, if already rendered, shows them as active.
+  loadFilterSpecs(spec.filters);
+  updateHeaderState();
+  syncPresetTimer();
+
   const paneEl = host.closest("mkui-pane");
   if (paneEl) {
     // Edit hook: the workspace routes Ctrl/Cmd+C, Ctrl/Cmd+A, Escape, and
@@ -3047,6 +3186,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       selectAll: () => { selectAllRows(); return true; },
       clearSelection: () => clearSelectionKeepFocus(),
     };
+    // Filter hook: `workspace.setPaneFilters` / `getPaneFilters` and the
+    // `table.filter` action reach the column filters through it.
+    paneEl._filters = { set: setFilters, get: getFilters };
     paneEl.addEventListener("mkui-pane-close", () => {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       if (presetTimer) { clearTimeout(presetTimer); presetTimer = null; }
@@ -3069,7 +3211,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       columns = spec.columns ?? null;
       displayOrder = null;
       sortKeys.length = 0;
-      filters.clear();
+      loadFilterSpecs(spec.filters);
       syncPresetTimer();
       resetColWidths();
       clearSelection();
