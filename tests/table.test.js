@@ -297,6 +297,10 @@ function findByClass(el, cls) {
   return el._ch.find(c => c.className === cls) ?? null;
 }
 
+// The table always scrolls inside its own area (the toolbar sits above it
+// in the pane's flex column), so viewport mocks target that element.
+const sh = (host) => findByClass(host, "mkui-table-scroll");
+
 function getTable(host) {
   const table = findByClass(host, "mkui-table")
     ?? host._ch.find(h => findByClass(h, "mkui-table"))?._ch.find(c => c.className === "mkui-table");
@@ -2275,11 +2279,11 @@ test("live stream at the tail follows an inserted row", async () => {
   triggerVisible(io);
   lastSubscribe().opts.onSnapshot(makeStreamRows(20));
   flushRaf();
-  parkAtTail(host);
+  parkAtTail(sh(host));
   lastSubscribe().opts.onUpdate("insert", makeStreamRows(1, 20)[0]);
-  host.scrollHeight = 520; // the new row grew the scroll extent
+  sh(host).scrollHeight = 520; // the new row grew the scroll extent
   flushRaf();
-  assert.equal(host.scrollTop, 520, "viewport jumped to the new tail");
+  assert.equal(sh(host).scrollTop, 520, "viewport jumped to the new tail");
 });
 
 test("live stream scrolled up is not yanked by an insert", async () => {
@@ -2287,12 +2291,12 @@ test("live stream scrolled up is not yanked by an insert", async () => {
   triggerVisible(io);
   lastSubscribe().opts.onSnapshot(makeStreamRows(20));
   flushRaf();
-  parkAtTail(host);
-  host.scrollTop = 100; // user scrolled up to inspect history
+  parkAtTail(sh(host));
+  sh(host).scrollTop = 100; // user scrolled up to inspect history
   lastSubscribe().opts.onUpdate("insert", makeStreamRows(1, 20)[0]);
-  host.scrollHeight = 520;
+  sh(host).scrollHeight = 520;
   flushRaf();
-  assert.equal(host.scrollTop, 100, "viewport left where the user put it");
+  assert.equal(sh(host).scrollTop, 100, "viewport left where the user put it");
 });
 
 test("within the 8px slack of the bottom still counts as the tail", async () => {
@@ -2300,12 +2304,12 @@ test("within the 8px slack of the bottom still counts as the tail", async () => 
   triggerVisible(io);
   lastSubscribe().opts.onSnapshot(makeStreamRows(20));
   flushRaf();
-  host.scrollHeight = 500;
-  host._clientHeight = 100;
-  host.scrollTop = 392; // 392 + 100 == 500 - 8, the slack boundary
+  sh(host).scrollHeight = 500;
+  sh(host)._clientHeight = 100;
+  sh(host).scrollTop = 392; // 392 + 100 == 500 - 8, the slack boundary
   lastSubscribe().opts.onUpdate("insert", makeStreamRows(1, 20)[0]);
   flushRaf();
-  assert.equal(host.scrollTop, 500, "8px from the bottom still follows");
+  assert.equal(sh(host).scrollTop, 500, "8px from the bottom still follows");
 });
 
 test("live stream at the tail follows a delta batch", async () => {
@@ -2313,11 +2317,11 @@ test("live stream at the tail follows a delta batch", async () => {
   triggerVisible(io);
   lastSubscribe().opts.onSnapshot(makeStreamRows(20));
   flushRaf();
-  parkAtTail(host);
+  parkAtTail(sh(host));
   lastSubscribe().opts.onDelta(makeStreamRows(5, 20).map((row) => ({ op: "insert", row })));
-  host.scrollHeight = 600;
+  sh(host).scrollHeight = 600;
   flushRaf();
-  assert.equal(host.scrollTop, 600, "delta batch scrolled the tail into view");
+  assert.equal(sh(host).scrollTop, 600, "delta batch scrolled the tail into view");
 });
 
 test("resumed snapshot keeps a tail-parked viewport at the tail", async () => {
@@ -2325,11 +2329,11 @@ test("resumed snapshot keeps a tail-parked viewport at the tail", async () => {
   triggerVisible(io);
   lastSubscribe().opts.onSnapshot(makeStreamRows(20));
   flushRaf();
-  parkAtTail(host);
+  parkAtTail(sh(host));
   lastSubscribe().opts.onSnapshot(makeStreamRows(10, 20));
-  host.scrollHeight = 700;
+  sh(host).scrollHeight = 700;
   flushRaf();
-  assert.equal(host.scrollTop, 700, "snapshot rows scrolled into view");
+  assert.equal(sh(host).scrollTop, 700, "snapshot rows scrolled into view");
 });
 
 test("query updates never tail-follow", async () => {
@@ -2337,12 +2341,12 @@ test("query updates never tail-follow", async () => {
   triggerVisible(io);
   lastSubscribe().opts.onSnapshot(makeRows(20));
   flushRaf();
-  parkAtTail(host);
-  const before = host.scrollTop;
+  parkAtTail(sh(host));
+  const before = sh(host).scrollTop;
   lastSubscribe().opts.onUpdate("insert", makeRows(1, 100)[0]);
-  host.scrollHeight = 520;
+  sh(host).scrollHeight = 520;
   flushRaf();
-  assert.equal(host.scrollTop, before, "query viewport never moves on updates");
+  assert.equal(sh(host).scrollTop, before, "query viewport never moves on updates");
 });
 
 test("Go Live jumps to the tail even from the top of the page", async () => {
@@ -2429,7 +2433,7 @@ test("initial snapshot locks column widths into the colgroup", async () => {
 
 test("default column width is capped at 50% of the pane width", async () => {
   const { host, io } = await createTable({ protocol: "query" });
-  host._clientWidth = 150;
+  sh(host)._clientWidth = 150;
   triggerVisible(io);
   lastSubscribe().opts.onSnapshot(makeRows(5));
   const cols = getColgroup(host)._ch;
@@ -2903,7 +2907,7 @@ test("header row ends with a filler cell that absorbs extra width", async () => 
 
 test("only the visible slice of rows is rendered", async () => {
   const { host, io } = await createTable({ protocol: "query" });
-  host._clientHeight = 200; // 10 rows @ 20px, +10 overscan
+  sh(host)._clientHeight = 200; // 10 rows @ 20px, +10 overscan
   triggerVisible(io);
   lastSubscribe().opts.onSnapshot(makeRows(100));
   assert.equal(getTbody(host)._ch.length, 20, "10 visible + 10 overscan");
@@ -2914,12 +2918,12 @@ test("only the visible slice of rows is rendered", async () => {
 
 test("scrolling re-slices the rendered window", async () => {
   const { host, io } = await createTable({ protocol: "query" });
-  host._clientHeight = 200;
+  sh(host)._clientHeight = 200;
   triggerVisible(io);
   lastSubscribe().opts.onSnapshot(makeRows(100));
 
-  host.scrollTop = 1000; // rows 50-60 in view
-  for (const fn of host._ev.scroll ?? []) fn();
+  sh(host).scrollTop = 1000; // rows 50-60 in view
+  for (const fn of sh(host)._ev.scroll ?? []) fn();
 
   const rendered = getTbody(host)._ch;
   assert.equal(rendered[0].dataset.ref, "40", "starts at first overscan row");
@@ -2944,7 +2948,7 @@ test("spacer colspan tracks the column count", async () => {
 
 test("100k-row snapshot keeps the DOM small", async () => {
   const { host, io } = await createTable({ protocol: "query" });
-  host._clientHeight = 200;
+  sh(host)._clientHeight = 200;
   triggerVisible(io);
   lastSubscribe().opts.onSnapshot(makeRows(100000));
   flushRaf();
@@ -2955,7 +2959,7 @@ test("100k-row snapshot keeps the DOM small", async () => {
 
 test("virtualized rows preserve live update semantics", async () => {
   const { host, io } = await createTable({ protocol: "query" });
-  host._clientHeight = 200;
+  sh(host)._clientHeight = 200;
   triggerVisible(io);
   const sub = lastSubscribe();
   sub.opts.onSnapshot(makeRows(100));
@@ -3443,8 +3447,8 @@ test("shift+arrow-extended rect also tracks its records across a sort", async ()
     { _mkio_row: "2", name: "alice" },
     { _mkio_row: "3", name: "bob" },
   ]);
-  keyDown(host, "ArrowDown");                     // place cursor on carol
-  keyDown(host, "ArrowDown", { shiftKey: true }); // rect carol..alice
+  keyDown(sh(host), "ArrowDown");                     // place cursor on carol
+  keyDown(sh(host), "ArrowDown", { shiftKey: true }); // rect carol..alice
   clickHeader(getThs(host)[0]);                   // asc: alice, bob, carol
   const trs = dataRows(host);
   assert.ok(trs[0]._ch[0].classList.contains("mkui-cell-sel"), "alice stays selected");
@@ -3500,10 +3504,10 @@ test("filtered-out rect members reappear selected when the filter is relaxed", a
 test("arrow keys move the focused cell; first press just places it", async () => {
   const { host } = await createSelTable();
   const trs = dataRows(host);
-  keyDown(host, "ArrowDown");
+  keyDown(sh(host), "ArrowDown");
   assert.ok(trs[0]._ch[1].classList.contains("mkui-cell-focus"), "cursor placed at first cell");
-  keyDown(host, "ArrowDown");
-  keyDown(host, "ArrowRight");
+  keyDown(sh(host), "ArrowDown");
+  keyDown(sh(host), "ArrowRight");
   assert.ok(trs[1]._ch[2].classList.contains("mkui-cell-focus"));
   assert.ok(!trs[0]._ch[1].classList.contains("mkui-cell-focus"));
 });
@@ -3512,8 +3516,8 @@ test("shift+arrow extends a cell rect from the anchor", async () => {
   const { host } = await createSelTable();
   const trs = dataRows(host);
   pointerDown(trs[0], 1);
-  keyDown(host, "ArrowDown", { shiftKey: true });
-  keyDown(host, "ArrowRight", { shiftKey: true });
+  keyDown(sh(host), "ArrowDown", { shiftKey: true });
+  keyDown(sh(host), "ArrowRight", { shiftKey: true });
   for (let r = 0; r <= 1; r++)
     for (let c = 1; c <= 2; c++)
       assert.ok(trs[r]._ch[c].classList.contains("mkui-cell-sel"));
@@ -3523,13 +3527,13 @@ test("space selects the focused row; ctrl+space toggles more rows in", async () 
   const { host } = await createSelTable();
   const trs = dataRows(host);
   pointerDown(trs[1], 1);
-  keyDown(host, " ");
+  keyDown(sh(host), " ");
   assert.ok(trs[1].classList.contains("mkui-selected"));
-  keyDown(host, "ArrowDown");
+  keyDown(sh(host), "ArrowDown");
   // plain arrow cleared the row selection (back to cell mode)
   assert.ok(!trs[1].classList.contains("mkui-selected"));
-  keyDown(host, " ");
-  keyDown(host, "ArrowUp");
+  keyDown(sh(host), " ");
+  keyDown(sh(host), "ArrowUp");
   assert.ok(!trs[2].classList.contains("mkui-selected"));
 });
 
@@ -3537,12 +3541,12 @@ test("shift+arrow in row mode grows the row range", async () => {
   const { host } = await createSelTable();
   const trs = dataRows(host);
   pointerDown(trs[0], 0);
-  keyDown(host, "ArrowDown", { shiftKey: true });
-  keyDown(host, "ArrowDown", { shiftKey: true });
+  keyDown(sh(host), "ArrowDown", { shiftKey: true });
+  keyDown(sh(host), "ArrowDown", { shiftKey: true });
   assert.ok(trs[0].classList.contains("mkui-selected"));
   assert.ok(trs[1].classList.contains("mkui-selected"));
   assert.ok(trs[2].classList.contains("mkui-selected"));
-  keyDown(host, "ArrowUp", { shiftKey: true });
+  keyDown(sh(host), "ArrowUp", { shiftKey: true });
   assert.ok(!trs[2].classList.contains("mkui-selected"), "range shrinks back");
 });
 
@@ -3550,9 +3554,9 @@ test("Home/End jump columns; ctrl+End jumps to the last cell", async () => {
   const { host } = await createSelTable();
   const trs = dataRows(host);
   pointerDown(trs[1], 2);
-  keyDown(host, "Home");
+  keyDown(sh(host), "Home");
   assert.ok(trs[1]._ch[1].classList.contains("mkui-cell-focus"));
-  keyDown(host, "End", { ctrlKey: true });
+  keyDown(sh(host), "End", { ctrlKey: true });
   assert.ok(trs[3]._ch[2].classList.contains("mkui-cell-focus"));
 });
 
@@ -3774,7 +3778,7 @@ test("shift+space is an alias for row select (Excel muscle memory)", async () =>
   const { host } = await createSelTable();
   const trs = dataRows(host);
   pointerDown(trs[2], 1);
-  keyDown(host, " ", { shiftKey: true });
+  keyDown(sh(host), " ", { shiftKey: true });
   assert.ok(trs[2].classList.contains("mkui-selected"));
 });
 
@@ -4370,9 +4374,9 @@ test("closing the pane publishes null", async () => {
 
 test("select follows the cursor as the arrow keys move it", async () => {
   const { host, state } = await createSelTable({ select: { state: "current" } });
-  keyDown(host, "ArrowDown");                // first press only places the cursor
+  keyDown(sh(host), "ArrowDown");                // first press only places the cursor
   assert.equal(state.get("current").name, "row-0");
-  keyDown(host, "ArrowDown");
+  keyDown(sh(host), "ArrowDown");
   assert.equal(state.get("current").name, "row-1");
 });
 
@@ -4991,4 +4995,202 @@ test("filters config: an exclusion of nothing and an empty list behave like the 
   assert.equal(filterTitle(host, "status"), "0 values");
   host = await filteredTable({ qty: { include: [50, null] } });
   assert.deepEqual(shownNames(host), ["a", "d"], "non-string values are matched as cell text; null is the empty cell");
+});
+
+/* ── Sort & filter chips ─────────────────────────────────────────────── */
+// The toolbar's right side lists the active sort keys and filters as chips
+// so they can be seen and cleared without scrolling the header into view.
+// The toolbar exists only while it has buttons or chips.
+
+function chipStrip(host) {
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar")) ?? null;
+  const chips = toolbar?._ch.find(c => c.className === "mkui-table-chips") ?? null;
+  const texts = (cls) => byClass(chips, cls).map(c => byClass(c, "mkui-chip-text")[0].textContent);
+  const chipEl = (cls, col) => byClass(chips, cls).find(c => c.dataset.col === col);
+  return {
+    toolbar, chips,
+    sort: chips ? texts("mkui-chip mkui-chip-sort") : [],
+    filter: chips ? texts("mkui-chip mkui-chip-filter") : [],
+    sortDirs: chips ? byClass(chips, "mkui-chip mkui-chip-sort").map(c =>
+      String(c._ch[0]._ch[1]?.className).includes("caret-up") ? "asc" : "desc") : [],
+    flip: (col) => chipEl("mkui-chip mkui-chip-sort", col)._ch[0]._ev.click[0](),
+    dropSort: (col) => chipEl("mkui-chip mkui-chip-sort", col)._ch[1]._ev.click[0]({ stopPropagation() {} }),
+    open: (col) => chipEl("mkui-chip mkui-chip-filter", col)._ch[0]._ev.click[0](),
+    dropFilter: (col) => chipEl("mkui-chip mkui-chip-filter", col)._ch[1]._ev.click[0]({ stopPropagation() {} }),
+    groupIcon: (cls) => byClass(chips, "mkui-chip-group " + cls)[0]?._ch[0]._ch[0] ?? null,
+  };
+}
+
+test("chips: no toolbar until something is active; chips name the state and go away when cleared", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "status"], labels: { status: "Status" } });
+  assert.equal(chipStrip(host).toolbar, null, "a plain table has no toolbar");
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  clickHeader(getThs(host)[0]);
+  let s = chipStrip(host);
+  assert.ok(s.toolbar && s.toolbar._parent === host, "sorting brings the toolbar in");
+  assert.deepEqual(s.sort, ["name"]);
+  assert.deepEqual(s.sortDirs, ["asc"]);
+  assert.deepEqual(s.filter, []);
+  assert.ok(s.groupIcon("mkui-chips-sort"), "sort group leads with its icon");
+  assert.deepEqual(s.groupIcon("mkui-chips-sort")._ch.map(c => c.className),
+    ["mkui-icon mkui-icon-sort", "mkui-chip-icon-x"], "the group icon wears an × badge: it clears");
+  assert.equal(s.groupIcon("mkui-chips-filter"), null);
+  host._paneEl._filters.set({ status: { exclude: ["closed"] } });
+  s = chipStrip(host);
+  assert.deepEqual(s.filter, ["Status: All but 1 values"], "the label and the header tooltip text");
+  assert.equal(byClass(s.chips, "mkui-chip mkui-chip-filter")[0].title, "Status: All but 1 values");
+  assert.equal(s.toolbar._ch[0], s.chips, "without buttons the chip cluster is the toolbar's only child");
+  // Sort chips precede filter chips; each group's icon clears that group.
+  assert.deepEqual(s.chips._ch.map(c => c.className), ["mkui-chip-group mkui-chips-sort", "mkui-chip-group mkui-chips-filter"]);
+  s.groupIcon("mkui-chips-sort")._ev.click[0]();
+  assert.deepEqual(shownNames(host), ["a", "c"], "sort gone, filter still on");
+  chipStrip(host).groupIcon("mkui-chips-filter")._ev.click[0]();
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"], "insertion order, nothing filtered");
+  assert.deepEqual(headerIcon(getThs(host)[0]), { kind: "hamburger", extra: 0 });
+  assert.equal(chipStrip(host).toolbar, null, "toolbar gone again");
+  assert.equal(host._ch[0].className, "mkui-table-scroll", "the scroll area is back at the top");
+});
+
+test("chips: sort chips flip on click, × drops a key, the group icon clears the sort", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "status", "qty"] });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  const [thName, thStatus] = getThs(host);
+  clickHeader(thStatus);
+  clickHeader(thName, { shift: true });
+  let s = chipStrip(host);
+  assert.deepEqual(s.sort, ["status", "name"], "priority order");
+  s.flip("status");
+  s = chipStrip(host);
+  assert.deepEqual(s.sortDirs, ["desc", "asc"]);
+  assert.deepEqual(headerIcon(thStatus), { kind: "caret-down", dir: "desc", digit: "1", extra: 0 });
+  assert.deepEqual(shownNames(host), ["a", "c", "b", "d"], "open, new, closed(a-z within)");
+  s.dropSort("status");
+  s = chipStrip(host);
+  assert.deepEqual(s.sort, ["name"]);
+  assert.deepEqual(headerIcon(thName), { kind: "caret-up", dir: "asc", digit: null, extra: 0 }, "sole key loses its digit");
+  assert.deepEqual(headerIcon(thStatus), { kind: "hamburger", extra: 0 });
+  s.groupIcon("mkui-chips-sort")._ev.click[0]();
+  assert.deepEqual(chipStrip(host).sort, []);
+  assert.deepEqual(headerIcon(thName), { kind: "hamburger", extra: 0 });
+  assert.equal(chipStrip(host).toolbar, null);
+});
+
+test("chips: a filter chip opens its dropdown, × clears one filter, the group icon clears all", async () => {
+  const host = await filteredTable({ status: ["open", "new"], qty: { from: 100 } });
+  let s = chipStrip(host);
+  assert.deepEqual(s.filter, ["status: 2 values", "qty: ≥ 100"]);
+  assert.deepEqual(shownNames(host), ["c"]);
+  s.open("status");
+  const dd = host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown"));
+  assert.equal(dd.length, 1, "the column's dropdown opened");
+  assert.equal(byClass(dd[0], "mkui-filter-item").length, 3, "for the status column: closed, new, open");
+  s.open("status");
+  assert.equal(host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).length, 0, "clicking again toggles it closed");
+  s.open("qty");
+  assert.equal(host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).length, 1);
+  s.dropFilter("qty");
+  assert.equal(host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).length, 0, "clearing the open column closes its dropdown");
+  s = chipStrip(host);
+  assert.deepEqual(s.filter, ["status: 2 values"]);
+  assert.deepEqual(shownNames(host), ["a", "c"]);
+  assert.equal(filterTitle(host, "qty"), "", "header button cleared too");
+  host._paneEl._filters.set({ qty: { to: 100, empty: true } }, { merge: true });
+  s.groupIcon("mkui-chips-filter")._ev.click[0]();
+  assert.deepEqual(chipStrip(host).filter, []);
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"]);
+  assert.deepEqual(host._paneEl._filters.get(), {});
+});
+
+test("chips: buttons keep the first toolbar slots and the toolbar stays when chips clear", async () => {
+  const { host } = await createSelTable({
+    columns: ["name", "value"],
+    buttons: [{ label: "Act", action: { type: "action", name: "x" } }],
+  });
+  let s = chipStrip(host);
+  assert.ok(s.toolbar, "buttons alone show the toolbar");
+  assert.equal(s.toolbar._ch[0].className, "mkui-btn mkui-toolbar-btn");
+  assert.equal(s.toolbar._ch.at(-1), s.chips, "chip cluster is the last child");
+  assert.equal(s.chips._ch.length, 0, "empty until something is active");
+  clickHeader(getThs(host)[1]);
+  s = chipStrip(host);
+  assert.equal(s.toolbar._ch[0].className, "mkui-btn mkui-toolbar-btn", "button still first");
+  assert.deepEqual(s.sort, ["value"]);
+  s.groupIcon("mkui-chips-sort")._ev.click[0]();
+  s = chipStrip(host);
+  assert.ok(s.toolbar && s.toolbar._parent === host, "toolbar remains for the buttons");
+  assert.equal(s.chips._ch.length, 0);
+});
+
+test("chips: a filter chip on a column with no header yet does nothing", async () => {
+  const { host } = await createTable({ protocol: "query", filters: { status: ["open"] } });
+  const s = chipStrip(host);
+  assert.deepEqual(s.filter, ["status: 1 values"], "configured filters show before data or header");
+  s.open("status");
+  assert.equal(host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).length, 0);
+});
+
+/* ── Configured and programmatic sort ────────────────────────────────── */
+
+test("sort config seeds the order before data and shows in header and chips", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "qty"], sort: "-qty" });
+  assert.deepEqual(headerIcon(getThs(host)[1]), { kind: "caret-down", dir: "desc", digit: null, extra: 0 });
+  assert.deepEqual(chipStrip(host).sort, ["qty"]);
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  assert.deepEqual(shownNames(host), ["c", "b", "a", "d"], "250, 150, 50, blank");
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "5", name: "e", qty: "200" });
+  assert.deepEqual(shownNames(host), ["c", "e", "b", "a", "d"], "live inserts land at the sorted spot");
+  assert.deepEqual(host._paneEl._sort.get(), [{ col: "qty", dir: "desc" }]);
+});
+
+test("sort config takes names, {col, dir}, and arrays in priority order", async () => {
+  const host = await filteredTable({}, { sort: [{ col: "status" }, "-name"] });
+  assert.deepEqual(shownNames(host), ["d", "b", "c", "a"], "closed (d, b desc by name), new, open");
+  assert.deepEqual(host._paneEl._sort.get(), [{ col: "status", dir: "asc" }, { col: "name", dir: "desc" }]);
+  assert.deepEqual(chipStrip(host).sort, ["status", "name"]);
+  const [thName, thStatus] = getThs(host);
+  assert.deepEqual(headerIcon(thStatus), { kind: "caret-up", dir: "asc", digit: "1", extra: 0 });
+  assert.deepEqual(headerIcon(thName), { kind: "caret-down", dir: "desc", digit: "2", extra: 0 });
+});
+
+test("_sort.set replaces the order, null clears it, bad specs warn and leave it alone", async () => {
+  const host = await filteredTable({});
+  const api = host._paneEl._sort;
+  api.set("name");
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"]);
+  api.set({ col: "qty", dir: "desc" });
+  assert.deepEqual(shownNames(host), ["c", "b", "a", "d"]);
+  assert.deepEqual(api.get(), [{ col: "qty", dir: "desc" }]);
+  let [, warned] = await withWarnings(() => api.set({ col: "qty", dir: "sideways" }));
+  assert.match(warned[0], /bad sort: bad dir 'sideways'/);
+  assert.deepEqual(api.get(), [{ col: "qty", dir: "desc" }], "rejected spec leaves the sort alone");
+  [, warned] = await withWarnings(() => api.set(["name", "-name"]));
+  assert.match(warned[0], /listed twice/);
+  [, warned] = await withWarnings(() => api.set([42]));
+  assert.match(warned[0], /expected a column name or \{ col, dir \}/);
+  [, warned] = await withWarnings(() => api.set({ dir: "asc" }));
+  assert.match(warned[0], /expected a column name/);
+  api.set(null);
+  assert.deepEqual(api.get(), []);
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"], "insertion order restored");
+  assert.equal(chipStrip(host).toolbar, null);
+  api.set([]);
+  assert.deepEqual(api.get(), []);
+});
+
+test("pane reopen restores the configured sort, not the interactive one", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "qty"], sort: "-qty" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  clickHeader(getThs(host)[0]); // sort by name instead
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"]);
+  for (const fn of host._paneEl._ev["mkui-pane-close"] ?? []) fn();
+  for (const fn of host._paneEl._ev["mkui-pane-open"] ?? []) fn();
+  assert.deepEqual(chipStrip(host).sort, ["qty"], "chips reflect the reset before data");
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  assert.deepEqual(shownNames(host), ["c", "b", "a", "d"], "back to the config default");
+  assert.deepEqual(host._paneEl._sort.get(), [{ col: "qty", dir: "desc" }]);
 });

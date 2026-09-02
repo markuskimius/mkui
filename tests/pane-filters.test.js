@@ -77,3 +77,45 @@ test("no id targets the focused frame's active pane", () => {
   assert.equal(log[0][0], "b", "tab index 1 of the focused frame");
   assert.deepEqual(ws.getPaneFilters(), { x: [] });
 });
+
+/* ── Built-in actions ─────────────────────────────────────────────────── */
+// <mkui-app> can't be instantiated here (it needs the DOM), so guard the
+// wiring at the source: the table.* actions must hand their args to the
+// workspace routes above, defaulting the pane to the focused one.
+
+test("table.filter and table.sort actions route to the workspace", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../mkui/static/src/components/app.js", import.meta.url), "utf8");
+  assert.match(src, /registerAction\("table\.filter",\s*\(app, a = \{\}\) => ws\.setPaneFilters\(a\.pane \?\? null, a\.filters \?\? \{\}, \{ merge: a\.merge === true \}\)\)/);
+  assert.match(src, /registerAction\("table\.sort",\s*\(app, a = \{\}\) => ws\.setPaneSort\(a\.pane \?\? null, a\.sort \?\? null\)\)/);
+});
+
+/* ── Sort routing ─────────────────────────────────────────────────────── */
+// setPaneSort / getPaneSort go through the same resolution to a pane's
+// `_sort` hook.
+
+function makeSortWorkspace(log) {
+  const ws = makeWorkspace(log);
+  for (const [id, el] of ws._paneEls) if (el._filters) el._sort = hook(log, "sort:" + id);
+  const ensure = ws._ensurePaneEl;
+  ws._ensurePaneEl = (id) => {
+    const el = ensure(id);
+    if (el._filters) el._sort ??= hook(log, "sort:" + id);
+    return el;
+  };
+  return ws;
+}
+
+test("setPaneSort reaches the named pane's sort hook; getPaneSort reads it back", () => {
+  const log = [];
+  const ws = makeSortWorkspace(log);
+  assert.equal(ws.setPaneSort("a", "-ts"), true);
+  assert.deepEqual(log, [["sort:a", "-ts", undefined]]);
+  assert.equal(ws.getPaneSort("a"), "-ts");
+  assert.equal(ws.setPaneSort("plain", "x"), false, "a pane without the hook declines");
+  assert.equal(ws.setPaneSort("nope", "x"), false);
+  assert.equal(ws.getPaneSort("plain"), null);
+  assert.equal(ws.setPaneSort("parked", [{ col: "a", dir: "desc" }]), true, "never-shown pane is built first");
+  assert.equal(ws.setPaneSort(null, null), true, "no id targets the focused pane");
+  assert.equal(log.at(-1)[0], "sort:b");
+});

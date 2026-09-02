@@ -126,21 +126,27 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   /* ── DOM structure ───────────────────────────────────────────────── */
 
-  let scrollHost = host;
+  // The pane is a flex column: [toolbar] [scroll area] [progress | paging].
+  // The table always lives in its own scroll area so the toolbar — the
+  // selection buttons on the left, the sort/filter chips on the right —
+  // stays put while the table scrolls under it. The toolbar is in the DOM
+  // only while it has something to show: always with buttons, otherwise
+  // while a sort or filter is active (see "Sort & filter chips").
+  host.style.overflow = "hidden";
+  host.style.padding = "0";
+  host.style.display = "flex";
+  host.style.flexDirection = "column";
+
+  const scrollArea = document.createElement("div");
+  scrollArea.className = "mkui-table-scroll";
+  scrollArea.appendChild(table);
+  const scrollHost = scrollArea;
+  host.appendChild(scrollArea);
+
   let pagingToolbar = null;
   let prevBtn = null, nextBtn = null, pageInfo = null, liveBtn = null, refreshBtn = null;
 
   if (isPaged) {
-    host.style.overflow = "hidden";
-    host.style.padding = "0";
-    host.style.display = "flex";
-    host.style.flexDirection = "column";
-
-    const scrollArea = document.createElement("div");
-    scrollArea.className = "mkui-table-scroll";
-    scrollArea.appendChild(table);
-    scrollHost = scrollArea;
-
     pagingToolbar = document.createElement("div");
     pagingToolbar.className = "mkui-table-paging";
     prevBtn = document.createElement("button");
@@ -161,10 +167,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     refreshBtn.appendChild(icon("refresh"));
     refreshBtn.title = "Refresh page";
     pagingToolbar.append(prevBtn, pageInfo, nextBtn, liveBtn, refreshBtn);
-
-    host.append(scrollArea, pagingToolbar);
-  } else {
-    host.appendChild(table);
+    host.appendChild(pagingToolbar);
   }
 
   const progress = document.createElement("div");
@@ -172,31 +175,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   progress.style.display = "none";
   if (!isPaged) host.appendChild(progress);
 
-  /* ── Toolbar (buttons) ──────────────────────────────────────────── */
+  /* ── Toolbar (buttons + chips) ──────────────────────────────────── */
 
   const hasButtons = Array.isArray(spec.buttons) && spec.buttons.length > 0;
-  let toolbar = null;
+  const toolbar = document.createElement("div");
+  toolbar.className = "mkui-table-toolbar";
   const buttonEls = [];
-
-  if (hasButtons && !isPaged) {
-    host.style.overflow = "hidden";
-    host.style.padding = "0";
-    host.style.display = "flex";
-    host.style.flexDirection = "column";
-
-    const scrollArea = document.createElement("div");
-    scrollArea.className = "mkui-table-scroll";
-    host.removeChild(table);
-    scrollArea.appendChild(table);
-    if (!isPaged) host.removeChild(progress);
-    scrollHost = scrollArea;
-    host.appendChild(scrollArea);
-    if (!isPaged) host.appendChild(progress);
-  }
-
   if (hasButtons) {
-    toolbar = document.createElement("div");
-    toolbar.className = "mkui-table-toolbar";
     for (const btnSpec of spec.buttons) {
       const btn = document.createElement("button");
       btn.className = "mkui-btn mkui-toolbar-btn";
@@ -206,8 +191,20 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       toolbar.appendChild(btn);
       buttonEls.push({ el: btn, spec: btnSpec });
     }
-    host.insertBefore(toolbar, host.firstChild);
   }
+  // Buttons keep the first slots (tests and users find them there); the
+  // chip cluster is the last child, pushed to the right edge by CSS.
+  const chipsEl = document.createElement("div");
+  chipsEl.className = "mkui-table-chips";
+  toolbar.appendChild(chipsEl);
+  let toolbarShown = false;
+  function syncToolbar() {
+    const show = hasButtons || chipsEl.children.length > 0;
+    if (show === toolbarShown) return;
+    toolbarShown = show;
+    if (show) host.insertBefore(toolbar, scrollArea); else toolbar.remove();
+  }
+  syncToolbar();
 
   const rows = new Map();          // key -> row, all data
   const rowEls = new Map();        // key -> tr, rendered slice only
@@ -1316,18 +1313,23 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     const th = focusCell.col != null && thead.querySelector
       ? thead.querySelector(`th[data-col="${CSS.escape(focusCell.col)}"]`) : null;
-    if (th?.getBoundingClientRect && scrollHost.getBoundingClientRect) {
-      const tr = th.getBoundingClientRect();
-      const hr = scrollHost.getBoundingClientRect();
-      const stickyW = rowColumn
-        ? (thead.querySelector(".mkui-th-rownum")?.getBoundingClientRect()?.width ?? 0)
-        : 0;
-      if (tr.left < hr.left + stickyW)
-        scrollHost.scrollLeft -= hr.left + stickyW - tr.left;
-      else if (tr.right > hr.right)
-        scrollHost.scrollLeft += tr.right - hr.right;
-    }
+    if (th) scrollHeaderIntoView(th);
     render();
+  }
+
+  // Horizontal scroll so a header cell is fully visible, clear of the
+  // sticky row-number column.
+  function scrollHeaderIntoView(th) {
+    if (!th.getBoundingClientRect || !scrollHost.getBoundingClientRect) return;
+    const tr = th.getBoundingClientRect();
+    const hr = scrollHost.getBoundingClientRect();
+    const stickyW = rowColumn
+      ? (thead.querySelector(".mkui-th-rownum")?.getBoundingClientRect()?.width ?? 0)
+      : 0;
+    if (tr.left < hr.left + stickyW)
+      scrollHost.scrollLeft -= hr.left + stickyW - tr.left;
+    else if (tr.right > hr.right)
+      scrollHost.scrollLeft += tr.right - hr.right;
   }
 
   function onTableKeyDown(e) {
@@ -1793,6 +1795,67 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return s;
   }
 
+  // The same summary the header tooltip and the toolbar chip show.
+  function describeFilter(f) {
+    if (f.kind === "range") return describeRange(f);
+    return f.mode === "exclude" ? `All but ${f.values.size} values` : `${f.values.size} values`;
+  }
+
+  /* ── Sort specs ───────────────────────────────────────────────────── */
+
+  // Like filters, the sort can be described as well as clicked: `sort =
+  // <spec>` in the pane spec seeds the order before any data and is
+  // restored on pane reopen; `paneEl._sort.set/get`, the workspace's
+  // `setPaneSort`, and the `table.sort` action take the same shape. A spec
+  // is a column name (`"-col"` for descending), `{ col, dir }`, or an array
+  // of those in priority order; null / "" / [] clears the sort. A bad spec
+  // warns and leaves the current sort alone.
+  function sortFromSpec(s) {
+    if (s == null || s === "") return [];
+    const out = [];
+    for (const item of Array.isArray(s) ? s : [s]) {
+      let col, dir;
+      if (typeof item === "string") {
+        dir = item[0] === "-" ? "desc" : "asc";
+        col = dir === "desc" ? item.slice(1) : item;
+      } else if (item && typeof item === "object") {
+        col = item.col;
+        dir = item.dir ?? "asc";
+        if (dir !== "asc" && dir !== "desc") throw new Error(`bad dir '${dir}': use asc or desc`);
+      } else {
+        throw new Error("expected a column name or { col, dir }");
+      }
+      if (typeof col !== "string" || !col) throw new Error("expected a column name");
+      if (out.some((k) => k.col === col)) throw new Error(`column '${col}' listed twice`);
+      out.push({ col, dir });
+    }
+    return out;
+  }
+
+  function loadSortSpec(s) {
+    try {
+      const keys = sortFromSpec(s);
+      sortKeys.length = 0;
+      sortKeys.push(...keys);
+    } catch (e) {
+      console.warn(`[mkio-table] bad sort: ${e.message}`);
+    }
+  }
+
+  function applySort() {
+    updateHeaderState();
+    if (sortKeys.length) reorder(); else resetOrder();
+  }
+
+  function setSort(s) {
+    loadSortSpec(s);
+    applySort();
+  }
+
+  function getSort() {
+    return sortKeys.map(({ col, dir }) => ({ col, dir }));
+  }
+
   /* ── Filter specs ─────────────────────────────────────────────────── */
 
   // A filter can be described as well as clicked. `filters = { col =
@@ -2223,8 +2286,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
             sortKeys.push({ col: c, dir: "asc" });
           }
         }
-        updateHeaderState();
-        if (sortKeys.length) reorder(); else resetOrder();
+        applySort();
       });
 
       filterBtn.addEventListener("click", (e) => {
@@ -2284,9 +2346,107 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       }
       const f = filters.get(col);
       btn.classList.toggle("active", !!f);
-      btn.title = f?.kind === "range" ? describeRange(f)
-        : f ? (f.mode === "exclude" ? `All but ${f.values.size} values` : `${f.values.size} values`) : "";
+      btn.title = f ? describeFilter(f) : "";
     }
+    renderChips();
+  }
+
+  /* ── Sort & filter chips ──────────────────────────────────────────── */
+
+  // The toolbar's right side summarises the view so nothing has to be
+  // scrolled into sight to be seen or undone: one chip per sort key in
+  // priority order (click flips the direction, × drops the key) and one
+  // per filtered column (click opens that column's dropdown, × clears it).
+  // Each group leads with its icon, which clears the whole group. The
+  // cluster is empty — and the toolbar gone, absent buttons — while
+  // nothing is active.
+  function clearFilters(cols) {
+    for (const col of cols) filters.delete(col);
+    if (dropdownCol && !filters.has(dropdownCol)) closeDropdown();
+    updateHeaderState();
+    applyVisibility();
+    syncPresetTimer();
+  }
+
+  function makeChip(cls, col, text, title, onClick, onClear) {
+    const chip = document.createElement("span");
+    chip.className = "mkui-chip " + cls;
+    chip.dataset.col = col;
+    chip.title = title;
+    const main = document.createElement("button");
+    main.className = "mkui-chip-main";
+    main.type = "button";
+    const label = document.createElement("span");
+    label.className = "mkui-chip-text";
+    label.textContent = text;
+    main.appendChild(label);
+    main.addEventListener("click", onClick);
+    const x = document.createElement("button");
+    x.className = "mkui-chip-x";
+    x.type = "button";
+    x.title = "Remove";
+    x.appendChild(icon("close"));
+    x.addEventListener("click", (e) => { e.stopPropagation(); onClear(); });
+    chip.append(main, x);
+    return { chip, main };
+  }
+
+  function makeGroup(cls, iconName, title, onClear, chips) {
+    const group = document.createElement("span");
+    group.className = "mkui-chip-group " + cls;
+    // The icon travels with the first chip so a wrapped line never starts
+    // with an orphaned icon (see .mkui-chip-lead).
+    const lead = document.createElement("span");
+    lead.className = "mkui-chip-lead";
+    const btn = document.createElement("button");
+    btn.className = "mkui-chip-icon";
+    btn.type = "button";
+    btn.title = title;
+    // The group's icon with an × badge in its corner: it is a clear
+    // button, not a state indicator like the header's tinted icon.
+    const badge = document.createElement("span");
+    badge.className = "mkui-chip-icon-x";
+    badge.appendChild(icon("close"));
+    btn.append(icon(iconName), badge);
+    btn.addEventListener("click", onClear);
+    lead.append(btn, chips[0]);
+    group.appendChild(lead);
+    for (const c of chips.slice(1)) group.appendChild(c);
+    return group;
+  }
+
+  function renderChips() {
+    chipsEl.innerHTML = "";
+    if (sortKeys.length) {
+      const chips = sortKeys.map((k, i) => {
+        const dir = k.dir;
+        const { chip, main } = makeChip("mkui-chip-sort", k.col, label(k.col),
+          `Sorted ${dir === "asc" ? "ascending" : "descending"} — click to flip`,
+          () => { sortKeys[i].dir = dir === "asc" ? "desc" : "asc"; applySort(); },
+          () => { sortKeys.splice(i, 1); applySort(); });
+        main.appendChild(icon(dir === "asc" ? "caret-up" : "caret-down"));
+        return chip;
+      });
+      chipsEl.appendChild(makeGroup("mkui-chips-sort", "sort", "Clear sort",
+        () => { sortKeys.length = 0; applySort(); }, chips));
+    }
+    if (filters.size) {
+      const chips = [...filters].map(([col, f]) => {
+        const text = `${label(col)}: ${describeFilter(f)}`;
+        return makeChip("mkui-chip-filter", col, text, text,
+          () => {
+            if (dropdownCol === col) { closeDropdown(); return; }
+            const th = thead.querySelector?.(`th[data-col="${CSS.escape(col)}"]`);
+            if (!th) return;
+            scrollHeaderIntoView(th);
+            openFilterDropdown(col, th);
+          },
+          () => clearFilters([col])).chip;
+      });
+      chipsEl.appendChild(makeGroup("mkui-chips-filter", "filter", "Clear all filters",
+        () => clearFilters([...filters.keys()]), chips));
+    }
+    syncToolbar();
   }
 
   /* ── Column drag ──────────────────────────────────────────────────── */
@@ -3174,6 +3334,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // Default filters from config, before any data (and before the observer
   // can subscribe): the header, if already rendered, shows them as active.
   loadFilterSpecs(spec.filters);
+  loadSortSpec(spec.sort);
   updateHeaderState();
   syncPresetTimer();
 
@@ -3189,6 +3350,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     // Filter hook: `workspace.setPaneFilters` / `getPaneFilters` and the
     // `table.filter` action reach the column filters through it.
     paneEl._filters = { set: setFilters, get: getFilters };
+    // Sort hook: `workspace.setPaneSort` / `getPaneSort` and `table.sort`.
+    paneEl._sort = { set: setSort, get: getSort };
     paneEl.addEventListener("mkui-pane-close", () => {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       if (presetTimer) { clearTimeout(presetTimer); presetTimer = null; }
@@ -3210,8 +3373,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       clearData();
       columns = spec.columns ?? null;
       displayOrder = null;
-      sortKeys.length = 0;
+      loadSortSpec(spec.sort);
       loadFilterSpecs(spec.filters);
+      updateHeaderState();
       syncPresetTimer();
       resetColWidths();
       clearSelection();

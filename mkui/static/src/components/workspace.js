@@ -137,24 +137,45 @@ class MkuiWorkspace extends HTMLElement {
     return fn ? fn() !== false : false;
   }
 
-  // Column filters of a pane whose type exposes a `_filters` hook (mkio-
-  // table): `filters` maps column names to the config-shaped filters the
-  // pane's `filters` key takes, replacing the current set unless `merge`
-  // is set. A pane that was never shown is built first, so filters can be
-  // set ahead of opening it. Returns whether a pane took the filters. With
-  // no id, the focused frame's active pane is the target.
-  setPaneFilters(paneId, filters, opts = {}) {
+  // A pane's view hook (`_filters` or `_sort`, exposed by mkio-table). By
+  // id, a pane that was never shown is built first when `build` is set,
+  // so a setter can run ahead of opening it; with no id, the focused
+  // frame's active pane is the target.
+  _paneHook(paneId, name, build) {
     const el = paneId == null ? this.activePaneEl()
-      : this._panes.has(paneId) ? this._ensurePaneEl(paneId) : null;
-    if (!el?._filters) return false;
-    el._filters.set(filters, opts);
+      : build ? (this._panes.has(paneId) ? this._ensurePaneEl(paneId) : null)
+      : this._paneEls.get(paneId);
+    return el?.[name] ?? null;
+  }
+
+  // Column filters: `filters` maps column names to the config-shaped
+  // filters the pane's `filters` key takes, replacing the current set
+  // unless `merge` is set. Returns whether a pane took the filters.
+  setPaneFilters(paneId, filters, opts = {}) {
+    const hook = this._paneHook(paneId, "_filters", true);
+    if (!hook) return false;
+    hook.set(filters, opts);
     return true;
   }
 
   // The same shape back, or null when the pane has no filters hook.
   getPaneFilters(paneId) {
-    const el = paneId == null ? this.activePaneEl() : this._paneEls.get(paneId);
-    return el?._filters ? el._filters.get() : null;
+    return this._paneHook(paneId, "_filters", false)?.get() ?? null;
+  }
+
+  // Sort order: the shape the pane's `sort` key takes — a column name
+  // ("-col" descending), `{ col, dir }`, or an array in priority order;
+  // null clears. Returns whether a pane took it.
+  setPaneSort(paneId, sort) {
+    const hook = this._paneHook(paneId, "_sort", true);
+    if (!hook) return false;
+    hook.set(sort);
+    return true;
+  }
+
+  // `[{ col, dir }]` in priority order, or null without a sort hook.
+  getPaneSort(paneId) {
+    return this._paneHook(paneId, "_sort", false)?.get() ?? null;
   }
 
   setApp(app) {

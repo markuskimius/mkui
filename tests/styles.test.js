@@ -433,3 +433,38 @@ test("native date/time pickers follow the theme", () => {
   assert.equal(declaration("mkui-app", "color-scheme"), "dark");
   assert.equal(declaration('mkui-app[theme="light"]', "color-scheme"), "light");
 });
+
+// ── Table toolbar chips ──────────────────────────────────────────────────
+// The toolbar holds the selection buttons on the left and the sort/filter
+// chip cluster on the right. Flex line-breaking sizes the cluster at its
+// max-content width, so it sits beside the buttons when it fits and drops
+// to the next line as a whole when it doesn't — the buttons never move —
+// and the chips inside wrap end-aligned. Nothing may scroll horizontally:
+// a hidden chip defeats the strip's purpose.
+
+test("toolbar wraps and the chip cluster is pushed to the right edge", () => {
+  assert.equal(declaration(".mkui-table-toolbar", "flex-wrap"), "wrap");
+  assert.equal(declaration(".mkui-table-chips", "margin-left"), "auto");
+  assert.equal(declaration(".mkui-table-chips", "flex-wrap"), "wrap");
+  assert.equal(declaration(".mkui-table-chips", "justify-content"), "flex-end");
+  assert.ok(!/overflow/.test(rule(".mkui-table-chips")), "chips never scroll");
+  assert.ok(!/overflow/.test(rule(".mkui-table-toolbar")));
+});
+
+test("chip groups dissolve into the cluster; a group icon sticks to its first chip", () => {
+  assert.equal(declaration(".mkui-chip-group", "display"), "contents");
+  assert.equal(declaration(".mkui-chip-lead", "white-space"), "nowrap");
+});
+
+test("group clear buttons carry an × badge anchored to the icon", () => {
+  assert.equal(declaration(".mkui-chip-icon", "position"), "relative");
+  assert.equal(declaration(".mkui-chip-icon-x", "position"), "absolute");
+  assert.equal(declaration(".mkui-chip-icon-x", "background"), "var(--mkui-bg-alt)",
+    "the badge masks the icon corner in the toolbar color");
+});
+
+test("chips are capped in width and ellipsize their text", () => {
+  assert.ok(declaration(".mkui-chip", "max-width"));
+  assert.equal(declaration(".mkui-chip-text", "text-overflow"), "ellipsis");
+  assert.equal(declaration(".mkui-chip-text", "overflow"), "hidden");
+});

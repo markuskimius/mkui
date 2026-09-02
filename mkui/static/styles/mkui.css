@@ -996,6 +996,7 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-table-toolbar {
   flex-shrink: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 4px 8px;
@@ -1006,6 +1007,94 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   opacity: 0.4;
   cursor: default;
 }
+
+/* Sort/filter chips: one wrapping cluster pushed to the bar's right edge.
+   Flex line-breaking sizes the cluster at its max-content width, so it
+   either fits beside the buttons on one line or drops as a whole to the
+   next line — never a ragged mix — where it shrinks to the bar and wraps
+   its chips end-aligned. The buttons keep line one and never move. */
+.mkui-table-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  min-width: 0;
+  font-family: var(--mkui-font);
+  font-size: 11px;
+  color: var(--mkui-fg-mute);
+}
+.mkui-chip-group { display: contents; }
+/* The group icon travels with its first chip so a wrapped line never
+   starts with an orphaned icon. */
+.mkui-chip-lead {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+/* Group clear button: the group's icon with an × badge overlaid on its
+   bottom-right corner, so it reads as "clear these" rather than as the
+   header's tinted state icon. */
+.mkui-chip-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  margin: 0 2px 0 0;
+  border: 0;
+  border-radius: 2px;
+  background: none;
+  color: var(--mkui-accent);
+  cursor: pointer;
+}
+.mkui-chip-icon:hover { background: var(--mkui-bg-hover); }
+.mkui-chip-icon .mkui-icon { width: 14px; height: 14px; }
+.mkui-chip-icon-x {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  display: inline-flex;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--mkui-bg-alt);
+  color: var(--mkui-fg);
+  align-items: center;
+  justify-content: center;
+}
+.mkui-chip-icon:hover .mkui-chip-icon-x { background: var(--mkui-bg-hover); }
+.mkui-chip-icon .mkui-chip-icon-x .mkui-icon { width: 8px; height: 8px; stroke-width: 3; }
+.mkui-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 24ch;
+  border: 1px solid var(--mkui-border);
+  border-radius: 10px;
+  background: var(--mkui-bg);
+  color: var(--mkui-fg);
+  white-space: nowrap;
+}
+.mkui-chip-main, .mkui-chip-x {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 1px 4px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.mkui-chip-main { padding-left: 7px; overflow: hidden; }
+.mkui-chip-main:hover { color: var(--mkui-accent); }
+.mkui-chip-text { overflow: hidden; text-overflow: ellipsis; }
+.mkui-chip-x { padding-right: 5px; color: var(--mkui-fg-mute); }
+.mkui-chip-x:hover { color: var(--mkui-fg); }
+.mkui-chip .mkui-icon { width: 11px; height: 11px; flex-shrink: 0; }
 
 /* ─── Dialog ───────────────────────────────────────────────────────── */
 

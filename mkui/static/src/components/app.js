@@ -65,6 +65,9 @@ class MkuiApp extends HTMLElement {
     // `args = { pane = "<id>", filters = { col = <filter> }, merge = false }`;
     // `pane` omitted targets the focused pane.
     this._app.registerAction("table.filter",    (app, a = {}) => ws.setPaneFilters(a.pane ?? null, a.filters ?? {}, { merge: a.merge === true }));
+    // `args = { pane = "<id>", sort = <spec> }` — a column name, "-col",
+    // { col, dir }, or an array of those; no `sort` clears.
+    this._app.registerAction("table.sort",      (app, a = {}) => ws.setPaneSort(a.pane ?? null, a.sort ?? null));
 
     const hasAuth = !!config.auth;
     const st = this._app.state;

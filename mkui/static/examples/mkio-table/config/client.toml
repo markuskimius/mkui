@@ -33,6 +33,13 @@ items = [
   { label = "All Orders: hide cancelled", action = "table.filter", args = { pane = "all-orders", filters = { status = { exclude = ["cancelled"] } }, merge = true } },
   { label = "All Orders: large sells", action = "table.filter", args = { pane = "all-orders", filters = { side = ["Sell"], notional = { from = 50000 } } } },
   { label = "All Orders: show everything", action = "table.filter", args = { pane = "all-orders", filters = {} } },
+  { sep = true },
+  # table.sort sets a pane's sort order; the shape matches `sort` under
+  # [panes.<id>]: a column name ("-col" descending), { col, dir }, or an
+  # array in priority order. No `sort` clears it.
+  { label = "All Orders: newest first", action = "table.sort", args = { pane = "all-orders", sort = "-ts" } },
+  { label = "All Orders: by symbol, largest first", action = "table.sort", args = { pane = "all-orders", sort = ["symbol", { col = "qty", dir = "desc" }] } },
+  { label = "All Orders: clear sort", action = "table.sort", args = { pane = "all-orders" } },
 ]
 
 [[menubar]]
@@ -156,6 +163,10 @@ service = "all_orders"
 protocol = "query"
 filter = "status == 'pending'"
 columns = ["id", "side", "symbol", "qty", "price", "status"]
+# Default sort order, restored when the pane is reopened: by symbol, then
+# largest quantity first. Active sorts and filters show as chips on the
+# toolbar, where they can be flipped, opened, or cleared.
+sort = ["symbol", "-qty"]
 
 [[panes.pending.buttons]]
 label = "Fill"
