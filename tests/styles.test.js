@@ -488,6 +488,12 @@ test("the Columns button lives in a right gutter of the scroll area, clear of th
   assert.equal(parseInt(declaration(".mkui-table-scroll", "--mkui-columns-gutter")) - parseInt(declaration(".mkui-table-scroll", "--mkui-columns-btn-w")), 4);
   assert.equal(declaration(".mkui-columns-btn::before", "pointer-events"), "none");
   assert.equal(declaration(".mkui-columns-btn::before", "background"), "var(--mkui-bg-alt)");
+  // The table's edge is the divider: the button draws none of its own and
+  // centres its glyph across the whole gutter (right padding = the strip),
+  // so the icon sits evenly between that edge and the pane's.
+  assert.ok(!/border-left/.test(rule(".mkui-columns-btn")), "no divider on the button");
+  assert.equal(declaration(".mkui-columns-btn", "padding"), "0 calc(var(--mkui-columns-gutter) - var(--mkui-columns-btn-w)) 0 0");
+  assert.equal(declaration(".mkui-columns-btn", "justify-content"), "center");
   // Sticky on both axes: horizontal scroll must not carry the anchor off.
   assert.equal(declaration(".mkui-columns-anchor", "position"), "sticky");
   assert.equal(declaration(".mkui-columns-anchor", "top"), "0");

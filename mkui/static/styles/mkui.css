@@ -894,11 +894,11 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 /* ─── Table paging & progress ───────────────────────────────────────── */
 
 .mkui-table-scroll {
-  --mkui-columns-btn-w: 28px;
+  --mkui-columns-btn-w: 22px;
   /* The gutter is 4px wider than the button: the last column's grip
      straddles the table's right edge by half its 7px hit zone, and that
      half must stay clear of the button. */
-  --mkui-columns-gutter: 32px;
+  --mkui-columns-gutter: 26px;
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -1221,10 +1221,12 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   align-items: center;
   justify-content: center;
   height: 24px;
-  padding: 0;
+  /* No divider of its own — the table's edge is the divider — and the
+     glyph is centred in the whole gutter, strip included: right padding
+     equal to the strip's width shifts the centre left by half of it. */
+  padding: 0 calc(var(--mkui-columns-gutter) - var(--mkui-columns-btn-w)) 0 0;
   border: 0;
   border-bottom: 1px solid var(--mkui-border);
-  border-left: 1px solid color-mix(in srgb, var(--mkui-border) 50%, transparent);
   background: var(--mkui-bg-alt);
   color: var(--mkui-fg-mute);
   font: inherit;
@@ -1249,19 +1251,23 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-columns-btn:disabled { cursor: default; color: var(--mkui-fg-mute); background: var(--mkui-bg-alt); }
 .mkui-columns-btn.active { color: var(--mkui-accent); }
 .mkui-columns-btn .mkui-icon { width: 14px; height: 14px; }
-/* The hidden-count badge rides the icon's top-right corner so the button
-   keeps the gutter's fixed width whatever the count. */
+/* The hidden-count badge sits in the button's top-right corner, clipping
+   only the icon's corner (the icon steps left a little while a badge
+   shows), so the button keeps its fixed width whatever the count. It
+   can't hang above the button: the scroll area would clip it. */
+.mkui-columns-btn.active .mkui-icon { transform: translateX(-2px); }
 .mkui-columns-badge {
   position: absolute;
-  top: 1px;
-  right: 1px;
-  min-width: 8px;
-  padding: 0 3px;
-  border-radius: 7px;
+  top: 0;
+  right: 0;
+  min-width: 7px;
+  padding: 0 2px;
+  border-radius: 6px;
   background: var(--mkui-accent);
   color: var(--mkui-bg);
-  font-size: 9px;
-  line-height: 13px;
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 11px;
   text-align: center;
 }
 .mkui-columns-badge[hidden] { display: none; }
