@@ -27,6 +27,7 @@ const { icon } = await import("../mkui/static/src/lib/icons.js");
 
 const OUTLINE_NAMES = [
   "close", "maximize", "pin", "refresh", "chevron-left", "chevron-right", "sort",
+  "columns",
 ];
 const FILLED_NAMES = ["caret-up", "caret-down", "dot", "filter"];
 

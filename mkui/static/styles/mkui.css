@@ -641,9 +641,85 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   padding-left: var(--mkui-num-pad, 0ch);
 }
 .mkui-filter-action:hover { text-decoration: underline; }
+/* Column control at the top of every header dropdown: "Hide column". An
+   inert action — the last column
+   can't be hidden, nothing matches, already at the default — reads muted
+   and takes no hover. */
+.mkui-filter-colops { flex-direction: column; gap: 3px; padding-top: 6px; white-space: nowrap; }
+.mkui-filter-action-off { color: var(--mkui-fg-mute); cursor: default; }
+.mkui-filter-action-off:hover { text-decoration: none; }
+
+/* ── Column picker ─────────────────────────────────────────────────── */
+/* Opened from the Columns button; wider than a filter dropdown since it
+   lists every column (sectioned by group when groups are configured). */
+.mkui-filter-dropdown.mkui-columns-picker { width: 240px; }
+.mkui-columns-title {
+  padding: 6px 8px 0;
+  color: var(--mkui-fg-mute);
+  font-size: 11px;
+}
+/* Show all / Hide all / Reset under the search, as the filter dropdown has
+   Select all / Clear. Reset sits apart on the right. */
+.mkui-columns-actions { white-space: nowrap; }
+.mkui-columns-reset { margin-left: auto; }
+/* Show all is two-step: armed, it asks for the confirming click in the
+   accent-on-warning tint so the second click is a decision, not a habit. */
+.mkui-columns-confirm { color: var(--mkui-warn, #e0a030); font-weight: 600; }
+/* Group sections read as sections: the head is a full-width band in the
+   page background (a shade off the dropdown's), bold label, fold caret,
+   tri-state checkbox and a "shown of total" count; the items hang beneath
+   it on a rail — an accent-tinted left rule — so where a group starts and
+   ends is visible even when it is long. Consecutive sections are separated
+   by the band itself, so no extra rules between them. */
+.mkui-columns-group { margin-bottom: 4px; }
+.mkui-columns-group:last-child { margin-bottom: 0; }
+.mkui-columns-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--mkui-bg);
+  border-top: 1px solid var(--mkui-border);
+  border-bottom: 1px solid var(--mkui-border);
+  cursor: pointer;
+  user-select: none;
+}
+.mkui-columns-group-head:hover { background: var(--mkui-bg-hover); }
+.mkui-columns-group-head input[type="checkbox"] { margin: 0; accent-color: var(--mkui-accent); }
+.mkui-columns-group-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.mkui-columns-count {
+  padding: 0 5px;
+  border-radius: 7px;
+  background: var(--mkui-bg-alt);
+  color: var(--mkui-fg-mute);
+  font-size: 10px;
+  line-height: 14px;
+}
+.mkui-columns-caret { display: inline-flex; color: var(--mkui-fg-mute); transition: transform 120ms; }
+.mkui-columns-caret .mkui-icon { width: 12px; height: 12px; }
+.mkui-columns-caret.open { transform: rotate(90deg); }
+.mkui-columns-items {
+  margin: 2px 0 2px 15px;
+  border-left: 2px solid color-mix(in srgb, var(--mkui-accent) 45%, var(--mkui-border));
+}
+.mkui-columns-items .mkui-filter-item { padding-left: 12px; }
+/* The first section starts right under the search/bulk row: no double rule. */
+.mkui-filter-list > .mkui-columns-group:first-child .mkui-columns-group-head { border-top: none; }
+/* The value / column list opens at its content height; mkio-table caps it
+   (inline max-height) so the dropdown ends inside the viewport, and the
+   corner grip lets the user drag it shorter — CSS resize honours the cap.
+   No static max-height here: the cap is the viewport, not a number. */
 .mkui-filter-list {
-  max-height: 200px;
+  box-sizing: border-box; /* the cap includes the padding */
   overflow-y: auto;
+  resize: vertical;
+  min-height: 40px;
   padding: 4px 0;
   scrollbar-width: thin;
 }
@@ -1095,6 +1171,55 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-chip-x { padding-right: 5px; color: var(--mkui-fg-mute); }
 .mkui-chip-x:hover { color: var(--mkui-fg); }
 .mkui-chip .mkui-icon { width: 11px; height: 11px; flex-shrink: 0; }
+
+/* ── Columns button ────────────────────────────────────────────────── */
+/* Pinned to the header row's right edge, inside the scroll area so it
+   sits left of the scrollbar and stays put under both scroll axes: a
+   zero-height sticky anchor ahead of the table (sticky top AND left, so
+   horizontal scroll can't carry it off) holds the button at its right
+   end. Opaque header background — it sits over the filler, or over the
+   last header when the columns overflow the pane — and a z-index above
+   the sticky header cells. Height is set by mkio-table to the header's. */
+.mkui-columns-anchor {
+  position: sticky;
+  top: 0;
+  left: 0;
+  height: 0;
+  z-index: 3;
+}
+.mkui-columns-btn {
+  position: absolute;
+  top: 0;
+  right: 0;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-bottom: 1px solid var(--mkui-border);
+  border-left: 1px solid color-mix(in srgb, var(--mkui-border) 50%, transparent);
+  background: var(--mkui-bg-alt);
+  color: var(--mkui-fg-mute);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.mkui-columns-btn:hover { color: var(--mkui-fg); background: var(--mkui-bg-hover); }
+.mkui-columns-btn:disabled { cursor: default; color: var(--mkui-fg-mute); background: var(--mkui-bg-alt); }
+.mkui-columns-btn.active { color: var(--mkui-accent); }
+.mkui-columns-btn .mkui-icon { width: 13px; height: 13px; }
+/* The badge counts hidden columns. */
+.mkui-columns-badge {
+  padding: 0 4px;
+  border-radius: 7px;
+  background: var(--mkui-accent);
+  color: var(--mkui-bg);
+  font-size: 10px;
+  line-height: 14px;
+}
+.mkui-columns-badge[hidden] { display: none; }
 
 /* ─── Dialog ───────────────────────────────────────────────────────── */
 

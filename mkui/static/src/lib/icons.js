@@ -26,6 +26,8 @@ const OUTLINE = {
   "chevron-right": ["m9 18 6-6-6-6"],
   // Sort group icon on the table toolbar chips (Lucide arrow-up-down).
   sort: ["m21 16-4 4-4-4", "M17 20V4", "m3 8 4-4 4 4", "M7 4v16"],
+  // Hidden-columns group icon on the table toolbar chips (Lucide columns-3).
+  columns: ["M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", "M9 3v18", "M15 3v18"],
   // Status glyphs for rich cell text (ICON('check') / ICON('clock')).
   check: ["M20 6 9 17l-5-5"],
   clock: ["M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20z", "M12 6v6l4 2"],

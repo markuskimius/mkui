@@ -5194,3 +5194,468 @@ test("pane reopen restores the configured sort, not the interactive one", async 
   assert.deepEqual(shownNames(host), ["c", "b", "a", "d"], "back to the config default");
   assert.deepEqual(host._paneEl._sort.get(), [{ col: "qty", dir: "desc" }]);
 });
+
+/* ── Configured and programmatic columns ─────────────────────────────── */
+// `visible = [...]` picks which columns show, in that order; null (the
+// default) shows every known column and follows new ones. The same shape
+// drives `_columns.set/get`. The Columns button pinned to the header row
+// (badge = hidden count) opens the column picker — the one place for bulk
+// changes: per-column ticks, group sections with tri-state toggles,
+// search-scoped Show/Hide matching, Reset to default, two-step Show all.
+
+const headerCols = (host) => getThs(host).map(th => th.dataset.col);
+const rowCols = (host) => getTbody(host)._ch[0]?._ch.map(td => td.dataset.col) ?? [];
+function columnsBtn(host) {
+  const anchor = sh(host)._ch.find(c => c.className === "mkui-columns-anchor");
+  const btn = anchor._ch[0];
+  const badge = btn._ch.find(c => c.className === "mkui-columns-badge");
+  return {
+    btn, badge: badge.hidden ? null : badge.textContent, title: btn.title, disabled: btn.disabled,
+    active: btn.classList.contains("active"),
+    click: () => btn._ev.click[0]({ stopPropagation() {} }),
+  };
+}
+function pickerOf(host) {
+  const dd = host._ch.filter(c => String(c.className).includes("mkui-columns-picker")).at(-1) ?? null;
+  if (!dd) return null;
+  const cbs = byClass(dd, "mkui-filter-item").map(l => l._ch[0]);
+  const actions = byClass(dd, "mkui-filter-actions mkui-columns-actions")[0];
+  const [showEl, hideEl, resetEl] = actions._ch;
+  const groups = byClass(dd, "mkui-columns-group").map(g => {
+    const head = g._ch[0], body = g._ch[1];
+    return {
+      el: g, head, body, cb: head._ch[1], label: head._ch[2].textContent,
+      get count() { return head._ch[3].textContent; },
+      get open() { return !body.hidden; },
+      get shown() { return g.style.display !== "none"; },
+      toggle: () => { head._ch[1].checked = !head._ch[1].checked; head._ch[1]._ev.change[0](); },
+      fold: () => head._ev.click[0]({ target: head }),
+    };
+  });
+  const act = (el) => el._ev.click[0]();
+  const off = (el) => el.classList.contains("mkui-filter-action-off");
+  return {
+    dd, cbs, groups, actions,
+    get title() { return byClass(dd, "mkui-columns-title")[0].textContent; },
+    // The actions row: [Show all | Show N matching, Hide all | Hide N matching, Reset].
+    texts: () => actions._ch.map(e => e.textContent),
+    state: () => cbs.map(cb => [cb.dataset.col, cb.checked]),
+    visibleItems: () => cbs.filter(cb => cb._parent.style.display !== "none").map(cb => cb.dataset.col),
+    toggle: (col) => { const cb = cbs.find(c => c.dataset.col === col); cb.checked = !cb.checked; cb._ev.change[0](); },
+    group: (label) => groups.find(g => g.label === label),
+    reset: () => act(resetEl), resetOff: () => off(resetEl),
+    showAll: () => act(showEl), showAllText: () => showEl.textContent, showAllOff: () => off(showEl),
+    hideAll: () => act(hideEl), hideAllText: () => hideEl.textContent, hideAllOff: () => off(hideEl),
+    showMatching: () => act(showEl), hideMatching: () => act(hideEl),
+    search: (q) => { const s = byClass(dd, "mkui-filter-search")[0]; s.value = q; s._ev.input[0](); },
+  };
+}
+function colOps(host, col) {
+  const { dd } = openDropdown(host, col);
+  const ops = dd._ch.find(c => c.className === "mkui-filter-actions mkui-filter-colops");
+  return { hide: ops._ch[0], extra: ops._ch.length - 1, ops, dd };
+}
+const noDropdown = (host) => host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).length === 0;
+
+test("visible config shows only those columns, in that order, before and after data", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "status", "qty", "ts"], visible: ["qty", "name"] });
+  assert.deepEqual(headerCols(host), ["qty", "name"], "header rendered from `columns` already honours it");
+  assert.equal(columnsBtn(host).badge, "2", "badge counts hidden columns");
+  assert.equal(columnsBtn(host).title, "Columns: 2 of 4 shown");
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  assert.deepEqual(rowCols(host), ["qty", "name"]);
+  assert.deepEqual(host._paneEl._columns.get(), ["qty", "name"]);
+  assert.equal(getColgroup(host)._ch.length, 3, "two data cols plus the filler");
+  assert.equal(getRawTbody(host)._ch[0]._ch[0].colSpan, 3, "spacer spans the visible columns");
+});
+
+test("the Columns button is always there: disabled before columns, no badge while all show", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  let b = columnsBtn(host);
+  assert.equal(b.disabled, true, "nothing to pick from yet");
+  assert.equal(b.badge, null);
+  b.click();
+  assert.equal(pickerOf(host), null, "no picker without columns");
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  b = columnsBtn(host);
+  assert.equal(b.disabled, false);
+  assert.equal(b.badge, null, "all columns show: no badge");
+  assert.equal(b.active, false);
+  assert.equal(b.title, "Columns: 4 of 4 shown");
+  assert.equal(chipStrip(host).toolbar, null, "hidden columns never create a toolbar");
+  b.click();
+  assert.ok(pickerOf(host), "opens the picker");
+  assert.equal(pickerOf(host).title, "Columns · 4 of 4 shown");
+  b.click();
+  assert.equal(pickerOf(host), null, "toggles it closed");
+});
+
+test("visible: a name ahead of the data is kept and appears once the data carries it", async () => {
+  const [{ host, io }, warned] = await withWarnings(() =>
+    createTable({ protocol: "query", visible: ["name", "later"] }));
+  assert.deepEqual(warned, [], "without `columns` nothing can be checked, so nothing warns");
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  assert.deepEqual(headerCols(host), ["name"], "unknown name is skipped, not rendered empty");
+  assert.deepEqual(host._paneEl._columns.get(), ["name", "later"], "…but stays in the list");
+  assert.equal(columnsBtn(host).badge, "3");
+  const [, w2] = await withWarnings(() =>
+    createTable({ protocol: "query", columns: ["name", "qty"], visible: ["name", "nope"] }));
+  assert.match(w2[0], /visible: 'nope' is not in columns/);
+});
+
+test("_columns.set replaces the set; null, \"\" and [] mean all; bad specs warn and leave it alone", async () => {
+  const host = await filteredTable({});
+  const api = host._paneEl._columns;
+  assert.equal(api.get(), null, "default state is null, not a full list");
+  api.set("status");
+  assert.deepEqual(headerCols(host), ["status"]);
+  assert.deepEqual(rowCols(host), ["status"]);
+  assert.equal(columnsBtn(host).badge, "3");
+  api.set(["ts", "name"]);
+  assert.deepEqual(headerCols(host), ["ts", "name"]);
+  assert.deepEqual(api.get(), ["ts", "name"]);
+  let [, warned] = await withWarnings(() => api.set(["name", "name"]));
+  assert.match(warned[0], /bad visible: column 'name' listed twice/);
+  assert.deepEqual(api.get(), ["ts", "name"], "rejected spec leaves the set alone");
+  [, warned] = await withWarnings(() => api.set([42]));
+  assert.match(warned[0], /expected a column name/);
+  [, warned] = await withWarnings(() => api.set({ col: "name" }));
+  assert.match(warned[0], /expected a column name/);
+  for (const all of [null, "", []]) {
+    api.set(["qty"]);
+    api.set(all);
+    assert.equal(api.get(), null, `${JSON.stringify(all)} means all`);
+    assert.deepEqual(headerCols(host), ["name", "status", "qty", "ts"]);
+    assert.deepEqual(rowCols(host), ["name", "status", "qty", "ts"]);
+  }
+  assert.equal(columnsBtn(host).badge, null);
+});
+
+test("header dropdown hides the column (never the last); the picker ticks columns back into place", async () => {
+  const host = await filteredTable({});
+  const ops = colOps(host, "status");
+  assert.equal(ops.extra, 0, "only Hide column");
+  ops.hide._ev.click[0]();
+  assert.deepEqual(headerCols(host), ["name", "qty", "ts"]);
+  assert.ok(noDropdown(host), "hiding closes the dropdown");
+  assert.deepEqual(host._paneEl._columns.get(), ["name", "qty", "ts"], "hiding materialises the list");
+  colOps(host, "ts").hide._ev.click[0]();
+  colOps(host, "qty").hide._ev.click[0]();
+  assert.deepEqual(headerCols(host), ["name"]);
+  const last = colOps(host, "name");
+  assert.ok(last.hide.classList.contains("mkui-filter-action-off"), "the last column's Hide is inert");
+  assert.equal(last.hide._ev.click, undefined);
+  assert.equal(columnsBtn(host).badge, "3");
+
+  columnsBtn(host).click();
+  assert.ok(noDropdown(host) === false && pickerOf(host), "picker open");
+  assert.equal(host._ch.filter(c => c.className === "mkui-filter-dropdown").length, 0, "…and the filter dropdown closed");
+  const p = pickerOf(host);
+  assert.equal(p.groups.length, 0, "flat list without groups");
+  assert.deepEqual(p.state(), [["name", true], ["status", false], ["qty", false], ["ts", false]], "every column in config order");
+  assert.equal(p.title, "Columns · 1 of 4 shown");
+  p.toggle("qty");
+  assert.deepEqual(headerCols(host), ["name", "qty"], "shown before ts, after name — where it came from");
+  assert.equal(pickerOf(host).dd, p.dd, "picker survives the re-render");
+  assert.deepEqual(p.state(), [["name", true], ["status", false], ["qty", true], ["ts", false]]);
+  assert.equal(p.title, "Columns · 2 of 4 shown");
+  p.toggle("name"); p.toggle("qty");
+  assert.deepEqual(headerCols(host), ["qty"], "unticking the last visible column is refused");
+  assert.deepEqual(p.state()[2], ["qty", true], "…and its box snaps back");
+});
+
+test("search narrows the list and offers Show / Hide N matching, scoped to the matches", async () => {
+  const host = await filteredTable({}, { labels: { qty: "Quantity" }, visible: ["name"] });
+  columnsBtn(host).click();
+  const p = pickerOf(host);
+  assert.deepEqual(p.texts(), ["Show all", "Hide all", "Reset"], "the filter dropdown's row, for columns");
+  p.search("t");
+  assert.deepEqual(p.visibleItems(), ["status", "qty", "ts"], "matches labels (Quantity) and names");
+  assert.deepEqual(p.texts(), ["Show 3 matching", "Hide 0 matching", "Reset"], "a query scopes the first two");
+  assert.equal(p.hideAllOff(), true);
+  p.showMatching();
+  assert.deepEqual(headerCols(host), ["name", "status", "qty", "ts"], "all three shown, in place");
+  assert.deepEqual(p.texts(), ["Show 0 matching", "Hide 3 matching", "Reset"]);
+  p.hideMatching();
+  assert.deepEqual(headerCols(host), ["name"]);
+  p.search("");
+  assert.deepEqual(p.texts(), ["Show all", "Hide all", "Reset"]);
+  assert.deepEqual(p.visibleItems(), ["name", "status", "qty", "ts"]);
+  p.search("zzz");
+  assert.deepEqual(p.visibleItems(), []);
+  assert.deepEqual(p.texts(), ["Show 0 matching", "Hide 0 matching", "Reset"]);
+  host._paneEl._columns.set(null);
+  p.search("");
+  p.search("a");
+  p.hideMatching(); // name, status, Quantity match: hides all three
+  assert.deepEqual(headerCols(host), ["ts"]);
+  host._paneEl._columns.set(["qty"]);
+  p.search("q");
+  p.hideMatching();
+  assert.deepEqual(headerCols(host), ["qty"], "hiding every visible column keeps the first");
+});
+
+test("Reset returns to the configured list; Hide all keeps one column; Show all takes a click and a confirm", async () => {
+  const host = await filteredTable({}, { visible: ["name", "qty"] });
+  columnsBtn(host).click();
+  const p = pickerOf(host);
+  assert.equal(p.resetOff(), true, "already at the default");
+  assert.equal(p.showAllText(), "Show all");
+  assert.equal(p.hideAllOff(), false);
+  p.hideAll();
+  assert.deepEqual(headerCols(host), ["name"], "Hide all keeps the first visible column");
+  assert.equal(p.hideAllOff(), true, "…and is then inert");
+  assert.equal(p.title, "Columns · 1 of 4 shown");
+  p.reset();
+  assert.deepEqual(headerCols(host), ["name", "qty"]);
+  p.toggle("status");
+  assert.deepEqual(headerCols(host), ["name", "status", "qty"]);
+  assert.equal(p.resetOff(), false);
+  p.reset();
+  assert.deepEqual(headerCols(host), ["name", "qty"]);
+  assert.deepEqual(host._paneEl._columns.get(), ["name", "qty"]);
+  assert.equal(p.resetOff(), true);
+  // Show all: first click arms, times out; click twice to apply.
+  p.showAll();
+  assert.equal(p.showAllText(), "Show all 4? Confirm");
+  assert.deepEqual(headerCols(host), ["name", "qty"], "one click changes nothing");
+  advanceTimers();
+  assert.equal(p.showAllText(), "Show all", "unconfirmed, it disarms");
+  p.showAll();
+  p.search("q");
+  assert.equal(p.showAllText(), "Show 0 matching", "typing a query disarms too");
+  p.search("");
+  assert.equal(p.showAllText(), "Show all");
+  p.showAll(); p.showAll();
+  assert.deepEqual(headerCols(host), ["name", "status", "qty", "ts"]);
+  assert.equal(host._paneEl._columns.get(), null, "Show all returns to the default state");
+  assert.equal(p.showAllOff(), true, "and is inert while everything shows");
+  assert.equal(p.showAllText(), "Show all");
+  assert.equal(columnsBtn(host).badge, null);
+  p.reset();
+  assert.deepEqual(headerCols(host), ["name", "qty"], "reset works from all too");
+});
+
+test("a filter chip on a hidden column shows it first", async () => {
+  const host = await filteredTable({ status: ["open"] }, { visible: ["name", "qty"] });
+  assert.deepEqual(shownNames(host), ["a"], "a filter on a hidden column still filters");
+  assert.deepEqual(chipStrip(host).filter, ["status: 1 values"]);
+  chipStrip(host).open("status");
+  assert.deepEqual(headerCols(host), ["name", "status", "qty"], "status came back at its place");
+  assert.equal(host._ch.filter(c => c.className === "mkui-filter-dropdown").length, 1, "…and its dropdown opened");
+});
+
+test("reorder then hide keeps the order; a restored column attaches to its config neighbour", async () => {
+  const host = await filteredTable({});
+  const api = host._paneEl._columns;
+  api.set(["qty", "name", "status", "ts"]); // as a header drag would leave it
+  colOps(host, "status").hide._ev.click[0]();
+  assert.deepEqual(api.get(), ["qty", "name", "ts"]);
+  columnsBtn(host).click();
+  pickerOf(host).toggle("status");
+  assert.deepEqual(api.get(), ["qty", "name", "status", "ts"], "after name, its nearest preceding config neighbour");
+  colOps(host, "qty").hide._ev.click[0]();
+  columnsBtn(host).click();
+  pickerOf(host).toggle("qty");
+  assert.deepEqual(api.get(), ["name", "status", "qty", "ts"], "no visible predecessor: before its nearest follower");
+});
+
+test("hidden columns keep sorting and filtering; only visible cells render and copy", async () => {
+  const host = await filteredTable({}, { sort: "-qty", visible: ["name"] });
+  assert.deepEqual(shownNames(host), ["c", "b", "a", "d"], "sort on a hidden column applies");
+  assert.deepEqual(chipStrip(host).sort, ["qty"]);
+  assert.deepEqual(rowCols(host), ["name"]);
+  assert.equal(getColgroup(host)._ch.length, 2);
+});
+
+test("column widths survive hide/show; a first-shown column is measured", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "qty"], visible: ["name"] });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  flushRaf();
+  const api = host._paneEl._columns;
+  const nameW = getColgroup(host)._ch[0].style.width;
+  api.set(["name", "qty"]);
+  flushRaf();
+  const cols = getColgroup(host)._ch;
+  assert.equal(cols[0].style.width, nameW, "name keeps its width");
+  assert.ok(parseInt(cols[1].style.width) >= 100, `qty measured from its header (${cols[1].style.width})`);
+  api.set(["qty"]);
+  api.set(["name", "qty"]);
+  assert.equal(getColgroup(host)._ch[0].style.width, nameW, "hidden then shown: same width");
+});
+
+test("pane reopen restores the configured columns, not the interactive set", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "qty", "ts"], visible: ["name", "qty"] });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  host._paneEl._columns.set(null);
+  assert.deepEqual(headerCols(host), ["name", "qty", "ts"]);
+  columnsBtn(host).click();
+  assert.ok(pickerOf(host));
+  for (const fn of host._paneEl._ev["mkui-pane-close"] ?? []) fn();
+  assert.equal(pickerOf(host), null, "closing the pane drops the picker");
+  for (const fn of host._paneEl._ev["mkui-pane-open"] ?? []) fn();
+  assert.deepEqual(headerCols(host), ["name", "qty"], "back to the config default before data");
+  assert.equal(columnsBtn(host).badge, "1");
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  assert.deepEqual(rowCols(host), ["name", "qty"]);
+});
+
+/* ── Column groups ────────────────────────────────────────────────────── */
+// `groups = [{ label, columns }, …]` categorises columns for the picker
+// (and nothing else): sections with tri-state toggles, an implicit "Other"
+// for the rest, and — without `columns` — a display order that follows
+// the groups. The header dropdown stays per-column.
+
+const GROUPS = [{ label: "Who", columns: ["name", "status"] }, { label: "Numbers", columns: ["qty", "later"] }];
+const wideRows = () => orderRows().map((r, i) => ({ ...r, extra: `x${i}` }));
+async function groupedTable(extra = {}) {
+  const { host, io } = await createTable({ protocol: "query", groups: GROUPS, ...extra });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(wideRows());
+  return host;
+}
+
+test("groups: bad entries warn and are dropped, a column in two groups keeps the first", async () => {
+  const [, warned] = await withWarnings(() => createTable({ protocol: "query", groups: [
+    { label: "A", columns: ["name"] },
+    { columns: ["qty"] },
+    { label: "B", columns: ["name", "qty", 3] },
+    { label: "A", columns: ["ts"] },
+    { label: "C", columns: ["name", "ts"] },
+  ] }));
+  assert.deepEqual(warned, [
+    "[mkio-table] bad groups[1]: expected { label, columns }",
+    "[mkio-table] groups: 'name' is already in a group",
+    "[mkio-table] bad groups[2]: expected column names",
+    "[mkio-table] bad groups[3]: label 'A' used twice",
+    "[mkio-table] groups: 'name' is already in a group",
+  ]);
+  const [, w2] = await withWarnings(() => createTable({ protocol: "query", groups: { A: ["name"] } }));
+  assert.deepEqual(w2, ["[mkio-table] bad groups: expected an array of { label, columns }"]);
+});
+
+test("groups order inferred columns; the picker sections them with an implicit Other", async () => {
+  const host = await groupedTable();
+  assert.deepEqual(headerCols(host), ["name", "status", "qty", "ts", "extra"], "grouped first in group order, then the rest as the data had them");
+  columnsBtn(host).click();
+  const p = pickerOf(host);
+  assert.deepEqual(p.groups.map(g => [g.label, g.count, g.open]), [["Who", "2 of 2", true], ["Numbers", "1 of 1", true], ["Other", "2 of 2", true]],
+    "`later` is not in the data, so Numbers has one column; ungrouped columns form Other");
+  assert.deepEqual(p.state().map(([c]) => c), ["name", "status", "qty", "ts", "extra"]);
+  // Configured `columns` wins over group order.
+  const host2 = await groupedTable({ columns: ["ts", "qty", "name", "status", "extra"] });
+  assert.deepEqual(headerCols(host2), ["ts", "qty", "name", "status", "extra"]);
+});
+
+test("group toggles show or hide the whole group; sections collapse unless they hold a shown column", async () => {
+  const host = await groupedTable({ visible: ["name", "ts"] });
+  columnsBtn(host).click();
+  let p = pickerOf(host);
+  assert.deepEqual(p.groups.map(g => [g.label, g.count, g.cb.checked, g.cb.indeterminate, g.open]), [
+    ["Who", "1 of 2", false, true, true],
+    ["Numbers", "0 of 1", false, false, false],
+    ["Other", "1 of 2", false, true, true],
+  ]);
+  p.group("Numbers").toggle();
+  assert.deepEqual(headerCols(host), ["name", "qty", "ts"], "qty shown in place");
+  assert.deepEqual(p.group("Numbers").cb.checked, true);
+  assert.equal(p.group("Numbers").open, false, "showing through the toggle doesn't unfold the section");
+  p.group("Who").toggle();
+  assert.deepEqual(headerCols(host), ["name", "status", "qty", "ts"], "an indeterminate group ticks to all shown");
+  p.group("Who").toggle();
+  assert.deepEqual(headerCols(host), ["qty", "ts"], "…and unticks to all hidden");
+  assert.equal(p.title, "Columns · 2 of 5 shown");
+  p.group("Numbers").fold();
+  assert.equal(pickerOf(host).group("Numbers").open, true, "click on the head unfolds");
+  columnsBtn(host).click(); columnsBtn(host).click();
+  p = pickerOf(host);
+  assert.equal(p.group("Numbers").open, true, "fold state is remembered across opens");
+  p.search("nu");
+  assert.deepEqual(p.groups.map(g => [g.label, g.shown, g.open]), [["Who", false, true], ["Numbers", true, true], ["Other", false, true]],
+    "a group label match keeps the whole group; others hide; matches unfold");
+  assert.deepEqual(p.visibleItems(), ["qty"]);
+  p.search("t");
+  assert.deepEqual(p.visibleItems(), ["status", "qty", "ts", "extra"]);
+  assert.deepEqual(p.texts(), ["Show 2 matching", "Hide 2 matching", "Reset"]);
+  p.search("");
+  assert.equal(p.group("Who").open, true, "the query's unfolding is gone; Who keeps its remembered (open) state");
+  assert.equal(p.group("Numbers").open, true);
+  // Hide every group: the last visible column stays.
+  p.group("Numbers").toggle();
+  assert.deepEqual(headerCols(host), ["ts"]);
+  p.group("Other").toggle();
+  assert.deepEqual(headerCols(host), ["ts", "extra"], "indeterminate Other ticks to all shown");
+  p.group("Other").toggle();
+  assert.deepEqual(headerCols(host), ["ts"], "…unticks to hidden, but the last column stays");
+});
+
+test("the header dropdown never controls other columns, grouped or not", async () => {
+  const host = await groupedTable();
+  assert.equal(colOps(host, "qty").extra, 0, "grouped column: still only Hide column");
+  assert.equal(colOps(host, "extra").extra, 0);
+  colOps(host, "qty").hide._ev.click[0]();
+  assert.deepEqual(headerCols(host), ["name", "status", "ts", "extra"], "hides just that column");
+});
+
+/* ── Dropdown list sizing ─────────────────────────────────────────────── */
+// Value and column lists open at content height, capped so the dropdown
+// ends inside the viewport; a height the user dragged is kept per kind.
+
+test("lists are uncapped without a viewport, capped to the viewport with one, and remember a dragged height", async () => {
+  const host = await filteredTable({});
+  // No viewport in the harness: no cap, no height.
+  let dd = openDropdown(host, "status");
+  assert.equal(dd.list.style.maxHeight, "");
+  columnsBtn(host).click();
+  let p = pickerOf(host);
+  const plist = byClass(p.dd, "mkui-filter-list")[0];
+  assert.equal(plist.style.maxHeight, "");
+  // With a viewport the mock rects (bottom 20) overflow a 10px window: the
+  // cap floors at the minimum height rather than collapsing.
+  globalThis.innerHeight = 10;
+  try {
+    dd = openDropdown(host, "status");
+    assert.equal(dd.list.style.maxHeight, "40px");
+    // A tall viewport leaves the content height as the cap — the mocked
+    // 20px, floored at the list's minimum. (Opening another column: the
+    // same button would toggle the dropdown closed.)
+    globalThis.innerHeight = 1000;
+    dd = openDropdown(host, "qty");
+    assert.equal(dd.list.style.maxHeight, "40px");
+    // Drag (the browser writes an inline height), close, reopen: kept, clamped to the cap.
+    dd.list.style.height = "150px";
+    dd = openDropdown(host, "status");
+    assert.equal(dd.list.style.height, "40px", "remembered 150 clamped to the cap");
+    columnsBtn(host).click();
+    p = pickerOf(host);
+    assert.equal(byClass(p.dd, "mkui-filter-list")[0].style.height, "", "kinds are remembered separately");
+    byClass(p.dd, "mkui-filter-list")[0].style.height = "12px";
+    columnsBtn(host).click(); columnsBtn(host).click();
+    assert.equal(byClass(pickerOf(host).dd, "mkui-filter-list")[0].style.height, "12px");
+  } finally {
+    delete globalThis.innerHeight;
+  }
+});
+
+test("copy, cell rects, and the drag ghost see only visible columns", async () => {
+  const { host } = await createSelTable({ visible: ["value"] });
+  const trs = dataRows(host);
+  pointerDown(trs[0], 0);
+  pointerDown(trs[1], 0, { shiftKey: true });
+  let written = null;
+  globalThis.navigator = { clipboard: { writeText: (s) => { written = s; } } };
+  try { assert.equal(host._paneEl._editActions.copy(), true); }
+  finally { delete globalThis.navigator; }
+  assert.equal(written, "value\r\n0\r\n1", "row copy spans the visible column only");
+  host._paneEl._columns.set(null);
+  globalThis.navigator = { clipboard: { writeText: (s) => { written = s; } } };
+  try { host._paneEl._editActions.copy(); }
+  finally { delete globalThis.navigator; }
+  assert.equal(written, "name\tvalue\r\nrow-0\t0\r\nrow-1\t1", "the selection survives showing a column");
+});

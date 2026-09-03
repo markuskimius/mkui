@@ -88,6 +88,7 @@ test("table.filter and table.sort actions route to the workspace", async () => {
   const src = readFileSync(new URL("../mkui/static/src/components/app.js", import.meta.url), "utf8");
   assert.match(src, /registerAction\("table\.filter",\s*\(app, a = \{\}\) => ws\.setPaneFilters\(a\.pane \?\? null, a\.filters \?\? \{\}, \{ merge: a\.merge === true \}\)\)/);
   assert.match(src, /registerAction\("table\.sort",\s*\(app, a = \{\}\) => ws\.setPaneSort\(a\.pane \?\? null, a\.sort \?\? null\)\)/);
+  assert.match(src, /registerAction\("table\.columns",\s*\(app, a = \{\}\) => ws\.setPaneColumns\(a\.pane \?\? null, a\.visible \?\? null\)\)/);
 });
 
 /* ── Sort routing ─────────────────────────────────────────────────────── */
@@ -118,4 +119,33 @@ test("setPaneSort reaches the named pane's sort hook; getPaneSort reads it back"
   assert.equal(ws.setPaneSort("parked", [{ col: "a", dir: "desc" }]), true, "never-shown pane is built first");
   assert.equal(ws.setPaneSort(null, null), true, "no id targets the focused pane");
   assert.equal(log.at(-1)[0], "sort:b");
+});
+
+/* ── Columns routing ──────────────────────────────────────────────────── */
+// setPaneColumns / getPaneColumns reach a pane's `_columns` hook the same way.
+
+function makeColumnsWorkspace(log) {
+  const ws = makeWorkspace(log);
+  for (const [id, el] of ws._paneEls) if (el._filters) el._columns = hook(log, "cols:" + id);
+  const ensure = ws._ensurePaneEl;
+  ws._ensurePaneEl = (id) => {
+    const el = ensure(id);
+    if (el._filters) el._columns ??= hook(log, "cols:" + id);
+    return el;
+  };
+  return ws;
+}
+
+test("setPaneColumns reaches the named pane's columns hook; getPaneColumns reads it back", () => {
+  const log = [];
+  const ws = makeColumnsWorkspace(log);
+  assert.equal(ws.setPaneColumns("a", ["id", "qty"]), true);
+  assert.deepEqual(log, [["cols:a", ["id", "qty"], undefined]]);
+  assert.deepEqual(ws.getPaneColumns("a"), ["id", "qty"]);
+  assert.equal(ws.setPaneColumns("plain", ["x"]), false, "a pane without the hook declines");
+  assert.equal(ws.setPaneColumns("nope", ["x"]), false);
+  assert.equal(ws.getPaneColumns("plain"), null);
+  assert.equal(ws.setPaneColumns("parked", "id"), true, "never-shown pane is built first");
+  assert.equal(ws.setPaneColumns(null, null), true, "no id targets the focused pane; null shows all");
+  assert.deepEqual(log.at(-1), ["cols:b", null, undefined]);
 });

@@ -463,6 +463,35 @@ test("group clear buttons carry an × badge anchored to the icon", () => {
     "the badge masks the icon corner in the toolbar color");
 });
 
+test("the Columns button rides a sticky anchor above the header, opaque, left of the scrollbar", () => {
+  // Sticky on both axes: horizontal scroll must not carry the anchor off.
+  assert.equal(declaration(".mkui-columns-anchor", "position"), "sticky");
+  assert.equal(declaration(".mkui-columns-anchor", "top"), "0");
+  assert.equal(declaration(".mkui-columns-anchor", "left"), "0");
+  assert.equal(declaration(".mkui-columns-anchor", "height"), "0", "takes no space in the scroll area");
+  assert.ok(parseInt(declaration(".mkui-columns-anchor", "z-index")) > 2, "above the sticky header cells (rownum corner is 2)");
+  assert.equal(declaration(".mkui-columns-btn", "position"), "absolute");
+  assert.equal(declaration(".mkui-columns-btn", "right"), "0");
+  assert.equal(declaration(".mkui-columns-btn", "background"), "var(--mkui-bg-alt)", "opaque: it overlays a header cell");
+  assert.equal(declaration(".mkui-columns-badge[hidden]", "display"), "none");
+  assert.ok(!/mkui-chip-columns/.test(css), "no hidden-columns chip any more");
+});
+
+test("dropdown lists size to the viewport, not a fixed cap, and resize vertically", () => {
+  assert.equal(declaration(".mkui-filter-list", "resize"), "vertical");
+  assert.ok(!/max-height/.test(rule(".mkui-filter-list")), "the cap is set per open from the viewport");
+  assert.ok(/overflow(-y)?\s*:\s*auto/.test(rule(".mkui-filter-list")), "resize needs a non-visible overflow");
+  assert.ok(declaration(".mkui-filter-list", "min-height"));
+  assert.equal(declaration(".mkui-filter-list", "box-sizing"), "border-box", "the JS cap is a rect height, padding included");
+});
+
+test("inert dropdown actions read muted and lose their hover; Show all's confirm state stands out", () => {
+  assert.equal(declaration(".mkui-columns-confirm", "font-weight"), "600");
+  assert.equal(declaration(".mkui-filter-action-off", "color"), "var(--mkui-fg-mute)");
+  assert.equal(declaration(".mkui-filter-action-off", "cursor"), "default");
+  assert.equal(declaration(".mkui-filter-action-off:hover", "text-decoration"), "none");
+});
+
 test("chips are capped in width and ellipsize their text", () => {
   assert.ok(declaration(".mkui-chip", "max-width"));
   assert.equal(declaration(".mkui-chip-text", "text-overflow"), "ellipsis");

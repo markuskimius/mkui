@@ -40,6 +40,11 @@ items = [
   { label = "All Orders: newest first", action = "table.sort", args = { pane = "all-orders", sort = "-ts" } },
   { label = "All Orders: by symbol, largest first", action = "table.sort", args = { pane = "all-orders", sort = ["symbol", { col = "qty", dir = "desc" }] } },
   { label = "All Orders: clear sort", action = "table.sort", args = { pane = "all-orders" } },
+  { sep = true },
+  # table.columns sets which columns a pane shows, in that order; the shape
+  # matches `visible` under [panes.<id>]. No `visible` shows every column.
+  { label = "All Orders: compact view", action = "table.columns", args = { pane = "all-orders", visible = ["symbol", "side", "qty", "notional"] } },
+  { label = "All Orders: all columns", action = "table.columns", args = { pane = "all-orders" } },
 ]
 
 [[menubar]]
@@ -83,6 +88,22 @@ protocol = "query"
 columns = ["id", "ts", "side", "symbol", "qty", "price", "notional", "status"]
 labels = { ts = "Time" }
 values = { notional = "ROUND(qty * price, 2)" }
+# Which columns show, in this order. `id` and `price` start hidden — the
+# Columns button at the header's right edge (badge: 2) opens the picker
+# that brings them back; each header's dropdown has "Hide column". Hidden
+# columns still work: `notional` is derived from the hidden
+# `price`, and sorts and filters on hidden columns still apply. Without
+# `visible`, every column shows, including ones added later.
+visible = ["ts", "side", "symbol", "qty", "notional", "status"]
+# Column groups categorise the picker (sections with show/hide-the-group
+# toggles; ungrouped columns fall into "Other"). Structure only — `visible`
+# says what shows. With hundreds of columns this is how a user finds the
+# few they want; the config's `visible` is the curated default they can
+# always reset to.
+groups = [
+  { label = "Order",   columns = ["id", "ts", "side", "symbol"] },
+  { label = "Pricing", columns = ["qty", "price", "notional"] },
+]
 # Mirror the current row into app state; the order-detail pane follows it.
 select = { state = "selected_order" }
 # Conditional styling, config-only: rules are evaluated first-match-wins;
@@ -167,6 +188,10 @@ columns = ["id", "side", "symbol", "qty", "price", "status"]
 # largest quantity first. Active sorts and filters show as chips on the
 # toolbar, where they can be flipped, opened, or cleared.
 sort = ["symbol", "-qty"]
+# Only these columns show, in this order (the rest are one "hidden" chip
+# away). Without `visible`, every column shows — including any added to
+# `columns` later; with it, the set is exactly this until someone changes it.
+visible = ["symbol", "side", "qty", "price"]
 
 [[panes.pending.buttons]]
 label = "Fill"

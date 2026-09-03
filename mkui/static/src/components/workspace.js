@@ -137,7 +137,8 @@ class MkuiWorkspace extends HTMLElement {
     return fn ? fn() !== false : false;
   }
 
-  // A pane's view hook (`_filters` or `_sort`, exposed by mkio-table). By
+  // A pane's view hook (`_filters`, `_sort`, or `_columns`, exposed by
+  // mkio-table). By
   // id, a pane that was never shown is built first when `build` is set,
   // so a setter can run ahead of opening it; with no id, the focused
   // frame's active pane is the target.
@@ -176,6 +177,21 @@ class MkuiWorkspace extends HTMLElement {
   // `[{ col, dir }]` in priority order, or null without a sort hook.
   getPaneSort(paneId) {
     return this._paneHook(paneId, "_sort", false)?.get() ?? null;
+  }
+
+  // Visible columns: the shape the pane's `visible` key takes — a column
+  // name or an array in display order; null shows every column (and follows
+  // new ones). Returns whether a pane took it.
+  setPaneColumns(paneId, visible) {
+    const hook = this._paneHook(paneId, "_columns", true);
+    if (!hook) return false;
+    hook.set(visible);
+    return true;
+  }
+
+  // The list back, null when every column shows (or without a columns hook).
+  getPaneColumns(paneId) {
+    return this._paneHook(paneId, "_columns", false)?.get() ?? null;
   }
 
   setApp(app) {

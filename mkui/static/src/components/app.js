@@ -68,6 +68,8 @@ class MkuiApp extends HTMLElement {
     // `args = { pane = "<id>", sort = <spec> }` — a column name, "-col",
     // { col, dir }, or an array of those; no `sort` clears.
     this._app.registerAction("table.sort",      (app, a = {}) => ws.setPaneSort(a.pane ?? null, a.sort ?? null));
+    // Visible columns: `args = { pane, visible }`; no `visible` shows all.
+    this._app.registerAction("table.columns",   (app, a = {}) => ws.setPaneColumns(a.pane ?? null, a.visible ?? null));
 
     const hasAuth = !!config.auth;
     const st = this._app.state;

@@ -139,7 +139,28 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   const scrollArea = document.createElement("div");
   scrollArea.className = "mkui-table-scroll";
-  scrollArea.appendChild(table);
+  // The Columns button is pinned to the header row's right edge: a
+  // zero-height sticky anchor ahead of the table (so it stays put under
+  // both scroll axes and sits left of the scrollbar) carrying the button
+  // at its right end. Always present — it is the one way into the column
+  // picker — with a badge counting hidden columns.
+  const colsAnchor = document.createElement("div");
+  colsAnchor.className = "mkui-columns-anchor";
+  const colsBtn = document.createElement("button");
+  colsBtn.className = "mkui-columns-btn";
+  colsBtn.type = "button";
+  colsBtn.title = "Columns";
+  colsBtn.disabled = true;
+  const colsBadge = document.createElement("span");
+  colsBadge.className = "mkui-columns-badge";
+  colsBadge.hidden = true;
+  colsBtn.append(icon("columns"), colsBadge);
+  colsBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (picker) closePicker(); else openColumnsPicker(colsBtn);
+  });
+  colsAnchor.appendChild(colsBtn);
+  scrollArea.append(colsAnchor, table);
   const scrollHost = scrollArea;
   host.appendChild(scrollArea);
 
@@ -213,11 +234,21 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   let viewDirty = false;           // view needs a full rebuild from baseOrder
   let viewRev = 0;                 // bumped on any change that affects the view
   let columns = spec.columns ?? null;
-  let displayOrder = null;
+  // Which columns show, and in what order. `null` — the default — is every
+  // known column in `columns` order, so a column that appears later (a new
+  // field in the data, or one added to `columns` in config) shows up on its
+  // own. An array is exactly these, in this order: whatever the user hid,
+  // and whatever arrived since, stays out until asked for — that is what
+  // lets a config add a column without disturbing a saved layout. Header
+  // reorder and hiding both materialise the list; "Show all" returns to
+  // null. Seeded from `visible` in the pane spec (loadVisibleSpec).
+  let visible = null;
+  let defaultVisible = null;   // the configured list — "Reset to default"
   const colWidths = new Map();
   let widthsInited = false;
   let widthsDirty = false;     // a ratchet grew a column — colgroup refresh pending
   const userSized = new Set(); // manually resized columns: auto-grow keeps hands off
+  const headerMeasured = new Set(); // columns whose header width has been taken
   let dataSeen = false;        // some row has been measured since the last width reset
   let growSuspended = false;   // page load after first data: ratchet off, widths hold
   let rowNumDigits = 2;        // row-number column width follows the digit count
@@ -225,6 +256,43 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   const CELL_CHROME = 17;      // 8px cell padding each side + 1px divider (mkui.css)
   const labels = spec.labels ?? {};
   const label = (col) => labels[col] ?? col;
+
+  // Column groups (categories): `groups = [{ label, columns }, …]` in the
+  // pane spec, an ordered array so the picker can section hundreds of
+  // columns. Structure only — `visible` stays the one source of truth for
+  // what shows. A column in two groups warns and keeps the first; a name
+  // that is no known column is kept and skipped (it may arrive with the
+  // data); a bad entry warns `bad groups[i]` and is dropped.
+  const colGroupsSpec = []; // [{ label, columns }]
+  {
+    const gs = spec.groups;
+    const seen = new Set();
+    if (gs != null && gs !== "" && !Array.isArray(gs)) {
+      console.warn("[mkio-table] bad groups: expected an array of { label, columns }");
+    } else if (Array.isArray(gs)) {
+      gs.forEach((g, i) => {
+        if (!g || typeof g !== "object" || typeof g.label !== "string" || !g.label || !Array.isArray(g.columns)) {
+          console.warn(`[mkio-table] bad groups[${i}]: expected { label, columns }`);
+          return;
+        }
+        if (colGroupsSpec.some((x) => x.label === g.label)) {
+          console.warn(`[mkio-table] bad groups[${i}]: label '${g.label}' used twice`);
+          return;
+        }
+        const cols = [];
+        for (const c of g.columns) {
+          if (typeof c !== "string" || !c) {
+            console.warn(`[mkio-table] bad groups[${i}]: expected column names`);
+            return;
+          }
+          if (seen.has(c)) { console.warn(`[mkio-table] groups: '${c}' is already in a group`); continue; }
+          seen.add(c);
+          cols.push(c);
+        }
+        colGroupsSpec.push({ label: g.label, columns: cols });
+      });
+    }
+  }
 
   // Column filter types. Range filtering is offered on numeric columns and
   // on columns whose every value is a time (see lib/timeparse.js for what
@@ -245,8 +313,57 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     colTypes[c] = o;
   }
-  const visibleColumns = () =>
-    displayOrder || columns.filter((c) => !c.startsWith("_mkio_"));
+  // Data columns: everything known except mkio's identity fields.
+  const dataColumns = () => columns.filter((c) => !c.startsWith("_mkio_"));
+  // Names in `visible` that aren't (yet) known columns are skipped rather
+  // than rendered empty — config may name a column ahead of the data, and
+  // it takes its place as soon as the data carries it. Cached on the
+  // identity of both arrays (they are always reassigned, never mutated):
+  // this runs in the render and selection hot paths.
+  let visCache = null, visCacheCols = null, visCacheList = null;
+  const visibleColumns = () => {
+    if (visCache && visCacheCols === columns && visCacheList === visible) return visCache;
+    const known = dataColumns();
+    visCache = visible ? visible.filter((c) => known.includes(c)) : known;
+    visCacheCols = columns;
+    visCacheList = visible;
+    return visCache;
+  };
+  // Known columns not shown, in `columns` order — the badge and picker.
+  const hiddenColumns = () => {
+    if (!columns) return [];
+    const vis = new Set(visibleColumns());
+    return dataColumns().filter((c) => !vis.has(c));
+  };
+  // The groups as the picker sections them: configured groups cut down to
+  // known columns, then an implicit "Other" for whatever no group names.
+  // null while the table has no columns or no groups are configured.
+  function colGroups() {
+    if (!columns || !colGroupsSpec.length) return null;
+    const known = dataColumns();
+    const grouped = new Set();
+    const out = [];
+    for (const g of colGroupsSpec) {
+      const cols = g.columns.filter((c) => known.includes(c));
+      for (const c of cols) grouped.add(c);
+      if (cols.length) out.push({ label: g.label, columns: cols, other: false });
+    }
+    const rest = known.filter((c) => !grouped.has(c));
+    if (rest.length) out.push({ label: "Other", columns: rest, other: true });
+    return out;
+  }
+  // Columns inferred from the first row keep the row's key order — unless
+  // groups are configured, when grouped columns come first in group order
+  // so a category's columns sit together without writing `columns` too.
+  function inferColumns(row) {
+    const keys = Object.keys(row);
+    if (!colGroupsSpec.length) return keys;
+    const ordered = [];
+    for (const g of colGroupsSpec)
+      for (const c of g.columns) if (keys.includes(c) && !ordered.includes(c)) ordered.push(c);
+    for (const k of keys) if (!ordered.includes(k)) ordered.push(k);
+    return ordered;
+  }
 
   /* ── Cell values ──────────────────────────────────────────────────── */
 
@@ -1697,8 +1814,36 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function closeDropdown() {
-    if (dropdown) { dropdown.remove(); dropdown = null; dropdownCol = null; }
+    if (dropdown) { rememberListHeight(dropdown, "filter"); dropdown.remove(); dropdown = null; dropdownCol = null; }
     if (dropdownCleanup) { dropdownCleanup(); dropdownCleanup = null; }
+  }
+
+  /* ── Dropdown list sizing ─────────────────────────────────────────── */
+
+  // The value list (filter dropdown) and the column list (picker) open as
+  // tall as their content, capped so the dropdown's bottom stays inside
+  // the viewport — the cap is the list's max-height, which CSS `resize:
+  // vertical` also respects, so the user can drag the list shorter (or
+  // back up to the cap) by its corner grip. A dragged height is kept per
+  // kind for the table's life: the browser writes it as an inline
+  // `height`, read back when the dropdown closes. Skipped where there is
+  // no viewport to measure against (tests).
+  const listHeights = { filter: null, picker: null };
+  const LIST_MIN_H = 40, VIEWPORT_GAP = 8; // LIST_MIN_H matches .mkui-filter-list min-height
+  function fitList(dd, list, kind) {
+    dd._mkuiList = list;
+    const vh = window.innerHeight;
+    if (!(vh > 0)) return;
+    const listH = list.getBoundingClientRect().height;
+    const overflow = dd.getBoundingClientRect().bottom - (vh - VIEWPORT_GAP);
+    const maxH = Math.max(LIST_MIN_H, overflow > 0 ? listH - overflow : listH);
+    list.style.maxHeight = maxH + "px";
+    const kept = listHeights[kind];
+    if (kept > 0) list.style.height = Math.min(kept, maxH) + "px";
+  }
+  function rememberListHeight(dd, kind) {
+    const h = parseFloat(dd._mkuiList?.style.height);
+    if (h > 0) listHeights[kind] = h;
   }
 
   function compareValues(a, b) {
@@ -1854,6 +1999,121 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function getSort() {
     return sortKeys.map(({ col, dir }) => ({ col, dir }));
+  }
+
+  /* ── Column visibility ────────────────────────────────────────────── */
+
+  // Which columns show can be described as well as clicked. `visible =
+  // [...]` in the pane spec seeds the set before any data and is restored
+  // on pane reopen; `paneEl._columns.set/get`, the workspace's
+  // `setPaneColumns`, and the `table.columns` action take the same shape:
+  // a column name or an array of them in display order, or null / "" / []
+  // for all columns (following new ones as they appear). A name that isn't
+  // a configured column warns but is kept — it may arrive with the data.
+  // A bad spec warns and leaves the current state alone.
+  function visibleFromSpec(s) {
+    if (s == null || s === "") return null;
+    const list = Array.isArray(s) ? s : [s];
+    if (!list.length) return null;
+    const out = [];
+    for (const c of list) {
+      if (typeof c !== "string" || !c) throw new Error("expected a column name");
+      if (out.includes(c)) throw new Error(`column '${c}' listed twice`);
+      out.push(c);
+    }
+    if (spec.columns)
+      for (const c of out) if (!spec.columns.includes(c))
+        console.warn(`[mkio-table] visible: '${c}' is not in columns`);
+    return out;
+  }
+
+  function loadVisibleSpec(s) {
+    try {
+      visible = visibleFromSpec(s);
+    } catch (e) {
+      console.warn(`[mkio-table] bad visible: ${e.message}`);
+    }
+  }
+
+  // Re-render for a changed column set or order: header (and with it the
+  // colgroup and spacer spans), every rendered row, header state and
+  // chips. Widths and stats are keyed by name and cover hidden columns
+  // too, so a column comes back at the width it had; one shown for the
+  // first time is measured from its header like any new column.
+  function applyVisible() {
+    closeDropdown();
+    if (!columns) { updateHeaderState(); return; } // no header yet: chips only
+    renderHead();
+    initNewColWidths();
+    rebuildAllRows();
+    render();
+  }
+
+  function setVisible(s) {
+    loadVisibleSpec(s);
+    applyVisible();
+  }
+
+  // null in the default state — so set(get()) round-trips "all columns,
+  // following new ones" rather than freezing today's list.
+  function getVisible() {
+    return visible ? visible.slice() : null;
+  }
+
+  // A hidden column goes back where it came from: after the nearest shown
+  // column that precedes it in `columns` order, else before the nearest one
+  // that follows, else at the end. Pure: returns the new list.
+  function insertShown(list, col) {
+    const all = dataColumns();
+    const at = all.indexOf(col);
+    const shown = list.filter((c) => all.includes(c));
+    let i = list.length;
+    const before = [...all.slice(0, at)].reverse().find((c) => shown.includes(c));
+    const after = all.slice(at + 1).find((c) => shown.includes(c));
+    if (before !== undefined) i = list.indexOf(before) + 1;
+    else if (after !== undefined) i = list.indexOf(after);
+    return [...list.slice(0, i), col, ...list.slice(i)];
+  }
+
+  // Show some hidden columns (in `columns` order) — one re-render.
+  function showColumns(cols) {
+    if (!columns || !visible) return; // null: everything already shows
+    const known = dataColumns();
+    let list = visible;
+    for (const c of known) if (cols.includes(c) && !list.includes(c)) list = insertShown(list, c);
+    if (list === visible) return;
+    visible = list;
+    applyVisible();
+  }
+  const showColumn = (col) => showColumns([col]);
+
+  // Hide some columns. The last visible column stays — a table with no
+  // columns has no header to bring anything back from — so hiding all of
+  // them keeps the first.
+  function hideColumns(cols) {
+    if (!columns) return;
+    const cur = visibleColumns();
+    let next = cur.filter((c) => !cols.includes(c));
+    if (!next.length) next = [cur[0]];
+    if (next.length === cur.length) return;
+    visible = next;
+    applyVisible();
+  }
+  const hideColumn = (col) => hideColumns([col]);
+
+  function showAllColumns() {
+    if (!visible) return;
+    visible = null;
+    applyVisible();
+  }
+
+  // Back to the configured `visible` list (or all, without one).
+  const sameList = (a, b) => a === b || (!!a && !!b && a.length === b.length && a.every((c, i) => c === b[i]));
+  const isDefaultVisible = () => sameList(visible, defaultVisible);
+  function resetVisible() {
+    if (isDefaultVisible()) return;
+    visible = defaultVisible;
+    applyVisible();
   }
 
   /* ── Filter specs ─────────────────────────────────────────────────── */
@@ -2101,6 +2361,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (w > 0) {
         colWidths.set(th.dataset.col,
           Math.min(Math.max(w, colWidths.get(th.dataset.col) ?? 0, MIN_COL_W), maxW));
+        headerMeasured.add(th.dataset.col);
         measured = true;
       }
     }
@@ -2109,9 +2370,34 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     renderColgroup();
   }
 
+  // A column shown after the initial measurement was hidden then, so its
+  // header was never measured (its data may have been — stats and the
+  // ratchet cover hidden columns too): take the header width now, the
+  // same way, and keep whatever the data already asked for.
+  function initNewColWidths() {
+    if (!widthsInited) return;
+    const fresh = visibleColumns().filter((c) => !headerMeasured.has(c));
+    if (!fresh.length) return;
+    const maxW = maxColWidth();
+    const prevWidth = table.style.width;
+    table.style.width = "max-content";
+    for (const th of thead.querySelectorAll("th")) {
+      const c = th.dataset.col;
+      if (!c || !fresh.includes(c)) continue;
+      const w = th.getBoundingClientRect().width;
+      if (!(w > 0)) continue; // pane hidden — stays unmeasured for next time
+      colWidths.set(c, Math.min(Math.max(w, colWidths.get(c) ?? 0, MIN_COL_W), maxW));
+      headerMeasured.add(c);
+    }
+    table.style.width = prevWidth;
+    widthsDirty = false;
+    renderColgroup();
+  }
+
   function resetColWidths() {
     colWidths.clear();
     userSized.clear();
+    headerMeasured.clear();
     dataSeen = false;
     growSuspended = false;
     widthsInited = false;
@@ -2315,6 +2601,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     botSpacerTd.colSpan = spacerSpan;
     renderColgroup();
     maybeInitWidths();
+    updateHeaderState(); // sort/filter marks on the new cells, and the chips
   }
 
   function updateHeaderState() {
@@ -2348,7 +2635,24 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       btn.classList.toggle("active", !!f);
       btn.title = f ? describeFilter(f) : "";
     }
+    updateColumnsBtn();
     renderChips();
+  }
+
+  // The Columns button's badge counts hidden columns; its tooltip gives
+  // the whole picture. Its height follows the header row so it reads as
+  // part of it.
+  function updateColumnsBtn() {
+    const n = hiddenColumns().length;
+    colsBadge.textContent = n ? String(n) : "";
+    colsBadge.hidden = !n;
+    colsBtn.classList.toggle("active", n > 0);
+    colsBtn.disabled = !columns;
+    colsBtn.title = columns
+      ? `Columns: ${visibleColumns().length} of ${dataColumns().length} shown`
+      : "Columns";
+    const h = thead.getBoundingClientRect?.().height;
+    if (h > 0) colsBtn.style.height = h + "px";
   }
 
   /* ── Sort & filter chips ──────────────────────────────────────────── */
@@ -2436,6 +2740,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         return makeChip("mkui-chip-filter", col, text, text,
           () => {
             if (dropdownCol === col) { closeDropdown(); return; }
+            if (columns && !visibleColumns().includes(col)) showColumn(col); // hidden: bring it back first
             const th = thead.querySelector?.(`th[data-col="${CSS.escape(col)}"]`);
             if (!th) return;
             scrollHeaderIntoView(th);
@@ -2447,6 +2752,236 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         () => clearFilters([...filters.keys()]), chips));
     }
     syncToolbar();
+  }
+
+  /* ── Column picker ────────────────────────────────────────────────── */
+
+  // The one place columns are chosen in bulk, opened from the Columns
+  // button. A checkbox per known column — tick to show (back at its
+  // place), untick to hide, applied at once — flat in `columns` order, or
+  // sectioned by group when groups are configured: each section has a
+  // tri-state checkbox that shows or hides the whole group (bounded, its
+  // size printed beside it, one more click reverses it) and collapses
+  // unless it holds a shown column. The actions row under the search
+  // mirrors the filter dropdown's: "Show all" / "Hide all" / "Reset" (to
+  // the configured list). While a query narrows the list the first two
+  // scope themselves to the matches ("Show N matching"). Unscoped "Show
+  // all" is two-step — click, then confirm within a few seconds — since on
+  // a wide table an accidental show-all is the one action that hurts;
+  // "Hide all" keeps the last column, and is where a user starts when
+  // picking a few columns out of hundreds. The picker survives the
+  // re-render each change causes — it lives in its own slot and re-syncs.
+  let picker = null;
+  let pickerCleanup = null;
+  const pickerExpanded = new Map(); // group label -> expanded, kept while the table lives
+  const SHOW_ALL_ARM_MS = 4000;
+
+  function closePicker() {
+    if (picker) { rememberListHeight(picker, "picker"); picker.remove(); picker = null; }
+    if (pickerCleanup) { pickerCleanup(); pickerCleanup = null; }
+  }
+
+  function openColumnsPicker(anchorEl) {
+    closeDropdown();
+    closePicker();
+    if (!columns) return;
+    const rect = anchorEl.getBoundingClientRect();
+    const dd = document.createElement("div");
+    dd.className = "mkui-filter-dropdown mkui-columns-picker";
+    dd.style.position = "fixed";
+    dd.style.zIndex = "10001";
+    const width = 240;
+    let left = rect.right - width;
+    if (left < 4) left = 4;
+    if (left + width > window.innerWidth) left = Math.max(4, window.innerWidth - width - 4);
+    dd.style.left = left + "px";
+    dd.style.top = (rect.bottom + 1) + "px";
+
+    const title = document.createElement("div");
+    title.className = "mkui-columns-title";
+    dd.appendChild(title);
+
+    const search = document.createElement("input");
+    search.type = "text";
+    search.className = "mkui-filter-search";
+    search.placeholder = "Search columns…";
+    dd.appendChild(search);
+
+    // Show all / Hide all / Reset — the filter dropdown's row, for columns.
+    const actions = document.createElement("div");
+    actions.className = "mkui-filter-actions mkui-columns-actions";
+    const showAll = document.createElement("span");
+    showAll.className = "mkui-filter-action mkui-columns-showall";
+    const hideAll = document.createElement("span");
+    hideAll.className = "mkui-filter-action mkui-columns-hideall";
+    const reset = document.createElement("span");
+    reset.className = "mkui-filter-action mkui-columns-reset";
+    reset.textContent = "Reset";
+    reset.title = "Back to the configured columns";
+    actions.append(showAll, hideAll, reset);
+    dd.appendChild(actions);
+
+    const list = document.createElement("div");
+    list.className = "mkui-filter-list";
+    const items = [];  // { col, cb, el }
+    const groups = []; // { label, columns, cb, head, body, caret, count }
+    const makeItem = (c, parent) => {
+      const lbl = document.createElement("label");
+      lbl.className = "mkui-filter-item";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.dataset.col = c;
+      const txt = document.createElement("span");
+      txt.textContent = label(c);
+      lbl.append(cb, txt);
+      parent.appendChild(lbl);
+      items.push({ col: c, cb, el: lbl });
+      cb.addEventListener("change", () => {
+        if (cb.checked) showColumn(c); else hideColumn(c);
+        sync(); // a refused hide (last column) snaps the box back
+      });
+    };
+    const sections = colGroups();
+    if (sections) {
+      for (const g of sections) {
+        const sec = document.createElement("div");
+        sec.className = "mkui-columns-group";
+        const head = document.createElement("div");
+        head.className = "mkui-columns-group-head";
+        const caret = document.createElement("span");
+        caret.className = "mkui-columns-caret";
+        caret.appendChild(icon("chevron-right"));
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.dataset.group = g.label;
+        const txt = document.createElement("span");
+        txt.className = "mkui-columns-group-label";
+        txt.textContent = g.label;
+        const count = document.createElement("span");
+        count.className = "mkui-columns-count";
+        head.append(caret, cb, txt, count);
+        const body = document.createElement("div");
+        body.className = "mkui-columns-items";
+        sec.append(head, body);
+        list.appendChild(sec);
+        for (const c of g.columns) makeItem(c, body);
+        const gr = { label: g.label, columns: g.columns, cb, head, body, caret, count, el: sec };
+        groups.push(gr);
+        if (!pickerExpanded.has(g.label))
+          pickerExpanded.set(g.label, g.columns.some((c) => visibleColumns().includes(c)));
+        head.addEventListener("click", (e) => {
+          if (e.target === cb) return; // the checkbox is its own control
+          pickerExpanded.set(g.label, !pickerExpanded.get(g.label));
+          sync();
+        });
+        cb.addEventListener("change", () => {
+          if (cb.checked) showColumns(g.columns); else hideColumns(g.columns);
+          sync();
+        });
+      }
+    } else {
+      for (const c of dataColumns()) makeItem(c, list);
+    }
+    dd.appendChild(list);
+
+    let armed = false, armTimer = null;
+    const disarm = () => {
+      armed = false;
+      if (armTimer) { clearTimeout(armTimer); armTimer = null; }
+    };
+    reset.addEventListener("click", () => { disarm(); resetVisible(); sync(); });
+
+    // The query narrows items; a group label match keeps its whole group.
+    const query = () => String(search.value ?? "").trim().toLowerCase();
+    const matches = (c, q) => !q || label(c).toLowerCase().includes(q) || c.toLowerCase().includes(q);
+    const matching = () => {
+      const q = query();
+      if (!q) return items.map((it) => it.col);
+      const out = [];
+      if (groups.length) {
+        for (const g of groups) {
+          const whole = g.label.toLowerCase().includes(q);
+          for (const c of g.columns) if (whole || matches(c, q)) out.push(c);
+        }
+      } else {
+        for (const it of items) if (matches(it.col, q)) out.push(it.col);
+      }
+      return out;
+    };
+    showAll.addEventListener("click", () => {
+      if (query()) { showColumns(matching()); sync(); return; } // scoped: bounded, one click
+      if (!visible) return; // already showing everything
+      if (!armed) {
+        armed = true;
+        armTimer = setTimeout(() => { disarm(); sync(); }, SHOW_ALL_ARM_MS);
+      } else {
+        disarm();
+        showAllColumns();
+      }
+      sync();
+    });
+    hideAll.addEventListener("click", () => { disarm(); hideColumns(matching()); sync(); });
+
+    function sync() {
+      const vis = new Set(visibleColumns());
+      const all = dataColumns();
+      const q = query();
+      const hit = new Set(matching());
+      title.textContent = `Columns · ${vis.size} of ${all.length} shown`;
+      for (const it of items) {
+        it.cb.checked = vis.has(it.col);
+        it.el.style.display = hit.has(it.col) ? "" : "none";
+      }
+      for (const g of groups) {
+        const shown = g.columns.filter((c) => vis.has(c)).length;
+        g.cb.checked = shown === g.columns.length;
+        g.cb.indeterminate = shown > 0 && shown < g.columns.length;
+        g.count.textContent = `${shown} of ${g.columns.length}`;
+        const any = g.columns.some((c) => hit.has(c));
+        g.el.style.display = any ? "" : "none";
+        const open = q ? true : !!pickerExpanded.get(g.label);
+        g.body.hidden = !open;
+        g.caret.classList.toggle("open", open);
+      }
+      const toShow = [...hit].filter((c) => !vis.has(c)).length;
+      const toHide = [...hit].filter((c) => vis.has(c)).length;
+      if (q) {
+        disarm();
+        showAll.textContent = `Show ${toShow} matching`;
+        showAll.classList.toggle("mkui-filter-action-off", toShow === 0);
+        hideAll.textContent = `Hide ${toHide} matching`;
+        hideAll.classList.toggle("mkui-filter-action-off", toHide === 0);
+      } else {
+        showAll.textContent = armed ? `Show all ${all.length}? Confirm` : "Show all";
+        showAll.classList.toggle("mkui-filter-action-off", !visible);
+        hideAll.textContent = "Hide all";
+        hideAll.classList.toggle("mkui-filter-action-off", vis.size <= 1);
+      }
+      showAll.classList.toggle("mkui-columns-confirm", armed);
+      reset.classList.toggle("mkui-filter-action-off", isDefaultVisible());
+    }
+    sync();
+    search.addEventListener("input", sync);
+    dd.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { closePicker(); e.stopPropagation(); }
+    });
+
+    host.appendChild(dd);
+    picker = dd;
+    fitList(dd, list, "picker");
+    search.focus();
+    requestAnimationFrame(() => {
+      const onDown = (e) => {
+        if (e.target.closest(".mkui-columns-btn")) return; // the button toggles
+        if (dd.contains(e.target)) return;
+        closePicker();
+      };
+      document.addEventListener("mousedown", onDown, true);
+      pickerCleanup = () => {
+        document.removeEventListener("mousedown", onDown, true);
+        disarm();
+      };
+    });
   }
 
   /* ── Column drag ──────────────────────────────────────────────────── */
@@ -2523,10 +3058,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const order = visibleColumns().slice();
     const [col] = order.splice(fromVisIdx, 1);
     order.splice(effective, 0, col);
-    displayOrder = order;
-    renderHead();
-    rebuildAllRows();
-    updateHeaderState();
+    visible = order;
+    applyVisible();
   }
 
   function rebuildAllRows() {
@@ -2543,6 +3076,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function openFilterDropdown(col, thEl) {
     closeDropdown();
+    closePicker();
     dropdownCol = col;
 
     const rect = thEl.getBoundingClientRect();
@@ -2569,6 +3103,22 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (left + width > window.innerWidth) left = Math.max(4, window.innerWidth - width - 4);
     dd.style.left = left + "px";
     dd.style.top = (rect.bottom + 1) + "px";
+
+    // The one column control here is scoped to this column: hide it.
+    // Choosing the set (and groups) is the Columns button's job.
+    const colOps = document.createElement("div");
+    colOps.className = "mkui-filter-actions mkui-filter-colops";
+    const hideOp = document.createElement("span");
+    hideOp.className = "mkui-filter-action";
+    hideOp.textContent = "Hide column";
+    if (visibleColumns().length <= 1) {
+      hideOp.classList.add("mkui-filter-action-off");
+      hideOp.title = "The last column can't be hidden";
+    } else {
+      hideOp.addEventListener("click", () => hideColumn(col)); // closes the dropdown
+    }
+    colOps.appendChild(hideOp);
+    dd.appendChild(colOps);
 
     const rangePanel = document.createElement("div");
     rangePanel.className = "mkui-filter-range";
@@ -2823,6 +3373,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
     host.appendChild(dd);
     dropdown = dd;
+    // Size the list in values mode — range panel out of the way, list
+    // shown — whatever mode the dropdown then opens in.
+    rangePanel.hidden = true;
+    fitList(dd, list, "filter");
     if (rangeable) setMode(mode); else search.focus();
 
     requestAnimationFrame(() => {
@@ -2837,6 +3391,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     });
   }
 
+  // Which columns show is seeded before the header first renders.
+  loadVisibleSpec(spec.visible);
+  defaultVisible = visible;
   if (columns) renderHead();
 
   /* ── Row building ─────────────────────────────────────────────────── */
@@ -2883,7 +3440,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       clearSelection();
     }
     if (!columns && snap.length > 0) {
-      columns = Object.keys(snap[0]);
+      columns = inferColumns(snap[0]);
       renderHead();
     }
     maybeInitWidths(); // lock header widths before rows render, not after
@@ -2924,7 +3481,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function applyInsert(row) {
     if (!columns) {
-      columns = Object.keys(row);
+      columns = inferColumns(row);
       renderHead();
     }
     maybeInitWidths(); // lock header widths before the row renders
@@ -3171,7 +3728,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
           else pageHasPrev = ref != null;
         }
         if (pageRows.length > 0) {
-          if (!columns) { columns = Object.keys(pageRows[0]); renderHead(); }
+          if (!columns) { columns = inferColumns(pageRows[0]); renderHead(); }
           maybeInitWidths(); // lock header widths before rows render
           growSuspended = dataSeen; // only the first data sizes the columns
           for (const row of pageRows) insertRow(row);
@@ -3252,7 +3809,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         pageHasPrev = info.hasmore;
         if (pageRows.length > 0) {
           hasEarlierPages = true;
-          if (!columns) { columns = Object.keys(pageRows[0]); renderHead(); }
+          if (!columns) { columns = inferColumns(pageRows[0]); renderHead(); }
           maybeInitWidths(); // lock header widths before rows render
           // Prepend the earlier page in display order without disturbing
           // the live rows below it.
@@ -3352,10 +3909,15 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     paneEl._filters = { set: setFilters, get: getFilters };
     // Sort hook: `workspace.setPaneSort` / `getPaneSort` and `table.sort`.
     paneEl._sort = { set: setSort, get: getSort };
+    // Columns hook: `workspace.setPaneColumns` / `getPaneColumns` and
+    // `table.columns` set which columns show.
+    paneEl._columns = { set: setVisible, get: getVisible };
     paneEl.addEventListener("mkui-pane-close", () => {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       if (presetTimer) { clearTimeout(presetTimer); presetTimer = null; }
       closed = true;
+      closeDropdown();
+      closePicker();
       io.disconnect();
       ro.disconnect();
       subscribed = false;
@@ -3371,13 +3933,17 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       subscribed = false;
       lastRef = null;
       clearData();
+      closeDropdown();
+      closePicker();
       columns = spec.columns ?? null;
-      displayOrder = null;
+      loadVisibleSpec(spec.visible);
       loadSortSpec(spec.sort);
       loadFilterSpecs(spec.filters);
-      updateHeaderState();
-      syncPresetTimer();
       resetColWidths();
+      // A configured header re-renders for the configured column set (an
+      // inferred one waits for data, as at first open).
+      if (columns) renderHead(); else updateHeaderState();
+      syncPresetTimer();
       clearSelection();
       if (isPaged) {
         liveMode = false;
