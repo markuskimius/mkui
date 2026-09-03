@@ -417,7 +417,17 @@ test("display errors are visibly marked", () => {
 
 test("hidden mode controls stay hidden despite their flex display", () => {
   assert.match(declaration(".mkui-filter-dropdown [hidden]", "display"), /none\s*!important/);
-  assert.equal(declaration(".mkui-filter-dropdown.mkui-filter-wide", "width"), "280px");
+  assert.equal(declaration(".mkui-filter-dropdown.mkui-filter-wide", "min-width"), "280px");
+});
+
+test("dropdowns widen to long values up to a cap, then scroll sideways — never wrap or truncate", () => {
+  assert.equal(declaration(".mkui-filter-dropdown", "width"), "max-content");
+  assert.ok(declaration(".mkui-filter-dropdown", "max-width"));
+  assert.equal(declaration(".mkui-filter-item > span", "white-space"), "nowrap");
+  assert.ok(!/text-overflow|overflow\s*:\s*hidden/.test(rule(".mkui-filter-item > span")), "no truncation");
+  assert.equal(declaration(".mkui-filter-list", "overflow"), "auto", "both axes scroll");
+  assert.equal(declaration(".mkui-filter-item", "min-width"), "100%");
+  assert.equal(declaration(".mkui-filter-item", "width"), "max-content", "the hover band spans the scroll width");
 });
 
 test("range bounds use the mono font like the value list", () => {
@@ -463,7 +473,21 @@ test("group clear buttons carry an × badge anchored to the icon", () => {
     "the badge masks the icon corner in the toolbar color");
 });
 
-test("the Columns button rides a sticky anchor above the header, opaque, left of the scrollbar", () => {
+test("the Columns button lives in a right gutter of the scroll area, clear of the last column's grip", () => {
+  // The gutter: scroll-area end padding the button's width. The table ends
+  // before it, so the filler's grip is never under the button — including
+  // when the columns overflow and the table is scrolled fully right, since
+  // end padding is part of a scroll container's scrollable overflow.
+  assert.equal(declaration(".mkui-table-scroll", "padding-right"), "var(--mkui-columns-gutter)");
+  assert.ok(declaration(".mkui-table-scroll", "--mkui-columns-gutter"));
+  assert.equal(declaration(".mkui-columns-btn", "width"), "var(--mkui-columns-btn-w)", "narrower than the gutter: covers no header cell");
+  assert.equal(declaration(".mkui-columns-btn", "right"), "calc(-1 * var(--mkui-columns-gutter))", "hangs off the anchor's end, flush with the pane edge");
+  // The grip's hit zone straddles the table's edge by 3.5px; the gutter is
+  // wider than the button by more than that, and the strip between them
+  // is painted but inert so the grip stays draggable.
+  assert.equal(parseInt(declaration(".mkui-table-scroll", "--mkui-columns-gutter")) - parseInt(declaration(".mkui-table-scroll", "--mkui-columns-btn-w")), 4);
+  assert.equal(declaration(".mkui-columns-btn::before", "pointer-events"), "none");
+  assert.equal(declaration(".mkui-columns-btn::before", "background"), "var(--mkui-bg-alt)");
   // Sticky on both axes: horizontal scroll must not carry the anchor off.
   assert.equal(declaration(".mkui-columns-anchor", "position"), "sticky");
   assert.equal(declaration(".mkui-columns-anchor", "top"), "0");
@@ -471,8 +495,8 @@ test("the Columns button rides a sticky anchor above the header, opaque, left of
   assert.equal(declaration(".mkui-columns-anchor", "height"), "0", "takes no space in the scroll area");
   assert.ok(parseInt(declaration(".mkui-columns-anchor", "z-index")) > 2, "above the sticky header cells (rownum corner is 2)");
   assert.equal(declaration(".mkui-columns-btn", "position"), "absolute");
-  assert.equal(declaration(".mkui-columns-btn", "right"), "0");
-  assert.equal(declaration(".mkui-columns-btn", "background"), "var(--mkui-bg-alt)", "opaque: it overlays a header cell");
+  assert.equal(declaration(".mkui-columns-btn", "background"), "var(--mkui-bg-alt)", "opaque: continues the header row across the gutter");
+  assert.equal(declaration(".mkui-columns-badge", "position"), "absolute", "the badge overlays the icon so the width stays fixed");
   assert.equal(declaration(".mkui-columns-badge[hidden]", "display"), "none");
   assert.ok(!/mkui-chip-columns/.test(css), "no hidden-columns chip any more");
 });

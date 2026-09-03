@@ -5643,6 +5643,24 @@ test("lists are uncapped without a viewport, capped to the viewport with one, an
   }
 });
 
+test("with an app statusbar, the cap is its top edge rather than the window bottom", async () => {
+  const host = await filteredTable({});
+  assert.equal(openDropdown(host, "status").list.style.maxHeight, "", "no viewport, no statusbar: no cap");
+  // A statusbar whose top sits inside the dropdown's extent caps the list
+  // even without a measurable viewport.
+  document.querySelector = (sel) => sel === "mkui-statusbar" ? { getBoundingClientRect: () => ({ top: 12, height: 22 }) } : null;
+  try {
+    assert.equal(openDropdown(host, "qty").list.style.maxHeight, "40px");
+    columnsBtn(host).click();
+    assert.equal(byClass(pickerOf(host).dd, "mkui-filter-list")[0].style.maxHeight, "40px");
+    // A statusbar that isn't laid out (top 0) falls back to the viewport.
+    document.querySelector = () => ({ getBoundingClientRect: () => ({ top: 0, height: 0 }) });
+    assert.equal(openDropdown(host, "status").list.style.maxHeight, "");
+  } finally {
+    delete document.querySelector;
+  }
+});
+
 test("copy, cell rects, and the drag ghost see only visible columns", async () => {
   const { host } = await createSelTable({ visible: ["value"] });
   const trs = dataRows(host);
@@ -5658,4 +5676,13 @@ test("copy, cell rects, and the drag ghost see only visible columns", async () =
   try { host._paneEl._editActions.copy(); }
   finally { delete globalThis.navigator; }
   assert.equal(written, "name\tvalue\r\nrow-0\t0\r\nrow-1\t1", "the selection survives showing a column");
+});
+
+test("dropdowns are placed from their measured width after mount", async () => {
+  const host = await filteredTable({});
+  // Mock rects are 100 wide with right edge 100: right-aligned means left 0, clamped to the 4px margin.
+  assert.equal(openDropdown(host, "status").dd.style.left, "4px");
+  assert.equal(openDropdown(host, "qty").dd.style.top, "21px");
+  columnsBtn(host).click();
+  assert.equal(pickerOf(host).dd.style.left, "4px");
 });

@@ -597,12 +597,17 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-filter-btn:hover .mkui-sort-num { color: var(--mkui-bg-hover); }
 .mkui-filter-btn.active { color: var(--mkui-accent); }
 
+/* Sized to content: a column of long values widens the dropdown (to a cap)
+   instead of wrapping them; past the cap the list scrolls sideways.
+   mkio-table positions it after mount from the measured width. */
 .mkui-filter-dropdown {
   background: var(--mkui-bg-alt);
   border: 1px solid var(--mkui-border);
   box-shadow: 0 4px 12px rgba(0,0,0,0.3);
   border-radius: 3px;
-  width: 200px;
+  width: max-content;
+  min-width: 200px;
+  max-width: min(480px, calc(100vw - 8px));
   font-family: var(--mkui-font);
   font-size: 12px;
   color: var(--mkui-fg);
@@ -652,7 +657,7 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 /* ── Column picker ─────────────────────────────────────────────────── */
 /* Opened from the Columns button; wider than a filter dropdown since it
    lists every column (sectioned by group when groups are configured). */
-.mkui-filter-dropdown.mkui-columns-picker { width: 240px; }
+.mkui-filter-dropdown.mkui-columns-picker { min-width: 240px; }
 .mkui-columns-title {
   padding: 6px 8px 0;
   color: var(--mkui-fg-mute);
@@ -717,27 +722,34 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
    No static max-height here: the cap is the viewport, not a number. */
 .mkui-filter-list {
   box-sizing: border-box; /* the cap includes the padding */
-  overflow-y: auto;
+  overflow: auto; /* sideways too: values past the width cap scroll, never wrap */
   resize: vertical;
   min-height: 40px;
   padding: 4px 0;
   scrollbar-width: thin;
 }
+/* Each item spans the list's full scroll width (not just the visible
+   width) so its hover band doesn't stop short of a long value. */
 .mkui-filter-item {
   display: flex;
   align-items: center;
   gap: 6px;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
   padding: 3px 8px;
   cursor: pointer;
 }
 .mkui-filter-item:hover { background: var(--mkui-bg-hover); }
 .mkui-filter-item input[type="checkbox"] { margin: 0; accent-color: var(--mkui-accent); }
+/* One line per value, whatever its length. */
+.mkui-filter-item > span { white-space: nowrap; }
 
 /* Mode switching hides the other mode's controls with the `hidden`
    attribute; it must beat the flex/grid display of those controls. */
 .mkui-filter-dropdown [hidden] { display: none !important; }
 /* Native date/time pickers need more room than the value list. */
-.mkui-filter-dropdown.mkui-filter-wide { width: 280px; }
+.mkui-filter-dropdown.mkui-filter-wide { min-width: 280px; }
 
 /* Values | Range switch on numeric and time columns. */
 .mkui-filter-modes {
@@ -882,9 +894,20 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 /* ─── Table paging & progress ───────────────────────────────────────── */
 
 .mkui-table-scroll {
+  --mkui-columns-btn-w: 28px;
+  /* The gutter is 4px wider than the button: the last column's grip
+     straddles the table's right edge by half its 7px hit zone, and that
+     half must stay clear of the button. */
+  --mkui-columns-gutter: 32px;
   flex: 1;
   min-height: 0;
   overflow: auto;
+  /* A gutter down the right edge for the Columns button: the table ends
+     short of it, so the last column's resize grip (on the filler's left
+     edge) is never under the button — and since a scroll container's end
+     padding is part of its scrollable overflow, that holds when the
+     columns overflow and the table is scrolled fully right, too. */
+  padding-right: var(--mkui-columns-gutter);
 }
 .mkui-table-paging {
   flex-shrink: 0;
@@ -1173,13 +1196,14 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-chip .mkui-icon { width: 11px; height: 11px; flex-shrink: 0; }
 
 /* ── Columns button ────────────────────────────────────────────────── */
-/* Pinned to the header row's right edge, inside the scroll area so it
-   sits left of the scrollbar and stays put under both scroll axes: a
-   zero-height sticky anchor ahead of the table (sticky top AND left, so
-   horizontal scroll can't carry it off) holds the button at its right
-   end. Opaque header background — it sits over the filler, or over the
-   last header when the columns overflow the pane — and a z-index above
-   the sticky header cells. Height is set by mkio-table to the header's. */
+/* Lives in the scroll area's right gutter at header height: a zero-height
+   sticky anchor ahead of the table (sticky top AND left, so horizontal
+   scroll can't carry it off) spans the scrollport's content box, and the
+   button hangs off its right end into the gutter — exactly the gutter's
+   width, so it covers no header cell and no grip. Opaque header
+   background and the header's bottom rule, so the header row reads as
+   continuous across the gutter; z-index above the sticky header cells.
+   Height is set by mkio-table to the header's. */
 .mkui-columns-anchor {
   position: sticky;
   top: 0;
@@ -1190,34 +1214,55 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-columns-btn {
   position: absolute;
   top: 0;
-  right: 0;
+  right: calc(-1 * var(--mkui-columns-gutter));
+  width: var(--mkui-columns-btn-w);
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  justify-content: center;
   height: 24px;
-  padding: 0 6px;
+  padding: 0;
   border: 0;
   border-bottom: 1px solid var(--mkui-border);
   border-left: 1px solid color-mix(in srgb, var(--mkui-border) 50%, transparent);
   background: var(--mkui-bg-alt);
   color: var(--mkui-fg-mute);
   font: inherit;
-  font-size: 11px;
   cursor: pointer;
+}
+ /* The strip between the table's end and the button: painted in the
+    header's colours so the header row runs unbroken to the pane edge, but
+    inert to the pointer so the grip beneath it stays draggable. */
+.mkui-columns-btn::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: -1px;
+  left: calc(var(--mkui-columns-btn-w) - var(--mkui-columns-gutter));
+  width: calc(var(--mkui-columns-gutter) - var(--mkui-columns-btn-w));
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--mkui-border);
+  background: var(--mkui-bg-alt);
+  pointer-events: none;
 }
 .mkui-columns-btn:hover { color: var(--mkui-fg); background: var(--mkui-bg-hover); }
 .mkui-columns-btn:disabled { cursor: default; color: var(--mkui-fg-mute); background: var(--mkui-bg-alt); }
 .mkui-columns-btn.active { color: var(--mkui-accent); }
-.mkui-columns-btn .mkui-icon { width: 13px; height: 13px; }
-/* The badge counts hidden columns. */
+.mkui-columns-btn .mkui-icon { width: 14px; height: 14px; }
+/* The hidden-count badge rides the icon's top-right corner so the button
+   keeps the gutter's fixed width whatever the count. */
 .mkui-columns-badge {
-  padding: 0 4px;
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 8px;
+  padding: 0 3px;
   border-radius: 7px;
   background: var(--mkui-accent);
   color: var(--mkui-bg);
-  font-size: 10px;
-  line-height: 14px;
+  font-size: 9px;
+  line-height: 13px;
+  text-align: center;
 }
 .mkui-columns-badge[hidden] { display: none; }
 

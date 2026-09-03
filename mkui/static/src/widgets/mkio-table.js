@@ -1821,21 +1821,28 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   /* ── Dropdown list sizing ─────────────────────────────────────────── */
 
   // The value list (filter dropdown) and the column list (picker) open as
-  // tall as their content, capped so the dropdown's bottom stays inside
-  // the viewport — the cap is the list's max-height, which CSS `resize:
-  // vertical` also respects, so the user can drag the list shorter (or
-  // back up to the cap) by its corner grip. A dragged height is kept per
-  // kind for the table's life: the browser writes it as an inline
-  // `height`, read back when the dropdown closes. Skipped where there is
-  // no viewport to measure against (tests).
+  // tall as their content, capped so the dropdown's bottom stays above the
+  // app's statusbar (the viewport's bottom without one) — the cap is the
+  // list's max-height, which CSS `resize: vertical` also respects, so the
+  // user can drag the list shorter (or back up to the cap) by its corner
+  // grip. A dragged height is kept per kind for the table's life: the
+  // browser writes it as an inline `height`, read back when the dropdown
+  // closes. Skipped where there is nothing to measure against (tests).
   const listHeights = { filter: null, picker: null };
   const LIST_MIN_H = 40, VIEWPORT_GAP = 8; // LIST_MIN_H matches .mkui-filter-list min-height
+  function dropdownFloor() {
+    const bar = document.querySelector?.("mkui-statusbar");
+    const top = bar?.getBoundingClientRect().top;
+    if (top > 0) return top;
+    const vh = window.innerHeight;
+    return vh > 0 ? vh : null;
+  }
   function fitList(dd, list, kind) {
     dd._mkuiList = list;
-    const vh = window.innerHeight;
-    if (!(vh > 0)) return;
+    const floor = dropdownFloor();
+    if (floor == null) return;
     const listH = list.getBoundingClientRect().height;
-    const overflow = dd.getBoundingClientRect().bottom - (vh - VIEWPORT_GAP);
+    const overflow = dd.getBoundingClientRect().bottom - (floor - VIEWPORT_GAP);
     const maxH = Math.max(LIST_MIN_H, overflow > 0 ? listH - overflow : listH);
     list.style.maxHeight = maxH + "px";
     const kept = listHeights[kind];
@@ -1844,6 +1851,19 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function rememberListHeight(dd, kind) {
     const h = parseFloat(dd._mkuiList?.style.height);
     if (h > 0) listHeights[kind] = h;
+  }
+
+  // Right-align a mounted dropdown under its anchor, clamped to the
+  // viewport. Measured after mount: the dropdown is max-content wide (up
+  // to a CSS cap), so a column of long values widens it rather than
+  // wrapping them, and the width isn't known until it renders.
+  function placeDropdown(dd, anchorRect, fallbackW) {
+    const w = dd.getBoundingClientRect().width || fallbackW;
+    let left = anchorRect.right - w;
+    if (left < 4) left = 4;
+    if (left + w > window.innerWidth) left = Math.max(4, window.innerWidth - w - 4);
+    dd.style.left = left + "px";
+    dd.style.top = (anchorRect.bottom + 1) + "px";
   }
 
   function compareValues(a, b) {
@@ -2790,12 +2810,6 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     dd.className = "mkui-filter-dropdown mkui-columns-picker";
     dd.style.position = "fixed";
     dd.style.zIndex = "10001";
-    const width = 240;
-    let left = rect.right - width;
-    if (left < 4) left = 4;
-    if (left + width > window.innerWidth) left = Math.max(4, window.innerWidth - width - 4);
-    dd.style.left = left + "px";
-    dd.style.top = (rect.bottom + 1) + "px";
 
     const title = document.createElement("div");
     title.className = "mkui-columns-title";
@@ -2968,6 +2982,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
     host.appendChild(dd);
     picker = dd;
+    placeDropdown(dd, rect, 240);
     fitList(dd, list, "picker");
     search.focus();
     requestAnimationFrame(() => {
@@ -3095,14 +3110,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     // Time columns widen the dropdown for the native date/time pickers
     // (matches .mkui-filter-wide in the stylesheet).
     const wide = type === "time" || cur?.kind === "range" && cur.type === "time";
-    const width = wide ? 280 : 200;
     if (wide) dd.classList.add("mkui-filter-wide");
-
-    let left = rect.right - width;
-    if (left < 4) left = 4;
-    if (left + width > window.innerWidth) left = Math.max(4, window.innerWidth - width - 4);
-    dd.style.left = left + "px";
-    dd.style.top = (rect.bottom + 1) + "px";
 
     // The one column control here is scoped to this column: hide it.
     // Choosing the set (and groups) is the Columns button's job.
@@ -3373,9 +3381,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
     host.appendChild(dd);
     dropdown = dd;
-    // Size the list in values mode — range panel out of the way, list
+    // Place and size in values mode — range panel out of the way, list
     // shown — whatever mode the dropdown then opens in.
     rangePanel.hidden = true;
+    placeDropdown(dd, rect, wide ? 280 : 200);
     fitList(dd, list, "filter");
     if (rangeable) setMode(mode); else search.focus();
 
