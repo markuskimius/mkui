@@ -3688,6 +3688,71 @@ test("rows-unit is the default and counts row selection", async () => {
   assert.equal(btn.disabled, false);
 });
 
+test("enable.when re-evaluates when a selected row is live-updated", async () => {
+  const { host } = await createSelTable({
+    buttons: [{ label: "Start", enable: { minSelected: 1, when: "ALL(rows, r -> r.value == 1)" },
+                action: { type: "action", name: "x" } }],
+  });
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
+  const btn = toolbar._ch[0];
+  const trs = dataRows(host);
+  pointerDown(trs[1], 0); // row-1 (value 1) selected via the row column
+  assert.equal(btn.disabled, false, "gate passes on the selected row");
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "1", name: "row-1", value: 9 });
+  assert.equal(btn.disabled, true, "live change to the selected row re-gates the button");
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "1", name: "row-1", value: 1 });
+  assert.equal(btn.disabled, false, "and back again");
+  // A change to an unselected row leaves the verdict alone.
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "2", name: "row-2", value: 1 });
+  assert.equal(btn.disabled, false);
+});
+
+test("enable.when re-evaluates when the focused cell's row is live-updated", async () => {
+  const { host } = await createSelTable({
+    buttons: [{ label: "Start", enable: { minSelected: 1, when: "row.value == 2" },
+                action: { type: "action", name: "x" } }],
+  });
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
+  const btn = toolbar._ch[0];
+  pointerDown(dataRows(host)[2], 1); // focused cell implies row-2
+  assert.equal(btn.disabled, false);
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "2", name: "row-2", value: 0 });
+  assert.equal(btn.disabled, true);
+});
+
+test("enable.when re-evaluates when a cell rect's row is live-updated", async () => {
+  const { host } = await createSelTable({
+    buttons: [{ label: "Start", enable: { minSelected: 1, when: "ALL(rows, r -> r.value < 5)" },
+                action: { type: "action", name: "x" } }],
+  });
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
+  const btn = toolbar._ch[0];
+  const trs = dataRows(host);
+  pointerDown(trs[1], 1);
+  pointerDown(trs[2], 2, { shiftKey: true }); // rect over rows 1-2
+  assert.equal(btn.disabled, false, "both rect rows pass the gate");
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "2", name: "row-2", value: 9 });
+  assert.equal(btn.disabled, true, "a rect row crossing the gate re-gates");
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "2", name: "row-2", value: 2 });
+  assert.equal(btn.disabled, false, "and back");
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "3", name: "row-3", value: 9 });
+  assert.equal(btn.disabled, false, "a row outside the rect doesn't re-gate");
+});
+
+test("buttons re-gate when a selected row is deleted", async () => {
+  const { host } = await createSelTable({
+    buttons: [{ label: "R", enable: { minSelected: 2 }, action: { type: "action", name: "x" } }],
+  });
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
+  const btn = toolbar._ch[0];
+  const trs = dataRows(host);
+  pointerDown(trs[0], 0);
+  pointerDown(trs[1], 0, { ctrlKey: true });
+  assert.equal(btn.disabled, false, "two selected rows");
+  lastSubscribe().opts.onUpdate("delete", { _mkio_row: "1" });
+  assert.equal(btn.disabled, true, "one left after the delete");
+});
+
 test("selection survives re-render; deleted rows drop out of it", async () => {
   const { host } = await createSelTable();
   let trs = dataRows(host);

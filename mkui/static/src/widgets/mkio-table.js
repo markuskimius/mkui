@@ -1073,6 +1073,19 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return false;
   }
 
+  // Whether a row is among those the buttons act on: row-selected, focused,
+  // or spanned by a cell rect. Live changes to such a row re-gate the buttons;
+  // changes to any other row cannot alter what `enable.when` sees.
+  function rowInSelection(key) {
+    if (selectedKeys.has(key)) return true;
+    if (focusCell != null && focusCell.key === key) return true;
+    if (!cellRects.length) return false;
+    const row = rows.get(key);
+    if (!row) return false;
+    const vi = viewIndexOf(row);
+    return vi >= 0 && rowInRects(vi);
+  }
+
   // Merged [lo, hi] view-index intervals covered by the cell rects — row
   // counts and row materialization work off these without enumerating
   // cells.
@@ -3503,6 +3516,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function applyDelete(row) {
     const key = row[idKey];
     const prev = rows.get(key);
+    const gated = hasButtons && rowInSelection(key);
     const vi = viewIndexOf(prev ?? row);
     if (vi >= 0) view.splice(vi, 1);
     const bi = baseOrder.indexOf(key);
@@ -3522,6 +3536,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       tr.addEventListener("animationend", () => tr.remove(), { once: true });
     }
     render();
+    // A selected row leaving the table changes the count the buttons see.
+    if (gated) updateButtonStates();
     // The published row may be the one that just went away.
     publishSelection();
   }
@@ -3577,6 +3593,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       }
       restyleRowStylers(tr, row);
     }
+    // A live update to a row the buttons act on can flip an `enable.when`
+    // verdict (a status column crossing a gate), so re-evaluate them.
+    if (hasButtons && rowInSelection(key)) updateButtonStates();
     // A live update to the published row replaces the object it points at,
     // so followers see the new values instead of a snapshot.
     if (lastPublishedRow === prev) publishRow(row);
