@@ -8,6 +8,7 @@
 
 import { App } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
+import { LayoutManager } from "../layouts.js";
 import "./menubar.js";
 import "./statusbar.js";
 import "./workspace.js";
@@ -160,22 +161,29 @@ class MkuiApp extends HTMLElement {
       });
     }
 
+    // Saved layouts: the Layout menu's actions and the startup restore.
+    // Registered after ensureMkio above so the bridge's cached client is
+    // the one with the lifecycle callbacks.
+    this._layouts = config.layouts ? new LayoutManager(config, this._app, ws) : null;
+
     this._menubar.setApp(this._app);
     this._statusbar.setApp(this._app);
 
-    if (hasAuth) {
+    if (hasAuth || this._layouts) {
+      // Frames wait: for the login, and for the saved layout the owner
+      // (known only after login) may have.
       const savedFrames = config.frames;
       config.frames = [];
       this._workspace.setApp(this._app);
       config.frames = savedFrames;
-      this._authenticate(config);
+      if (hasAuth) this._authenticate(config);
+      else this._loadFrames(config);
     } else {
       this._workspace.setApp(this._app);
     }
   }
 
   async _authenticate(config) {
-    const ws = this._workspace;
     const method = config.auth.method ?? "mkio";
 
     let client = null;
@@ -193,8 +201,15 @@ class MkuiApp extends HTMLElement {
     };
     apply(config.auth.connected ?? config.mkio?.connected ?? { "status.message": "Connected" });
 
+    await this._loadFrames(config);
+  }
+
+  // The startup frames: the owner's latest saved layout when there is one,
+  // else the config's.
+  async _loadFrames(config) {
+    if (this._layouts && await this._layouts.restoreLatest()) return;
     for (const f of config.frames ?? []) {
-      ws.addFrame(f);
+      this._workspace.addFrame(f);
     }
   }
 

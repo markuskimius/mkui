@@ -99,18 +99,35 @@ class MkuiMenubar extends HTMLElement {
     this._openStack.push({ popup, parentAnchor: anchor, depth: 0 });
   }
 
-  // Replace dynamic markers with concrete leaf items at popup-build time.
+  // Replace dynamic markers with concrete items at popup-build time.
   _expandItems(items) {
     const out = [];
     for (const item of items) {
       if (item.windows) {
         const panes = this._app?._element?.workspace?.openPanes?.() ?? [];
         for (const p of panes) out.push({ label: p.title, action: "pane.show", args: p.id });
+      } else if (item.layouts) {
+        out.push(this._layoutsSubmenu(item));
       } else {
         out.push(item);
       }
     }
     return out;
+  }
+
+  // `{ label, layouts = true }` becomes a submenu with one leaf per saved
+  // layout (state `layouts.list`, newest first), firing `layout.restore`
+  // with the entry id — or a single disabled leaf when nothing is saved.
+  // Building it asks the layout manager to refresh the list, so the next
+  // open reflects other tabs' saves.
+  _layoutsSubmenu(item) {
+    const app = this._app;
+    if (app?.actions?.has("layout.refresh")) app.fireAction("layout.refresh");
+    const entries = app?.state?.get("layouts.list") ?? [];
+    const items = entries.length
+      ? entries.map(e => ({ label: e.label ?? String(e.id), action: "layout.restore", args: e.id }))
+      : [{ label: "No saved layouts", disabled: true }];
+    return { label: item.label, items };
   }
 
   _buildPopup(items, depth) {
@@ -127,6 +144,8 @@ class MkuiMenubar extends HTMLElement {
       it.className = "mkui-menu-item";
       const hasSubmenu = Array.isArray(item.items) && item.items.length > 0;
       if (hasSubmenu) it.classList.add("mkui-menu-item-submenu");
+      // A disabled leaf is inert: no action, no hover highlight.
+      if (item.disabled) it.classList.add("mkui-menu-item-disabled");
       it.appendChild(document.createTextNode(item.label));
       if (hasSubmenu) {
         const arrow = document.createElement("span");
@@ -157,6 +176,7 @@ class MkuiMenubar extends HTMLElement {
         ev.stopPropagation();
         this._pressActive = false;
         if (hasSubmenu) return; // hover already opened it
+        if (item.disabled) return;
         this._closeAll();
         if (item.action) this._app.fireAction(item.action, item.args);
       });

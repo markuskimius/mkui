@@ -371,6 +371,45 @@ class TestTemplateConsistency(unittest.TestCase):
                 self.assertIn(child, pane_ids,
                     f"frame '{frame.get('id')}' references pane '{child}' not in panes")
 
+    def test_server_toml_has_layout_store(self):
+        """The Layout menu needs the mkui_layouts table and its three services,
+        each locked to the caller's own rows when auth is on."""
+        with open(os.path.join(self.target, "server.toml"), "rb") as f:
+            server = tomllib.load(f)
+        cols = server["tables"]["mkui_layouts"]["columns"]
+        for col in ("id", "app", "owner", "saved", "layout"):
+            self.assertIn(col, cols)
+        self.assertNotIn("name", cols, "saves are unnamed")
+        services = server["services"]
+        txn = services["mkui_layouts"]
+        self.assertEqual(txn["protocol"], "transaction")
+        self.assertEqual(txn["ops"]["save"]["op_type"], "insert")
+        self.assertEqual(txn["ops"]["save"]["fields"], ["app", "owner", "layout"])
+        self.assertIn(":owner = :user", txn["ops"]["save"]["access"]["view"])
+        self.assertEqual(txn["ops"]["delete"]["op_type"], "delete")
+        self.assertIn("owner = :user", txn["ops"]["delete"]["access"]["view"])
+        for name in ("mkui_layouts_list", "mkui_layouts_get"):
+            self.assertEqual(services[name]["protocol"], "reqrep")
+            self.assertIn("view", services[name]["access"])
+            self.assertIn("mkui_layouts", services[name]["sql"])
+        # The right the pre-checks hang off exists for every scaffolded role.
+        rights = Path(self.target, "data", "rights.csv").read_text()
+        self.assertIn("admin,view", rights)
+        self.assertIn("user,view", rights)
+
+    def test_client_toml_has_layout_menu(self):
+        with open(os.path.join(self.target, "config", "client.toml"), "rb") as f:
+            client = tomllib.load(f)
+        self.assertIn("layouts", client)
+        menus = [m for m in client["menubar"] if m.get("label") == "Layout"]
+        self.assertEqual(len(menus), 1)
+        items = menus[0]["items"]
+        actions = {i.get("action") for i in items if "action" in i}
+        self.assertEqual(actions, {"layout.save", "layout.reset"})
+        markers = [i for i in items if i.get("layouts")]
+        self.assertEqual(len(markers), 1)
+        self.assertEqual(client["layouts"], {"keep": 10, "keepDays": 7})
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -400,3 +439,16 @@ class ExampleConfigsTest(unittest.TestCase):
         self.assertEqual(pane["values"], {"notional": "ROUND(qty * price, 2)"})
         self.assertIn("when", pane["rowStyle"][0])
         self.assertEqual(cfg["mkio"]["expect"]["expr"], "1")
+
+    def test_mkio_table_example_has_layout_store(self):
+        import tomllib
+        root = Path(__file__).resolve().parent.parent / "mkui" / "static" / "examples" / "mkio-table"
+        with open(root / "config" / "client.toml", "rb") as f:
+            client = tomllib.load(f)
+        with open(root / "server.toml", "rb") as f:
+            server = tomllib.load(f)
+        self.assertIn("layouts", client)
+        self.assertTrue(any(m.get("label") == "Layout" for m in client["menubar"]))
+        self.assertIn("mkui_layouts", server["tables"])
+        for name in ("mkui_layouts", "mkui_layouts_list", "mkui_layouts_get"):
+            self.assertIn(name, server["services"])

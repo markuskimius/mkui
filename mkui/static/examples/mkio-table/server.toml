@@ -42,6 +42,28 @@ qty    = "qty"
 [services.last_trade.defaults]
 symbol = "_mkio_topic"
 
+# Saved window layouts for mkui's Layout menu: one row per save, the
+# newest being the current layout (`delete` is how the client prunes the
+# history). With no login on this server every save goes to the default
+# history (owner "").
+[tables.mkui_layouts]
+columns = { id = "INTEGER PRIMARY KEY AUTOINCREMENT", app = "TEXT NOT NULL DEFAULT ''", owner = "TEXT NOT NULL DEFAULT ''", saved = "TEXT DEFAULT CURRENT_TIMESTAMP", layout = "TEXT NOT NULL" }
+
+[services.mkui_layouts]
+protocol = "transaction"
+
+[services.mkui_layouts.ops]
+save = [{ table = "mkui_layouts", op_type = "insert", fields = ["app", "owner", "layout"] }]
+delete = [{ table = "mkui_layouts", op_type = "delete", key = ["id"] }]
+
+[services.mkui_layouts_list]
+protocol = "reqrep"
+sql = "SELECT id, saved FROM mkui_layouts WHERE app = :app AND owner = :owner ORDER BY id DESC"
+
+[services.mkui_layouts_get]
+protocol = "reqrep"
+sql = "SELECT id, saved, layout FROM mkui_layouts WHERE id = :id"
+
 # Serve frontend: app at /, mkui framework assets at /mkui/
 [static]
 "/" = "./static"

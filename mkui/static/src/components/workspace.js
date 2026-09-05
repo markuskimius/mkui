@@ -16,6 +16,7 @@ import "./frame.js";
 import { getPaneType, getWidget } from "../core.js";
 import { clampToDock, rectToFrac, fracToRect, dropZoneFor, previewRect, snapMove, snapResize, cascadePosition } from "../layout/drag.js";
 import { layout, insertPane, removePane, findPane, firstTabGroup, listPanes } from "../layout/tree.js";
+import { sanitizeLayout, LAYOUT_VERSION } from "../lib/layouts.js";
 
 // Write a frame rect to an element's style in whole pixels. Frame geometry
 // is fractional (frac × workspace size, pointer deltas), but the frame's
@@ -197,8 +198,18 @@ class MkuiWorkspace extends HTMLElement {
   setApp(app) {
     this._app = app;
     this._panes = new Map(Object.entries(app.config.panes ?? {}));
-    const frames = app.config.frames ?? [];
-    this._frames = frames.map((f, i) => ({
+    this._frames = this._configFrameSpecs(app.config.frames);
+    if (this._frames.length > 0) {
+      this._focusedId = this._frames[this._frames.length - 1].id;
+    }
+    this._renderFrames();
+  }
+
+  // Frame specs from the config's `frames` array — the startup layout,
+  // which `resetLayout` returns to. Fresh spec objects each call: specs are
+  // mutated by moves and resizes.
+  _configFrameSpecs(frames) {
+    return (frames ?? []).map((f, i) => ({
       id: f.id ?? this._nextFrameId(),
       title: f.title ?? null,
       x: f.x ?? (0.08 + i * 0.03),
@@ -207,10 +218,6 @@ class MkuiWorkspace extends HTMLElement {
       h: f.h ?? 0.5,
       layout: f.layout,
     }));
-    if (this._frames.length > 0) {
-      this._focusedId = this._frames[this._frames.length - 1].id;
-    }
-    this._renderFrames();
   }
 
   getPaneSpec(id) { return this._panes.get(id); }
@@ -240,7 +247,10 @@ class MkuiWorkspace extends HTMLElement {
     el = document.createElement("mkui-pane");
     el.setAttribute("data-id", id);
     if (!el._built) el._build();
-    if (spec) this._buildPaneContent(el.contentEl, spec);
+    // `_ready` resolves once an async pane factory (mkio-table awaits its
+    // client) has finished — its hooks (`_filters`, ...) exist only then.
+    el._ready = null;
+    if (spec) el._ready = this._buildPaneContent(el.contentEl, spec);
     else el.contentEl.textContent = `[mkui] unknown pane: ${id}`;
     this._paneEls.set(id, el);
     this._pool.appendChild(el);
@@ -252,39 +262,47 @@ class MkuiWorkspace extends HTMLElement {
     el.style.display = "none";
   }
 
+  // Returns the factory's promise for an async pane type, else null.
   _buildPaneContent(host, spec) {
     if (spec.type) {
       const typeFn = getPaneType(spec.type);
       if (typeFn) {
         const result = typeFn(spec, this._app, host);
-        if (result instanceof Promise) result.catch(e => { host.textContent = String(e); });
-        return;
+        if (result instanceof Promise) {
+          return result.catch(e => { host.textContent = String(e); });
+        }
+        return null;
       }
       host.textContent = `[mkui] unknown pane type: ${spec.type}`;
-      return;
+      return null;
     }
     if (spec.widgets) {
       for (const w of spec.widgets) {
         const fn = getWidget(w.type);
         if (fn) fn(w, this._app, host);
       }
-      return;
+      return null;
     }
     if (spec.content) host.textContent = spec.content;
+    return null;
   }
 
   // Frame lifecycle ──────────────────────────────────────────────────────
 
+  // Create and register the <mkui-frame> for a spec already in `_frames`.
+  _mountFrame(spec) {
+    const el = document.createElement("mkui-frame");
+    el.setAttribute("data-id", spec.id);
+    this.appendChild(el);
+    if (!el._built) el._build();
+    el.setup(this, this._app, spec);
+    this._frameEls.set(spec.id, el);
+    return el;
+  }
+
   _renderFrames() {
     for (const spec of this._frames) {
-      if (!this._frameEls.has(spec.id)) {
-        const el = document.createElement("mkui-frame");
-        el.setAttribute("data-id", spec.id);
-        this.appendChild(el);
-        if (!el._built) el._build();
-        el.setup(this, this._app, spec);
-        this._frameEls.set(spec.id, el);
-      }
+      if (!this._frameEls.has(spec.id)) this._mountFrame(spec);
     }
     for (const [id, el] of [...this._frameEls]) {
       if (!this._frames.find(f => f.id === id)) {
@@ -384,15 +402,141 @@ class MkuiWorkspace extends HTMLElement {
     };
     this._frames.push(s);
     this._focusedId = s.id;
-    const el = document.createElement("mkui-frame");
-    el.setAttribute("data-id", s.id);
-    this.appendChild(el);
-    if (!el._built) el._build();
-    el.setup(this, this._app, s);
-    this._frameEls.set(s.id, el);
+    this._mountFrame(s);
     this._layoutFrames();
     this._applyZOrder();
     return s.id;
+  }
+
+  // Saved layouts ─────────────────────────────────────────────────────────
+  //
+  // A layout is the dockable frames (z-order, fractional rects, trees —
+  // so the active tabs come along) plus the view state of every pane open
+  // in one, read through the `_filters` / `_sort` / `_columns` hooks. Modal
+  // dialogs and the login frame (noDock) are never part of one. See
+  // lib/layouts.js for the format; src/layouts.js for the menu and stores.
+
+  _dockedFrames() {
+    return this._frames.filter(f => !f.noDock && !f.stayOnTop);
+  }
+
+  _openPaneIds() {
+    const out = new Set();
+    for (const spec of this._dockedFrames()) {
+      const tree = this._frameEls.get(spec.id)?.getTree?.();
+      if (tree) for (const id of listPanes(tree)) out.add(id);
+    }
+    return out;
+  }
+
+  getLayout() {
+    const frames = [];
+    for (const spec of this._dockedFrames()) {
+      const tree = this._frameEls.get(spec.id)?.getTree?.();
+      if (!tree) continue;
+      frames.push({
+        id: spec.id, title: spec.title ?? null,
+        x: spec.x, y: spec.y, w: spec.w, h: spec.h,
+        layout: structuredClone(tree),
+      });
+    }
+    const panes = {};
+    for (const id of this._openPaneIds()) {
+      const el = this._paneEls.get(id);
+      if (!el) continue;
+      const st = {};
+      if (el._filters) st.filters = el._filters.get();
+      if (el._sort) st.sort = el._sort.get();
+      if (el._columns) st.visible = el._columns.get();
+      if (Object.keys(st).length) panes[id] = structuredClone(st);
+    }
+    const focused = frames.some(f => f.id === this._focusedId) ? this._focusedId : null;
+    return { version: LAYOUT_VERSION, frames, focused, panes };
+  }
+
+  // Replace the docked frames with a layout's. Panes that stay open move
+  // between frames the way a tab drag moves them, keeping their state;
+  // panes leaving get `mkui-pane-close`, panes arriving `mkui-pane-open`
+  // and then their saved view state (open resets a table to its config).
+  // `reopen` closes and reopens every pane — the config-defaults reset
+  // `resetLayout` wants. Throws on something that isn't a layout; returns
+  // the sanitized layout, whose `dropped` lists pane ids the app no longer
+  // has. A layout with no frames is applied as such.
+  setLayout(layout, opts = {}) {
+    const clean = sanitizeLayout(layout, this._panes);
+    const reopen = opts.reopen === true;
+    const before = this._openPaneIds();
+    const after = new Set();
+    for (const f of clean.frames) for (const id of listPanes(f.layout)) after.add(id);
+
+    this._clearMaximize();
+    for (const id of before) {
+      if (reopen || !after.has(id)) {
+        this._paneEls.get(id)?.dispatchEvent(new CustomEvent("mkui-pane-close"));
+      }
+    }
+    for (const spec of this._dockedFrames()) {
+      const el = this._frameEls.get(spec.id);
+      if (el) {
+        for (const child of [...el.bodyEl.children]) {
+          if (child.tagName === "MKUI-PANE") this._parkPane(child);
+        }
+        el.remove();
+      }
+      this._frameEls.delete(spec.id);
+    }
+    this._frames = this._frames.filter(f => f.noDock || f.stayOnTop);
+
+    // Dockable frames sit below every stayOnTop one (dialogs, login).
+    const used = new Set(this._frames.map(f => f.id));
+    let at = this._frames.findIndex(f => f.stayOnTop);
+    if (at < 0) at = this._frames.length;
+    let last = null;
+    for (const f of clean.frames) {
+      const id = f.id && !used.has(f.id) ? f.id : this._nextFrameId();
+      used.add(id);
+      const m = /^frame-(\d+)$/.exec(id);
+      if (m) this._frameSeq = Math.max(this._frameSeq, Number(m[1]));
+      const spec = { id, title: f.title, x: f.x, y: f.y, w: f.w, h: f.h, layout: f.layout };
+      this._frames.splice(at++, 0, spec);
+      this._mountFrame(spec);
+      last = id;
+      if (f.id != null && f.id === clean.focused) clean.focused = id;
+    }
+
+    for (const id of after) {
+      if (reopen || !before.has(id)) {
+        this._paneEls.get(id)?.dispatchEvent(new CustomEvent("mkui-pane-open"));
+      }
+    }
+    // View state — once the pane's hooks exist: a pane built just now by
+    // an async factory (the startup restore) gets them only when `_ready`
+    // resolves; a later setLayout supersedes a pending one.
+    const applyView = (el, st) => {
+      if ("filters" in st) el._filters?.set(st.filters);
+      if ("sort" in st) el._sort?.set(st.sort);
+      if ("visible" in st) el._columns?.set(st.visible);
+    };
+    for (const [id, st] of Object.entries(clean.panes)) {
+      const el = this._paneEls.get(id);
+      if (!el) continue;
+      const gen = el._viewGen = (el._viewGen ?? 0) + 1;
+      if (el._filters || el._sort || el._columns || !el._ready) applyView(el, st);
+      else el._ready.then(() => { if (el._viewGen === gen) applyView(el, st); });
+    }
+
+    this._focusedId = clean.focused ?? last;
+    this._layoutFrames();
+    this._applyZOrder();
+    return clean;
+  }
+
+  // Back to the startup layout: the config's frames, every pane at its
+  // configured filters, sort, and columns — as if the app had just loaded
+  // without a saved layout.
+  resetLayout() {
+    const frames = this._configFrameSpecs(this._app?.config?.frames);
+    return this.setLayout({ version: LAYOUT_VERSION, frames, panes: {} }, { reopen: true });
   }
 
   showPane(paneId) {
@@ -936,12 +1080,7 @@ class MkuiWorkspace extends HTMLElement {
       layout: { type: "tabs", active: 0, children: [paneId] },
     };
     this._frames.push(spec);
-    const el = document.createElement("mkui-frame");
-    el.setAttribute("data-id", spec.id);
-    this.appendChild(el);
-    if (!el._built) el._build();
-    el.setup(this, this._app, spec);
-    this._frameEls.set(spec.id, el);
+    this._mountFrame(spec);
     this._layoutFrames();
     this._applyZOrder();
     return spec;

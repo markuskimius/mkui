@@ -54,6 +54,19 @@ items = [
 ]
 
 [[menubar]]
+label = "Layout"
+items = [
+  # Save the window arrangement — plus each open table's filters, sort, and
+  # columns — under the login (or the default history without one); the
+  # newest save comes back at startup. Restore lists earlier saves newest
+  # first; Reset returns to the frames and pane defaults in this file.
+  { label = "Save Layout", action = "layout.save" },
+  { label = "Restore Layout", layouts = true },
+  { sep = true },
+  { label = "Reset to Default", action = "layout.reset" },
+]
+
+[[menubar]]
 label = "Window"
 items = [
   { label = "Tile Horizontally", action = "window.tileH" },
@@ -259,3 +272,13 @@ expr = "1"
 "status.message" = "Disconnected"
 "status.color" = "#000000"
 "status.background" = "#b8b8b8"
+
+# ─── Saved layouts ────────────────────────────────────────────────────
+# Enables the Layout menu's actions and the startup restore of the latest
+# saved layout. Stored on the mkio server (server.toml declares the
+# mkui_layouts table and services). Per owner, the newest `keep` saves or
+# the last `keepDays` days are kept, whichever is more.
+
+[layouts]
+keep = 10
+keepDays = 7

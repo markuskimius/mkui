@@ -88,6 +88,9 @@ mkui-menubar {
   cursor: default;
 }
 .mkui-menu-item:hover { background: var(--mkui-accent); color: var(--mkui-accent-fg); }
+/* An inert entry ("No saved layouts"): muted, and no hover highlight. */
+.mkui-menu-item-disabled,
+.mkui-menu-item-disabled:hover { background: none; color: var(--mkui-fg-mute); }
 .mkui-menu-item-arrow {
   margin-left: 16px;
   display: flex;

@@ -33,6 +33,37 @@ INDEX_HTML = """\
 
 SERVER_TOML_APPEND = """\
 
+# --- Saved window layouts (mkui's Layout menu) ---
+# One row per save, newest = the user's layout, older rows its history
+# (`delete` is how the client prunes it); `owner` is the login name ("" for
+# the default history when the app has no login). A user reads and writes
+# their own rows only:
+# the `when` pre-checks bind :user to the login and :owner / :id to the
+# request. Rights come from _mkio_rights — `view` is what every role has.
+
+[tables.mkui_layouts]
+columns = { id = "INTEGER PRIMARY KEY AUTOINCREMENT", app = "TEXT NOT NULL DEFAULT ''", owner = "TEXT NOT NULL DEFAULT ''", saved = "TEXT DEFAULT CURRENT_TIMESTAMP", layout = "TEXT NOT NULL" }
+
+[services.mkui_layouts]
+protocol = "transaction"
+description = "Save and delete window layouts"
+
+[services.mkui_layouts.ops]
+save = { table = "mkui_layouts", op_type = "insert", fields = ["app", "owner", "layout"], access = { view = "_mkio_users WHERE username = :user AND :owner = :user" } }
+delete = { table = "mkui_layouts", op_type = "delete", key = ["id"], access = { view = "mkui_layouts WHERE id = :id AND owner = :user" } }
+
+[services.mkui_layouts_list]
+protocol = "reqrep"
+description = "A user's saved layouts, newest first"
+access = { view = "_mkio_users WHERE username = :user AND :owner = :user" }
+sql = "SELECT id, saved FROM mkui_layouts WHERE app = :app AND owner = :owner ORDER BY id DESC"
+
+[services.mkui_layouts_get]
+protocol = "reqrep"
+description = "One saved layout"
+access = { view = "mkui_layouts WHERE id = :id AND owner = :user" }
+sql = "SELECT id, saved, layout FROM mkui_layouts WHERE id = :id"
+
 # --- Static file serving ---
 
 [static]
@@ -88,6 +119,15 @@ items = [
 ]
 
 [[menubar]]
+label = "Layout"
+items = [
+  { label = "Save Layout", action = "layout.save" },
+  { label = "Restore Layout", layouts = true },
+  { sep = true },
+  { label = "Reset to Default", action = "layout.reset" },
+]
+
+[[menubar]]
 label = "Window"
 items = [
   { label = "Cascade", action = "window.cascade" },
@@ -105,6 +145,18 @@ label = "Account"
 items = [
   { label = "Log Out", action = "auth.logout" },
 ]
+
+# ─── Saved layouts ────────────────────────────────────────────────────
+# The Layout menu saves the window arrangement (with each open table's
+# filters, sort, and columns) under the logged-in user and restores the
+# latest save at startup; earlier saves stay restorable. Stored on the
+# mkio server in the mkui_layouts table that server.toml declares. Per
+# user, the newest `keep` saves or the last `keepDays` days are kept,
+# whichever is more.
+
+[layouts]
+keep = 10
+keepDays = 7
 
 # ─── Statusbar ─────────────────────────────────────────────────────────
 

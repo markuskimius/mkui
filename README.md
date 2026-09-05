@@ -279,6 +279,8 @@ Item keys:
 | `items` | array | Child items — makes this a submenu (opens on hover) |
 | `sep` | boolean | `true` renders a horizontal separator line |
 | `windows` | boolean | `true` expands into one `pane.show` entry per open pane |
+| `layouts` | boolean | `true` makes this a submenu of the saved layouts (see [Layouts](#layouts)) |
+| `disabled` | boolean | `true` renders an inert, muted entry |
 | `shortcut` | string | Right-aligned shortcut hint, e.g. `"mod+C"` — `mod` renders as ⌘ on Apple platforms and Ctrl elsewhere (display only; handlers accept either modifier everywhere) |
 
 Any item with an `items` array is a submenu; submenus nest arbitrarily.
@@ -296,8 +298,9 @@ key; omit `pane` for the focused pane), and `table.sort` (`args = { pane
 = "<id>", sort = <spec> }` sets its sort order — same shape as the pane's
 `sort` key; no `sort` clears it), and `table.columns` (`args = { pane =
 "<id>", visible = [...] }` sets which columns show — same shape as the
-pane's `visible` key; no `visible` shows them all). Register custom
-actions with `app.registerAction(name, fn)`.
+pane's `visible` key; no `visible` shows them all), and the `layout.*`
+actions (`save`, `restore`, `reset` — see [Layouts](#layouts)).
+Register custom actions with `app.registerAction(name, fn)`.
 
 A typical Edit menu:
 
@@ -331,6 +334,85 @@ Tabs can be renamed in place: ctrl+click (or cmd+click on macOS) a tab,
 edit the title, and press Enter (Escape cancels). The new title is
 stored on the pane spec, so tab bars and the Window menu both reflect
 it.
+
+## Layouts
+
+The Layout menu lets a user save the window arrangement, go back to an
+earlier save, and return to the configured default. A `layouts` table in
+the config enables it (an empty one takes every default):
+
+```toml
+[layouts]
+keep = 10            # per user: the newest 10 saves …
+keepDays = 7         # … or the last 7 days, whichever keeps more
+autoload = true      # apply the user's latest save at startup
+# store = "mkio"     # or "local"; default: mkio when [mkio].url is set
+# key = "orders"     # tells apps sharing one store apart; default app.title
+# timeout = 5000     # ms per store call
+# service = "mkui_layouts"   # transaction service; `<service>_list` / `_get` reqreps
+
+[[menubar]]
+label = "Layout"
+items = [
+  { label = "Save Layout", action = "layout.save" },
+  { label = "Restore Layout", layouts = true },
+  { sep = true },
+  { label = "Reset to Default", action = "layout.reset" },
+]
+```
+
+A saved layout holds every dockable frame — position and size as
+workspace fractions, z-order, and its tab tree with the selected tabs —
+plus, for each table open in one, its filters, sort order, and visible
+columns. It never holds a paged table's position, and dialogs are never
+part of it.
+
+**One layout per user, with history.** Saves are unnamed. A user's
+layout is simply their newest save, and it comes back when the app
+starts. Every earlier save stays behind it, so `Restore Layout` lists
+them newest first by save time; picking the newest undoes whatever
+changed since the last save, picking an older one brings that
+arrangement back (and saving then makes it the newest). Saving when
+nothing has changed adds no entry.
+
+**Who owns a save.** With a login (`auth`), layouts save under the
+user's name and each user sees only their own history. Without one they
+save under the default history, shared by everyone using the app.
+
+**How much history stays.** Per user, an entry is kept while it is one
+of the newest `keep` saves *or* was saved within the last `keepDays`
+days — whichever keeps more, so a busy week is never cut short and a
+rare saver never loses their last few. Older entries are deleted after
+each save and hidden from the menu as soon as they age out. Set either
+to 0 to disable that half of the rule; both at 0 keeps everything.
+
+**The actions.** `layout.save` saves at once. `{ layouts = true }`
+expands into one `layout.restore` entry per save — the list refreshes
+whenever the menu opens, so saves from another tab appear.
+`layout.reset` returns to how the app looks at startup without a saved
+layout: the config's `frames`, every pane at its configured filters,
+sort, and columns. With `autoload` (the default), the user's newest save
+is applied when the app starts, after login where there is one; the
+config frames load when there is none, or when the store doesn't answer
+within `timeout`.
+
+**Where saves live.** With `[mkio].url` the store is the server:
+`mkui init` scaffolds a `mkui_layouts` table, a transaction service with
+`save` and `delete` ops (delete is how the client prunes), and
+`mkui_layouts_list` / `mkui_layouts_get` reqrep services, each locked
+with a `when` pre-check so a user reads and writes only rows whose
+`owner` is their login. Add the same sections to an existing server
+(see the mkio-table example's `server.toml`). Without a server, or with
+`store = "local"`, the history lives in the browser's localStorage — per
+browser, so it doesn't follow the user to another machine.
+
+**When things change.** A saved layout that names panes the config no
+longer has drops them (an emptied frame goes too); one whose panes have
+all gone falls back to the default with a status message. Panes added
+to the config since a save stay parked and reachable from the Window
+menu. Bad or corrupt entries are reported and never half-applied. Frame
+rects are re-clamped to the workspace, so a layout saved on a wide
+monitor still fits a laptop.
 
 ## Themes
 
@@ -566,6 +648,7 @@ mkui/                    Python package (pip install mkui)
         expr.js          mkio's expression language (vendored from mkio, kept in sync by tests)
         expressions.js   mkui's lenient environment, ${...} templates, state-path analysis
         rich.js          rich cell text: the `rich` type, the mkui UI function library, renderers
+        layouts.js       saved-layout format, validation, and the localStorage / mkio stores
         icons.js         SVG icon library (vendored Lucide paths)
       components/
         app.js           <mkui-app> — the shell
@@ -576,6 +659,7 @@ mkui/                    Python package (pip install mkui)
       widgets/
         text.js  button.js  mkio-table.js  mkui-dialog.js
       auth.js            Config-driven login dialog
+      layouts.js         Layout menu actions, store selection, startup restore
       mkio-bridge.js     Lazy-loads mkio's /mkio.js client
     styles/mkui.css      Default theme (CSS custom properties)
     examples/
@@ -596,5 +680,7 @@ tests/
   vendor-sync.test.js    lib/expr.js and expr_cases.json match the installed mkio (node:test)
   rich.test.js           Rich text type, mkui function library, clipboard HTML (node:test)
   styles.test.js         mkui.css layout invariants (node:test)
+  layouts.test.js        Saved layouts: format, stores, workspace restore, menu (node:test)
+  version.test.js        The four version strings agree (node:test)
   test_cli.py            CLI init/serve tests (unittest)
 ```
