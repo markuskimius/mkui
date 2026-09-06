@@ -1,7 +1,8 @@
 // Run with: node --test tests/edit-routing.test.js
 //
 // Edit shortcut routing: the workspace's window keydown handler forwards
-// Ctrl/Cmd+C, Ctrl/Cmd+A, Ctrl/Cmd+F, and Escape to the focused frame's active pane
+// Ctrl/Cmd+C, Ctrl/Cmd+A, Ctrl/Cmd+F, Ctrl/Cmd+G (shift: previous), and
+// Escape to the focused frame's active pane
 // via its _editActions hook, with guards so text inputs and native text
 // selections keep the browser behavior. Also covers the menubar's
 // `shortcut` display field.
@@ -119,6 +120,8 @@ function routedWorkspace() {
         selectAll: () => { calls.push("selectAll"); return true; },
         clearSelection: () => { calls.push("clear"); return true; },
         find: () => { calls.push("find"); return true; },
+        findNext: () => { calls.push("next"); return true; },
+        findPrev: () => { calls.push("prev"); return true; },
       },
     },
   });
@@ -158,6 +161,30 @@ test("ctrl+F and cmd+F route to find and swallow the browser's find", () => {
   const e3 = keyEvent({ key: "f", ctrlKey: true });
   bare._onKeyDown(e3);
   assert.ok(!e3.defaultPrevented);
+});
+
+test("ctrl/cmd+G routes to findNext, with shift to findPrev", () => {
+  const { ws, calls } = routedWorkspace();
+  const e1 = keyEvent({ key: "g", ctrlKey: true });
+  ws._onKeyDown(e1);
+  const e2 = keyEvent({ key: "G", metaKey: true, shiftKey: true });
+  ws._onKeyDown(e2);
+  const e3 = keyEvent({ key: "g", metaKey: true });
+  ws._onKeyDown(e3);
+  assert.deepEqual(calls, ["next", "prev", "next"]);
+  assert.ok(e1.defaultPrevented && e2.defaultPrevented && e3.defaultPrevented);
+  // Alt+G is not a find key; a pane without the hooks leaves the browser's.
+  const e4 = keyEvent({ key: "g", ctrlKey: true, altKey: true });
+  ws._onKeyDown(e4);
+  assert.deepEqual(calls, ["next", "prev", "next"]);
+  assert.ok(!e4.defaultPrevented);
+  const bare = makeWorkspace({
+    frames: [{ id: "f1", tree: tabs("t") }], focusedId: "f1",
+    paneActions: { t: { copy: () => true } },
+  });
+  const e5 = keyEvent({ key: "g", ctrlKey: true, shiftKey: true });
+  bare._onKeyDown(e5);
+  assert.ok(!e5.defaultPrevented);
 });
 
 test("text inputs keep the browser behavior", () => {

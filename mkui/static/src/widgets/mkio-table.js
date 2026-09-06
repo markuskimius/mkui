@@ -2036,9 +2036,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const meta = e.ctrlKey || e.metaKey;
     const cols = visibleColumns();
 
-    // Find strip open: F3 / ctrl-cmd+G step the matches (shift reverses).
-    if (findOpen && typeof e.key === "string" && !e.altKey &&
-        (e.key === "F3" || (meta && e.key.toLowerCase() === "g"))) {
+    // Find strip open: F3 steps the matches (shift reverses). Ctrl/Cmd+G
+    // arrives through the workspace's edit routing instead, so it works
+    // wherever the focus is in the pane.
+    if (findOpen && e.key === "F3" && !meta && !e.altKey) {
       findGo(e.shiftKey ? -1 : 1);
       e.preventDefault?.();
       return;
@@ -2144,8 +2145,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // or column change under an open strip rescans after a pause, keeping
   // the current match by identity where it survives. Keys: typing finds
   // as you go (jumping to the first match at or after the cursor), Enter
-  // / shift+Enter step, Escape closes; in the table F3 / ctrl-cmd+G step
-  // and Escape closes once there is no selection left to clear.
+  // / shift+Enter step, Escape closes; Ctrl/Cmd+G / +Shift+G step from
+  // anywhere in the pane (the workspace routes them; closed, they reopen
+  // the strip on its last query), F3 / shift+F3 from the table, where
+  // Escape closes once there is no selection left to clear.
   const FIND_INPUT_MS = 100, FIND_DATA_MS = 250, FIND_CHUNK = 2000;
 
   function buildFindBar() {
@@ -2172,6 +2175,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       } else if (e.key === "Escape") {
         e.preventDefault?.();
         closeFind();
+      } else if ((e.ctrlKey || e.metaKey) && !e.altKey && typeof e.key === "string" && e.key.toLowerCase() === "g") {
+        // The window handler leaves text inputs alone: step from here.
+        e.preventDefault?.();
+        findStep(e.shiftKey ? -1 : 1);
       }
     });
     const toggle = (name, title, isOn, set) => {
@@ -2201,8 +2208,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       b.addEventListener("click", fn);
       return b;
     };
-    const prev = button("chevron-up", "Previous match (Shift+Enter)", () => findGo(-1));
-    const next = button("chevron-down", "Next match (Enter)", () => findGo(1));
+    const prev = button("chevron-up", "Previous match (Shift+Enter, Ctrl/Cmd+Shift+G)", () => findGo(-1));
+    const next = button("chevron-down", "Next match (Enter, Ctrl/Cmd+G)", () => findGo(1));
     const close = button("close", "Close (Escape)", () => closeFind());
     close.classList.add("mkui-find-close");
     findBar.append(ico, findInput, regexBtn, caseBtn, findCount, prev, next, close);
@@ -2288,7 +2295,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (i < view.length) { updateFindCount(); requestAnimationFrame(step); return; }
       findScanning = false;
       if (cur) findPos = findMatches.findIndex((m) => m.key === cur.key && m.col === cur.col);
-      if (jump && findPos < 0) findGo(1);
+      if (jump && findPos < 0) findGo(1, true);
       else { updateFindCount(); refreshFindStyles(); }
     };
     step();
@@ -2302,9 +2309,25 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }, FIND_DATA_MS);
   }
 
+  // Ctrl/Cmd+G (shift: previous): step while the strip is open; closed,
+  // reopen it on the last query first — as the browser's find-next does —
+  // and step once its matches are in. Nothing to find: just open it.
+  function findStep(dir) {
+    if (findOpen) {
+      if (findInputTimer) { clearTimeout(findInputTimer); findInputTimer = null; applyFind(false); }
+      findGo(dir);
+      return true;
+    }
+    openFind();
+    if (findQuery) findGo(dir);
+    return true;
+  }
+
   // Step to the next (dir 1) or previous (dir -1) match, wrapping; with
-  // no current match, from the cursor's position in the view.
-  function findGo(dir) {
+  // no current match, from the cursor's position in the view — the
+  // cursor's own cell counts when `inclusive` (the jump as a query is
+  // typed lights up the cell under the cursor), otherwise a step moves on.
+  function findGo(dir, inclusive = false) {
     const n = findMatches.length;
     if (!n) { updateFindCount(); return; }
     let pos;
@@ -2314,7 +2337,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const ci = focusCell ? keyViewIdx(focusCell.key, focusCell.idx) : -1;
       const cc = focusCell ? cols.indexOf(focusCell.col) : -1;
       const atOrAfter = (m) => m.idx > ci || (m.idx === ci && cols.indexOf(m.col) >= cc);
-      const first = findMatches.findIndex(atOrAfter);
+      const after = (m) => m.idx > ci || (m.idx === ci && cols.indexOf(m.col) > cc);
+      const first = findMatches.findIndex(dir > 0 && !inclusive ? after : atOrAfter);
       if (dir > 0) pos = first < 0 ? 0 : first;
       else pos = first < 0 ? n - 1 : (first - 1 + n) % n;
     }
@@ -4925,13 +4949,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   const paneEl = host.closest("mkui-pane");
   if (paneEl) {
     // Edit hook: the workspace routes Ctrl/Cmd+C, Ctrl/Cmd+A, Ctrl/Cmd+F,
-    // Escape, and the edit.* menu actions to the focused frame's active
-    // pane. Escape clears the selection first, then closes the find strip.
+    // Ctrl/Cmd+G (shift: previous), Escape, and the edit.* menu actions to
+    // the focused frame's active pane. Escape clears the selection first,
+    // then closes the find strip.
     paneEl._editActions = {
       copy: () => copySelection(),
       selectAll: () => { selectAllRows(); return true; },
       clearSelection: () => clearSelectionKeepFocus() || closeFind(),
       find: () => { openFind(); return true; },
+      findNext: () => findStep(1),
+      findPrev: () => findStep(-1),
     };
     // Filter hook: `workspace.setPaneFilters` / `getPaneFilters` and the
     // `table.filter` action reach the column filters through it.

@@ -9,10 +9,10 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 - **Workspace** (`<mkui-workspace>`) holds a z-ordered list of floating **frames**
 - **Frames** (`<mkui-frame>`) are top-level chrome with 8-way resize handles; each owns an internal normalized layout tree. There is no dedicated titlebar — every top-edge tab bar doubles as a drag region, and the right-most one carries the window controls
 - **Panes** (`<mkui-pane>`) are leaf content hosts inside frames; always wrapped in a TabGroup (structural invariant)
-- Pane elements are pooled at the workspace level with stable identity — `appendChild` moves them between frames, state intact
+- Pane elements are pooled at the workspace level with stable identity — `appendChild` moves them between frames intact
 - Frame positions are fractions of the workspace; split ratios sum to 1, so proportional resize is automatic. Frame rects are *painted* in whole pixels (`applyFrameRect` rounds edges, not width/height, so snapped frames stay flush): the layout measures its body via integer `clientWidth`/`clientHeight`; a fractional size would leave a hairline.
 - Every frame move/resize passes through `clampToDock`; nothing escapes the viewport
-- Keyboard focus model: the top frame gets `[data-focused]` (`_applyZOrder`); each frame tracks an `_activeTabGroup` updated on interaction with a tab or within a pane — clicking a tab bar's empty area raises the frame without changing the group. Hotkeys act on that frame and group.
+- Keyboard focus model: the top frame gets `[data-focused]` (`_applyZOrder`); each frame tracks an `_activeTabGroup` updated on interaction with a tab or within a pane — clicking a tab bar's empty area raises the frame without changing the group. Hotkeys act on that group.
 - Tab drag: pointer events (mouse + touch) on tabs (`touch-action: none`). Within a bar: ghost label + accent drop indicator, reorder on release; outside: tears the pane out into a new frame. On noDock frames (dialogs, login) the tab is titlebar text: mousedown moves the frame, click activates the tab; CSS must keep these tabs pointer-interactive (`cursor: move`, never `pointer-events: none`).
 - Tab overflow: tabs shrink to `min-width: 3em`; when the strip still overflows, `.mkui-tabs` clips and scroll arrows (`.mkui-tab-scroll`) appear, the bar getting `.mkui-tabbar-overflow` (`updateArrows` in `_renderTabBar`, which also scrolls the active tab into view).
 - Tab rename: ctrl/cmd+click on a tab (`pointerdown` button 0, plus `contextmenu` with `ctrlKey` on macOS) swaps the label for an inline input (`.mkui-tab-rename`); Enter/blur commits via `workspace.renamePane(id, title)`, Escape cancels.
@@ -76,7 +76,7 @@ Item keys:
 
 Leaf items fire `app.fireAction(action, args)` on mouseup. Built-in actions: `app.quit`, `pane.show` (pane ID — switches to its tab and raises the frame, or opens a new frame if parked), `window.tileH`/`tileV`/`grid`/`cascade`, `edit.copy`, `edit.selectAll`, `edit.find`, `table.filter` (`{ pane, filters, merge }` → `workspace.setPaneFilters`; no `pane` targets the focused pane), `table.sort` (`{ pane, sort }`), `table.columns` (`{ pane, visible }`; no `visible` shows all), `table.expand` (`{ pane, depth }`), `layout.*` (see Saved layouts). Custom actions: `app.registerAction(name, fn)`.
 
-Edit routing: `edit.copy`/`edit.selectAll`/`edit.find` call `workspace.editAction(name)`, which resolves the focused frame's active pane (`workspace.activePaneEl()`) and invokes its `_editActions` hook (`{ copy, selectAll, clearSelection, find }` — any pane type can implement it). The window keydown handler routes Ctrl/Cmd+C, Ctrl/Cmd+A, Ctrl/Cmd+F, and Escape through the same hook; INPUT/TEXTAREA/contentEditable events are ignored, a non-collapsed native text selection wins, and `preventDefault` fires only when a pane handled the action. `tests/edit-routing.test.js`.
+Edit routing: `edit.copy`/`edit.selectAll`/`edit.find` call `workspace.editAction(name)`, which resolves the focused frame's active pane (`workspace.activePaneEl()`) and invokes its `_editActions` hook (`{ copy, selectAll, clearSelection, find, findNext, findPrev }` — any pane type can implement it). The window keydown handler routes Ctrl/Cmd+C, +A, +F, +G, +Shift+G, and Escape through the same hook; INPUT/TEXTAREA/contentEditable events are ignored, a non-collapsed native text selection wins, and `preventDefault` fires only when a pane handled the action. `tests/edit-routing.test.js`.
 
 ## Statusbar
 
@@ -88,7 +88,7 @@ When `config.mkio.url` is present, `<mkui-app>` calls `ensureMkio` with `onConne
 
 Connection is two-phase: **connect** then **verify**. On WebSocket open, `mkio.connected` is set `true` and the `config.mkio.connected` state map applies; an async `_mkio` reqrep then queries the server's identity. Pass sets `mkio.verified` `true`; fail leaves it `false` and applies `config.mkio.incompatible`. Verification reruns on reconnect.
 
-`config.mkio.expect` (`name` exact, `version`/`protocol`/`mkio` semver-compatible server-side, `expr` exact — mkui vendors `"1"`) is optional: the query still runs to confirm an mkio server and fill `mkio.server.*` (`.name`/`.version`/`.protocol`/`.mkio`), timing out per `config.mkio.timeout` (5000ms). State maps `config.mkio.connected` / `.disconnected` / `.incompatible` are `"state.path": value` objects applied per lifecycle event.
+`config.mkio.expect` (`name` exact, `version`/`protocol`/`mkio` semver-compatible server-side, `expr` exact — mkui vendors `"1"`) is optional: the query still runs to confirm an mkio server and fill `mkio.server.*` (`.name`/`.version`/`.protocol`/`.mkio`), timing out per `config.mkio.timeout` (5s). State maps `config.mkio.connected` / `.disconnected` / `.incompatible` are `"state.path": value` objects applied per lifecycle event.
 
 ## Authentication
 
@@ -96,7 +96,7 @@ When `config.auth` is present, `<mkui-app>` shows a login dialog before loading 
 
 Config keys (under `auth`): `method`; `dialog` (`title`, `width`, `usernameLabel`, `passwordLabel`, `submitLabel`); `connected` — state map applied after login and on reconnect (mkio's client re-authenticates itself); `disconnected` — state map on disconnect (falls back to `mkio.disconnected`). State paths: `auth.authenticated`, `auth.user`, `auth.role`. Action `auth.logout` reloads the page. With auth enabled, `_mkio` verification is skipped — authentication proves the server; `mkio.connected` still applies on socket open.
 
-Login dialog: a floating frame (`stayOnTop`, `noDock`) with `_hideClose = true` and `_extraControls = () => []`: undismissable.
+Login dialog: a floating frame (`stayOnTop`, `noDock`), `_hideClose = true`, `_extraControls = () => []`: undismissable.
 
 ## mkio-table pane type
 
@@ -104,14 +104,14 @@ Built-in pane type that subscribes to an mkio service and renders a live-updatin
 
 Config keys (under `panes.<id>`):
 - `type` = `"mkio-table"` (required)
-- `service` — mkio service name to subscribe to (required)
-- `protocol` — `"query"` (default), `"subpub"`, or `"stream"`
-- `topic` — string or array of strings; required for subpub (one subscription per topic if array)
-- `filter` — mkio filter expression (query only)
-- `columns` — array of column names to display; defaults to all keys from the first row
-- `labels` — object mapping column names to display labels; defaults to the column name
-- `maxcount` — page size for paged subscriptions (default 200, `null` to disable)
-- `start` — initial position for stream paged mode: `"today"` (default) starts from local midnight, `""` starts from beginning of buffer
+- `service` — mkio service to subscribe to (required)
+- `protocol` — `"query"` (default), `"subpub"`, `"stream"`
+- `topic` — string or array; required for subpub (one subscription per topic)
+- `filter` — mkio filter expression (query)
+- `columns` — column names to display; defaults to the first row's keys
+- `labels` — column name → display label
+- `maxcount` — page size for paged subscriptions (default 200, `null` disables)
+- `start` — initial position for stream paged mode: `"today"` (default) starts from local midnight, `""` from the buffer's start
 - `live` — `true` starts stream paged mode in live mode; see Paging
 - `rowColumn` — `false` hides the row-number column (default `true`; the `table.test.js` harness passes `false` so assertions index cells directly)
 - `values` — object mapping column names to expressions deriving the column from the row; see Derived columns
@@ -120,8 +120,8 @@ Config keys (under `panes.<id>`):
 - `select` — `{ state = "<path>" }` mirrors the current row into app state; see Selection publishing
 - `types` — object mapping column names to a filter type: `"number"`, `"time"`, `"text"`, or `{ type = "time", parse, tz, unit }`; see Range filters
 - `filters` — object mapping column names to a default filter: a value list (include), `{ include }` / `{ exclude }`, a range `{ from, to, empty, type }`, or `{ preset = "today" | "1h" | "15m" }`; see Configured filters
-- `sort` — default sort order: a column name (`"-col"` for descending), `{ col, dir }`, or an array of those in priority order; see Configured sort
-- `visible` — which columns show, in order: a name or array; absent/`""`/`[]` shows every column and follows new ones; see Column visibility
+- `sort` — default sort: a column name (`"-col"` descending), `{ col, dir }`, or an array in priority order; see Configured sort
+- `visible` — which columns show, in order: a name or array; absent/`""`/`[]` shows all and follows new ones; see Column visibility
 - `groups` — picker categories: an ordered array of `{ label, columns }`; ungrouped columns form an implicit "Other"; without `columns`, display order follows the groups; see Column groups
 - `tree` — `{ child, parent, expand, filterScope, orphans, column }` nests rows by value; see Tree rows
 
@@ -133,7 +133,7 @@ Conditional styling: `styles = { col = <styler> }` styles a cell, `rowStyle = <s
 
 Display templates: `display = { col = "<template>" }` controls presentation only — shown text, width stats, clipboard; sorting, filtering, and dropdown values use the value. Cell scope (`cellDisplay` → `{ text, rich, error }`). A template may yield a **rich** value — the `rich` type from `lib/rich.js` produced by the `mkui` library (`BOLD ITALIC UNDERLINE STRIKE COLOR BG MUTED MONO CLASS STYLE ICON BADGE BAR LINK HEAT`). `renderCell` builds spans via `renderRich` (segment colors inline on the span, never the td; badges/bars ride `--mkui-badge-color`, `--mkui-bar-frac`, `--mkui-bar-color`), keeping the flattened text on `td._mkuiText` (live updates and find read it). An error renders `#ERR` with the message as tooltip and warns once.
 
-Selection publishing: `select = { state = "path" }` writes the current row into app state on every selection change: the cursor's row, else the first selected row in view order, else `null` (a reset, a delete of the published row, and closing the pane publish `null`). Filter changes republish after pruning; a live replace of that row republishes. Deduped on identity.
+Selection publishing: `select = { state = "path" }` writes the current row into app state on every selection change: the cursor's row, else the first selected row in view order, else `null` (a reset, a delete of the published row, and closing the pane publish `null`). Filter changes republish after pruning, a live replace of that row republishes; deduped on identity.
 
 Numeric alignment: all-numeric columns right-align with per-cell right padding (`--mkui-num-pad`, in ch) so decimal points line up: pad = column's widest fraction minus the cell's (`colStats.maxFrac`); the filter dropdown pads left the same way. Flash classes: `mkui-flash-in` / `-out` / `-update`. Each pane gets a unique `subid`.
 
@@ -155,7 +155,7 @@ Column groups: `groups = [{ label, columns }, …]` categorises columns for the 
 
 Tree rows: `tree = { child, parent }` (names or equal-length lists) nests rows: all `child` fields empty → root; else the parent is the first row whose `parent` fields match (`byParentVals`). Beside `rows`: `parentOf` (null = root, `undefined` = hidden orphan), `kids` (parent → child keys, insertion order; `null` → roots), `depthOf`, `expanded`, `pendingKids` (children awaiting a parent — `linkRow` adopts them on arrival; `orphans` `"root"` shows them meanwhile, `"hide"` doesn't). `unlinkRow` re-homes a deleted parent's children (a same-valued row, else orphans at its root slot); a cycle warns once, stays a root. **`view` is the pre-order flattening of rows whose ancestors are all expanded** (`rebuildView` → `flattenVisible` over `sortedKids`, sorted per sibling group and cached), so selection, keyboard, copy, and buttons see just the shown rows; `viewIndexOf` is linear in a tree. Incremental: `insertRow` → `linkRow` then `treeInsertIntoView` (after the parent, or the nearest visible earlier sibling's `subtreeEnd`); snapshots rebuild per chunk; re-parenting or a sort-key change marks the view dirty. `setExpanded` splices the subtree in or cuts its contiguous run, `pruneSelection` dropping hidden keys from `selectedKeys`, rect `keys`, and `cellOff` (the cursor climbs to the collapsed row); `setExpandDepth` for bulk. Row numbers are positions per level (`1`, `5.3`, `5.3.1`) among *all* siblings in sort order — a filtered row keeps its slot: `rankOf` is written by the same walks and shifted ±1 per later sibling on a live insert/delete (`shiftRanks`); `render` labels the slice via `rowLabel` (memo per pass) and ratchets `rowNumDigits` to the widest (reset in `clearData`). A flat table numbers by view position until a filter is active, then by `rankOf` over every row (`flatRanks`; `flatRankInsert`/`flatRankDelete`, O(n)). Filters carry `scope` (`roots` default / `children` / `all`; `tree.filterScope` overrides): `matchesFilters` judges `roots`/`children` filters by level (a miss hides the subtree) and skips `all` ones — those go through `buildSubtreeOk` in `rebuildView` (post-order: a row is ok when its values pass `passesAllScoped` or any child is ok; `treeShown` = both), so while one is active every data change rebuilds (`allScopeActive`). `describeFilter` appends a non-default scope. `filters` is keyed `fkey(col, scope)`, each filter carrying `col`/`scope` (`colFilters(col)`): a column holds up to three, its spec may be an array of filter objects (`filtersFromSpec`; `getFilters` returns one back), and an entry replaces the column's filters. The dropdown's `.mkui-filter-scopes` row (Top / Child / Branch) is tabs, one filter each (`dropdownScope`; set tabs get `.mkui-filter-scope-set`; a click reopens on that scope), shown on alt/option-click of the button or chip (`openFilterDropdown(col, th, { advanced, scope })`) or when the column is filtered off `roots`. UI: caret column = `tree.column` when visible, else the first visible (`treeCol`); `.mkui-tree-cell` carries `--mkui-tree-depth`, a `.mkui-tree-toggle` (`.open`; `.mkui-tree-leaf` = hidden box; stops pointerdown) and the `.mkui-tree-text` span `renderCell` writes to (`td._mkuiTreeText`); `syncToggle`/`syncDepth` refresh reused `tr`s; `bumpStats` adds the indent and caret. Header `.mkui-tree-all`: opens all roots / closes all, shift every level; Enter toggles a row, `*` opens its subtree. `expand` (depth or `"all"`) applies as rows link. Hook `_tree = { expand, toggle, expanded }`; `workspace.expandPane`; `table.expand`. Not in layouts.
 
-Find: `_editActions.find` (Ctrl/Cmd+F, `edit.find`) opens `.mkui-table-find` between the toolbar and the scroll area, in the DOM only while open (`findOpen`; `syncToolbar` inserts ahead of it): `.mkui-find-input`, two `.mkui-find-toggle`s (`.*` regex, `Aa` case; `.active`), `.mkui-find-count`, `.mkui-find-btn` prev / next / `.mkui-find-close`. `compileFind` builds one RegExp (simple mode escapes; flag `i` unless case); invalid → `.mkui-find-error`, "Invalid pattern". `scanFind` fills `findMatches` `[{ key, col, idx }]` — header matches first (`headerMatches`: label, then name; `key` null), then `view` × `visibleColumns()` on the shown text (`cellDisplay` for `display` columns, else `cellText`) — in rAF chunks (`FIND_CHUNK`, first synchronous). `findScanRev` = the `viewRev` scanned: `render` schedules a `FIND_DATA_MS` rescan when it drifts (an in-place replace schedules one itself), `applyVisible` rescans at once; the current match (`findPos`) survives by identity. `findGo(dir)` steps and wraps, else starts from the cursor's `(idx, col)`; `showMatch` = plain cursor move + `scrollFocusIntoView`, or `scrollHeaderIntoView`. `styleRowSelection` toggles `.mkui-cell-match` off `td._mkuiText`; `refreshFindHeaderStyles` (from `updateHeaderState`) sets `.mkui-th-match` / `-current`. Input debounce `FIND_INPUT_MS` then jump; Enter / shift+Enter step; Escape closes; in the table F3 / ctrl-cmd+G, and `clearSelection` closes once nothing is selected. Closed on pane close/open; not in layouts.
+Find: `_editActions.find` (Ctrl/Cmd+F, `edit.find`) opens `.mkui-table-find` between the toolbar and the scroll area, in the DOM only while open (`findOpen`; `syncToolbar` inserts ahead of it): `.mkui-find-input`, two `.mkui-find-toggle`s (`.*` regex, `Aa` case; `.active`), `.mkui-find-count`, `.mkui-find-btn`s and `.mkui-find-close`. `compileFind` builds one RegExp (simple mode escapes; flag `i` unless case); invalid → `.mkui-find-error`, "Invalid pattern". `scanFind` fills `findMatches` `[{ key, col, idx }]` — header matches first (`headerMatches`: label, then name; `key` null), then `view` × `visibleColumns()` on the shown text (`cellDisplay` for `display` columns, else `cellText`) — in rAF chunks (`FIND_CHUNK`, first synchronous). `findScanRev` = the `viewRev` scanned: `render` schedules a `FIND_DATA_MS` rescan when it drifts (an in-place replace schedules one itself), `applyVisible` rescans at once; the current match (`findPos`) survives by identity. `findGo(dir)` steps and wraps, else starts from the cursor; `showMatch` = plain cursor move + `scrollFocusIntoView`, or `scrollHeaderIntoView`. `styleRowSelection` toggles `.mkui-cell-match` off `td._mkuiText`; `refreshFindHeaderStyles` (from `updateHeaderState`) sets `.mkui-th-match` / `-current`. Input debounce `FIND_INPUT_MS` then an inclusive jump; Enter / shift+Enter step (past the cursor's cell); Escape closes. `findNext`/`findPrev` hooks (`findStep`: Ctrl/Cmd+G / +Shift+G via the workspace and the input's own keydown; closed → reopen on the last query, then step); F3 in the table, where `clearSelection` closes once nothing is selected. Closed on pane close/open; not in layouts.
 
 Sort & filter chips: the table's DOM is a flex column — `.mkui-table-toolbar` (in the DOM only while it has buttons or chips; `syncToolbar`), `.mkui-table-scroll`, then progress or the paging bar — so the toolbar never scrolls. Buttons first; `.mkui-table-chips` last, pushed right. `renderChips` (from `updateHeaderState`) builds a `.mkui-chip-group` per kind — sort, filter — led by a `.mkui-chip-lead` with the group's clear button. A chip holds `.mkui-chip-main` and `.mkui-chip-x`: sort chips flip / drop the key; filter chips open the dropdown / clear. Chips wrap below the buttons when they don't fit. (`tests/styles.test.js`)
 
@@ -171,25 +171,25 @@ Column widths: once the header row exists (init with `columns`, else first data)
 
 Column reorder: drag a header (pointer events, 5px threshold distinguishes drag from click); a ghost label and accent drop indicator show the target. Order persists in `visible` (see Column visibility).
 
-Paging (query): with `maxcount` (default 200) the client accumulates every page and fires `onSnapshot` once. `applySnapshot` ingests rows in rAF chunks (≥100 per frame, ≤ ~50 frames), showing "Loading N / Total…"; a generation counter cancels stale loops.
+Paging (query): with `maxcount` (default 200) the client accumulates every page, firing `onSnapshot` once. `applySnapshot` ingests rows in rAF chunks (≥100 per frame, ≤ ~50 frames), showing "Loading N / Total…"; a generation counter cancels stale loops.
 
 Paging (stream): when `maxcount` is set (default 200), a toolbar shows `◀ Earlier | time range | Later ▶ | ● Live | ⟳`. The initial fetch starts from local midnight (`start: "today"`, as a UTC ref) or the buffer's start (`start: ""`). The range label shows the visible rows' local timestamps with adaptive precision (`HH:MM` → seconds → sub-second in 3-digit steps; cross-day ranges add the date; `No data` when empty) plus a boundary suffix `(start)`, `(end)`, `(all)`.
 
 Navigation is ref-based with no cursor stack: each page is its own `subscribe` via `fetchPage(ref, before)` with `onPage` — Later passes `lastRef`, Earlier `firstRef` with `before: true`. Starting from midnight leaves Earlier enabled; an empty initial fetch sets `firstRef` to the start ref; an empty backward fetch restores the previous page (`prevPageLoadRef`/`prevPageLoadBefore`) and disables Earlier (`noPrev`). `⟳` re-fetches the page from `pageLoadRef`/`pageLoadBefore`; off in live mode.
 
-`● Live` resumes streaming on the main `subid` from the page's `lastRef`. In live mode Later is disabled and Earlier fetches through a separate `pageSubId` (`fetchPrevLive`), prepending rows without a stream break (`pageFetchPending` blocks double-clicks). Exiting live unsubscribes both and re-fetches the saved page. Sort, filter, and column order persist across modes.
+`● Live` resumes streaming on the main `subid` from the page's `lastRef`. In live mode Later is disabled and Earlier fetches through a separate `pageSubId` (`fetchPrevLive`), prepending rows without a stream break (`pageFetchPending` blocks double-clicks). Exiting live unsubscribes both and re-fetches the saved page; sort, filter, and column order persist.
 
-Tail following: each subscription callback samples `shouldFollowTail()` *before* ingesting (stream + live, viewport within 8px of the bottom) and calls `scrollToTail()` after, else `maybeRestoreScroll`. `goLive` sets `tailPending` for one jump. Query/subpub never follow.
+Tail following: each subscription callback samples `shouldFollowTail()` *before* ingesting (stream + live, viewport within 8px of the bottom) and calls `scrollToTail()` after, else `maybeRestoreScroll`; `goLive` sets `tailPending` for one jump. Query/subpub never follow.
 
 `live: true` fetches the start page first and hands off from its `onPage` (`autoLivePending` — consumed on the first page, re-armed on reopen); going live from `sub()` would replay the whole buffer. An empty start page leaves `lastRef` null, so the handoff seeds it from `getStartRef()`.
 
-Disconnected indicator: the table subscribes to `mkio.connected`; when the socket drops in live mode the toolbar shows "Disconnected" instead of the Live dot; live mode stays on. Declare the subscription *after* all paging variables — `State.subscribe` fires its initial callback synchronously.
+Disconnected indicator: the table subscribes to `mkio.connected`; when the socket drops in live mode the toolbar shows "Disconnected" instead of the Live dot, live mode staying on. Declare the subscription *after* all paging variables — `State.subscribe` fires its initial callback synchronously.
 
 Visibility-aware subscriptions: an `IntersectionObserver` gates the subscription — a hidden pane doesn't subscribe until shown; hidden 5 minutes drops it (paged streams keep their page over short hides). `mkui-pane-close` sets `closed` (blocks `sub()`/`fetchPage()`), disconnects the observer, and unsubscribes; `mkui-pane-open` clears `closed`, drops stale rows/sort/filter/paging/tree/find state, and re-observes.
 
 Stream ref-based resume: `lastRef` advances on every snapshot, delta, update, and `fetchPage`; `firstRef` on `fetchPage`. `sub()` with a `lastRef` passes `ref: lastRef` and keeps existing rows; without one it clears and subscribes from the start. Query/subpub never set it.
 
-Snapshot clearing: for query and subpub, `applySnapshot` clears rows, DOM, and selection first — auto-reconnect fires `onSnapshot` without `sub()`/`unsub()`, so outage deletes would linger. Streams append.
+Snapshot clearing: for query and subpub, `applySnapshot` clears rows, DOM, and selection first — auto-reconnect fires `onSnapshot` without `sub()`/`unsub()`, so outage deletes would linger; streams append.
 
 ## Saved layouts
 

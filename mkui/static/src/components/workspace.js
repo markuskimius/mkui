@@ -77,7 +77,7 @@ class MkuiWorkspace extends HTMLElement {
     const t = e.target;
     const inText = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
 
-    // Edit shortcuts (Ctrl/Cmd+C, +A, +F, Escape) route to the focused
+    // Edit shortcuts (Ctrl/Cmd+C, +A, +F, +G, +Shift+G, Escape) route to the focused
     // frame's active pane via its _editActions hook. Guards: text inputs
     // and native text selections always win — the browser's own
     // copy/select-all must keep working.
@@ -86,8 +86,15 @@ class MkuiWorkspace extends HTMLElement {
         if (this.editAction("clearSelection")) e.preventDefault();
         return;
       }
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
         const k = typeof e.key === "string" ? e.key.toLowerCase() : "";
+        // Ctrl/Cmd+G steps to the next find match, with shift the previous
+        // — the browser's own find-next keys, taken over with Ctrl/Cmd+F.
+        if (k === "g") {
+          if (this.editAction(e.shiftKey ? "findPrev" : "findNext")) e.preventDefault();
+          return;
+        }
+        if (e.shiftKey) return;
         if (k === "c") {
           const sel = typeof window !== "undefined" && window.getSelection
             ? window.getSelection() : null;
@@ -137,7 +144,8 @@ class MkuiWorkspace extends HTMLElement {
     return id != null ? this._paneEls.get(id) ?? null : null;
   }
 
-  // Fire an edit action ("copy" | "selectAll" | "clearSelection" | "find") on the
+  // Fire an edit action ("copy" | "selectAll" | "clearSelection" | "find" |
+  // "findNext" | "findPrev") on the
   // active pane's _editActions hook. Returns whether the pane handled it —
   // false means the caller should leave the browser default alone.
   editAction(name) {

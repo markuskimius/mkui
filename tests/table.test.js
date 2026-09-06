@@ -6538,7 +6538,8 @@ function typeFind(host, text) {
   flushRaf();
 }
 function findKey(host, key, overrides = {}) {
-  const e = { key, shiftKey: false, preventDefault() {}, ...overrides };
+  const e = { key, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false,
+    defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...overrides };
   findParts(findBarOf(host)).input._ev.keydown[0](e);
   return e;
 }
@@ -6690,7 +6691,7 @@ test("find: a match is a plain cursor move — the selection collapses, and the 
   assert.equal(findBarOf(host), null);
 });
 
-test("find: F3 and ctrl/cmd+G step from the table while the strip is open", async () => {
+test("find: F3 steps from the table while the strip is open; ctrl/cmd+G is left to the workspace route", async () => {
   const { host } = await createFindTable();
   openFind(host);
   typeFind(host, "paris");
@@ -6700,13 +6701,71 @@ test("find: F3 and ctrl/cmd+G step from the table while the strip is open", asyn
   assert.ok(e.defaultPrevented);
   keyDown(sh(host), "F3", { shiftKey: true });
   assert.equal(focusedCellOf(host), "1:city");
-  keyDown(sh(host), "g", { metaKey: true });
-  assert.equal(focusedCellOf(host), "4:city");
-  keyDown(sh(host), "G", { ctrlKey: true, shiftKey: true });
+  // The table's own handler ignores ctrl/cmd+G: the window handler routes
+  // it to the hook, and a second step here would double it.
+  e = keyDown(sh(host), "g", { metaKey: true });
   assert.equal(focusedCellOf(host), "1:city");
+  assert.ok(!e.defaultPrevented);
   findKey(host, "Escape");
   e = keyDown(sh(host), "F3");
   assert.ok(!e.defaultPrevented, "closed: F3 is the browser's again");
+});
+
+test("find: the findNext / findPrev hooks step, wrap, and reopen a closed strip on its last query", async () => {
+  const { host } = await createFindTable();
+  const hooks = host._paneEl._editActions;
+  // Closed with nothing searched: opens the strip, like find.
+  assert.equal(hooks.findNext(), true);
+  assert.ok(findBarOf(host));
+  assert.equal(findCountOf(host), "");
+  typeFind(host, "paris");
+  assert.equal(findCountOf(host), "1 of 2");
+  hooks.findNext();
+  assert.equal(findCountOf(host), "2 of 2");
+  assert.equal(focusedCellOf(host), "4:city");
+  hooks.findNext();
+  assert.equal(findCountOf(host), "1 of 2", "wraps");
+  hooks.findPrev();
+  assert.equal(findCountOf(host), "2 of 2", "wraps back");
+  // A keystroke still debounced is applied before the step.
+  const { input } = findParts(findBarOf(host));
+  input.value = "alpha";
+  input._ev.input[0]();
+  hooks.findNext();
+  flushRaf();
+  assert.equal(findCountOf(host), "1 of 2");
+  assert.equal(focusedCellOf(host), "1:name");
+  // Closed: ctrl/cmd+G brings the strip back on "alpha" and steps at once.
+  findKey(host, "Escape");
+  assert.equal(findBarOf(host), null);
+  assert.equal(hooks.findPrev(), true);
+  assert.ok(findBarOf(host), "reopened");
+  flushRaf();
+  assert.equal(findCountOf(host), "2 of 2", "previous from the cursor on row 1: wraps to Alphabet");
+  assert.equal(focusedCellOf(host), "3:name");
+  // Reopened by findNext with the cursor sitting on a match: a step moves
+  // past it rather than re-landing on it.
+  findKey(host, "Escape");
+  assert.equal(hooks.findNext(), true);
+  flushRaf();
+  assert.equal(focusedCellOf(host), "1:name");
+  assert.equal(findCountOf(host), "1 of 2");
+});
+
+test("find: ctrl/cmd+G inside the input steps too, shift going back", async () => {
+  const { host } = await createFindTable();
+  openFind(host);
+  typeFind(host, "paris");
+  assert.equal(findCountOf(host), "1 of 2");
+  let e = findKey(host, "g", { metaKey: true });
+  assert.equal(findCountOf(host), "2 of 2");
+  assert.ok(e.defaultPrevented);
+  e = findKey(host, "G", { ctrlKey: true, shiftKey: true });
+  assert.equal(findCountOf(host), "1 of 2");
+  assert.ok(e.defaultPrevented);
+  // Plain g is typing.
+  e = findKey(host, "g");
+  assert.ok(!e.defaultPrevented);
 });
 
 test("find: display templates are searched as shown; hidden columns are not, and showing them rescans", async () => {
