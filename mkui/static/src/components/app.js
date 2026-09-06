@@ -63,6 +63,7 @@ class MkuiApp extends HTMLElement {
     // Ctrl/Cmd+C / Ctrl/Cmd+A shortcuts use).
     this._app.registerAction("edit.copy",       () => ws.editAction("copy"));
     this._app.registerAction("edit.selectAll",  () => ws.editAction("selectAll"));
+    this._app.registerAction("edit.find",       () => ws.editAction("find"));
     // `args = { pane = "<id>", filters = { col = <filter> }, merge = false }`;
     // `pane` omitted targets the focused pane.
     this._app.registerAction("table.filter",    (app, a = {}) => ws.setPaneFilters(a.pane ?? null, a.filters ?? {}, { merge: a.merge === true }));

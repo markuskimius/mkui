@@ -6500,3 +6500,349 @@ test("tree: a saved layout round-trips a column's several scoped filters through
   assert.deepEqual(api.get(), saved);
   assert.deepEqual(chipStrip(host).filter, ["qty: All but 1 values", "qty: All but 1 values (child)", "qty: ≥ 0 (branch)", "name: 3 values"]);
 });
+
+/* ── Find ─────────────────────────────────────────────────────────────── */
+
+const FIND_ROWS = [
+  { _mkio_row: "1", name: "alpha", city: "Paris" },
+  { _mkio_row: "2", name: "beta", city: "Berlin" },
+  { _mkio_row: "3", name: "Alphabet", city: "Rome" },
+  { _mkio_row: "4", name: "gamma", city: "Paris" },
+];
+
+async function createFindTable(specOverrides = {}, rows = FIND_ROWS) {
+  const t = await createTable({ rowColumn: true, ...specOverrides });
+  triggerVisible(t.io);
+  lastSubscribe().opts.onSnapshot(rows);
+  flushRaf();
+  return t;
+}
+
+const findBarOf = (host) => findByClass(host, "mkui-table-find");
+function openFind(host) {
+  assert.equal(host._paneEl._editActions.find(), true);
+  return findBarOf(host);
+}
+function findParts(bar) {
+  const cls = (c) => bar._ch.filter((x) => String(x.className).includes(c));
+  const [regex, kase] = cls("mkui-find-toggle");
+  const [prev, next, close] = cls("mkui-find-btn");
+  return { input: cls("mkui-find-input")[0], regex, kase, count: cls("mkui-find-count")[0], prev, next, close };
+}
+// Type into the strip and let the input debounce and the scan run.
+function typeFind(host, text) {
+  const { input } = findParts(findBarOf(host));
+  input.value = text;
+  input._ev.input[0]();
+  advanceTimers();
+  flushRaf();
+}
+function findKey(host, key, overrides = {}) {
+  const e = { key, shiftKey: false, preventDefault() {}, ...overrides };
+  findParts(findBarOf(host)).input._ev.keydown[0](e);
+  return e;
+}
+const findCountOf = (host) => findParts(findBarOf(host)).count.textContent;
+// The focused cell as "ref:col", or null.
+function focusedCellOf(host) {
+  for (const tr of dataRows(host))
+    for (const td of tr._ch)
+      if (td.classList.contains("mkui-cell-focus")) return `${tr.dataset.ref}:${td.dataset.col}`;
+  return null;
+}
+function matchCellsOf(host) {
+  const out = [];
+  for (const tr of dataRows(host))
+    for (const td of tr._ch)
+      if (td.classList.contains("mkui-cell-match")) out.push(`${tr.dataset.ref}:${td.dataset.col}`);
+  return out;
+}
+function matchHeadersOf(host) {
+  return getThs(host).filter((th) => th.classList.contains("mkui-th-match")).map((th) => th.dataset.col);
+}
+
+test("find: the strip opens on the hook between toolbar and table, closes on the button, Escape, or the edit hook", async () => {
+  const { host } = await createFindTable({ buttons: [{ label: "Go" }] });
+  const names = () => host._ch.map((c) => c.className);
+  assert.deepEqual(names(), ["mkui-table-toolbar", "mkui-table-scroll", "mkui-table-progress"]);
+  const bar = openFind(host);
+  assert.ok(bar, "strip is in the DOM");
+  assert.deepEqual(names(), ["mkui-table-toolbar", "mkui-table-find", "mkui-table-scroll", "mkui-table-progress"]);
+  assert.equal(findParts(bar).input.placeholder, "Find…");
+  // Nothing typed: no count, no highlights.
+  assert.equal(findCountOf(host), "");
+  assert.deepEqual(matchCellsOf(host), []);
+
+  findParts(bar).close._ev.click[0]();
+  assert.equal(findBarOf(host), null, "close button removes it");
+  openFind(host);
+  findKey(host, "Escape");
+  assert.equal(findBarOf(host), null, "Escape in the input removes it");
+  openFind(host);
+  // Escape routed to the table: nothing selected, so it closes the strip.
+  assert.equal(host._paneEl._editActions.clearSelection(), true);
+  assert.equal(findBarOf(host), null);
+  assert.equal(host._paneEl._editActions.clearSelection(), false, "nothing left to do");
+  // Opening again is idempotent (one strip).
+  openFind(host); openFind(host);
+  assert.equal(host._ch.filter((c) => c.className === "mkui-table-find").length, 1);
+});
+
+test("find: without buttons the strip is the first child and a later toolbar stays above it", async () => {
+  const { host } = await createFindTable();
+  openFind(host);
+  assert.deepEqual(host._ch.map((c) => c.className).slice(0, 2), ["mkui-table-find", "mkui-table-scroll"]);
+  host._paneEl._sort.set("name"); // brings the chips toolbar in
+  assert.deepEqual(host._ch.map((c) => c.className).slice(0, 3), ["mkui-table-toolbar", "mkui-table-find", "mkui-table-scroll"]);
+});
+
+test("find: typing finds as you go — case-insensitive substring, first match from the cursor, Enter steps and wraps", async () => {
+  const { host } = await createFindTable();
+  openFind(host);
+  typeFind(host, "alpha");
+  assert.equal(findCountOf(host), "1 of 2");
+  assert.equal(focusedCellOf(host), "1:name", "the cursor lands on the first match");
+  assert.deepEqual(matchCellsOf(host), ["1:name", "3:name"], "every match in the slice is tinted");
+  findKey(host, "Enter");
+  assert.equal(findCountOf(host), "2 of 2");
+  assert.equal(focusedCellOf(host), "3:name");
+  findKey(host, "Enter");
+  assert.equal(findCountOf(host), "1 of 2", "wraps");
+  assert.equal(focusedCellOf(host), "1:name");
+  findKey(host, "Enter", { shiftKey: true });
+  assert.equal(findCountOf(host), "2 of 2", "shift+Enter steps back, wrapping");
+  // Narrowing the query keeps a current match that still matches.
+  typeFind(host, "alphab");
+  assert.equal(findCountOf(host), "1 of 1");
+  assert.equal(focusedCellOf(host), "3:name");
+  // Nothing: a red count, no highlight, the cursor stays.
+  typeFind(host, "zzz");
+  assert.equal(findCountOf(host), "No matches");
+  assert.ok(findParts(findBarOf(host)).count.classList.contains("mkui-find-none"));
+  assert.deepEqual(matchCellsOf(host), []);
+  assert.equal(focusedCellOf(host), "3:name");
+  typeFind(host, "");
+  assert.equal(findCountOf(host), "");
+});
+
+test("find: a literal query is escaped; the regex toggle and match case change the matcher", async () => {
+  const { host } = await createFindTable();
+  openFind(host);
+  const parts = findParts(findBarOf(host));
+  typeFind(host, "^a");
+  assert.equal(findCountOf(host), "No matches", "^ is literal in simple mode");
+  parts.regex._ev.click[0]();
+  advanceTimers(); flushRaf();
+  assert.ok(parts.regex.classList.contains("active"));
+  assert.equal(findCountOf(host), "1 of 2", "regex: alpha and Alphabet");
+  parts.kase._ev.click[0]();
+  advanceTimers(); flushRaf();
+  assert.equal(findCountOf(host), "1 of 1", "match case: alpha only");
+  assert.equal(focusedCellOf(host), "1:name");
+  typeFind(host, "(");
+  assert.equal(findCountOf(host), "Invalid pattern");
+  assert.ok(parts.input.classList.contains("mkui-find-error"));
+  assert.match(parts.input.title, /Invalid|Unterminated/);
+  assert.deepEqual(matchCellsOf(host), []);
+  parts.regex._ev.click[0]();
+  advanceTimers(); flushRaf();
+  assert.equal(findCountOf(host), "No matches", "a literal ( matches nothing here");
+  assert.ok(!parts.input.classList.contains("mkui-find-error"));
+});
+
+test("find: header labels and names match ahead of cells; the current header is marked and Escape leaves it", async () => {
+  const { host } = await createFindTable({ labels: { city: "Town" } });
+  openFind(host);
+  typeFind(host, "town");
+  assert.equal(findCountOf(host), "1 of 1");
+  assert.deepEqual(matchHeadersOf(host), ["city"]);
+  const th = getThs(host).find((t) => t.dataset.col === "city");
+  assert.ok(th.classList.contains("mkui-th-match-current"));
+  assert.equal(focusedCellOf(host), null, "a header match leaves the cursor alone");
+  typeFind(host, "city");
+  assert.deepEqual(matchHeadersOf(host), ["city"], "the column name matches too");
+  // Header first, then cells, in view order.
+  typeFind(host, "a");
+  assert.equal(findCountOf(host), "1 of 7"); // the name label, then alpha, Paris, beta, Alphabet, gamma, Paris
+  assert.deepEqual(matchHeadersOf(host), ["name"]);
+  findKey(host, "Enter");
+  assert.equal(focusedCellOf(host), "1:name");
+  assert.ok(!th.classList.contains("mkui-th-match-current"));
+  findKey(host, "Escape");
+  assert.deepEqual(matchHeadersOf(host), [], "closing clears the header marks");
+});
+
+test("find: a match is a plain cursor move — the selection collapses, and the cursor decides where the search starts", async () => {
+  const { host } = await createFindTable();
+  host._paneEl._editActions.selectAll();
+  assert.ok(dataRows(host).every((tr) => tr.classList.contains("mkui-selected")));
+  // Cursor on row 3: the search starts there.
+  keyDown(sh(host), "ArrowDown"); keyDown(sh(host), "ArrowDown"); keyDown(sh(host), "ArrowDown");
+  assert.equal(focusedCellOf(host), "3:name");
+  host._paneEl._editActions.selectAll();
+  openFind(host);
+  typeFind(host, "paris");
+  assert.equal(focusedCellOf(host), "4:city", "the first match at or after the cursor");
+  assert.equal(findCountOf(host), "2 of 2");
+  assert.ok(dataRows(host).every((tr) => !tr.classList.contains("mkui-selected")), "row selection collapsed");
+  // Escape from the table clears the (implicit) nothing → closes the strip.
+  assert.equal(host._paneEl._editActions.clearSelection(), true);
+  assert.equal(findBarOf(host), null);
+});
+
+test("find: F3 and ctrl/cmd+G step from the table while the strip is open", async () => {
+  const { host } = await createFindTable();
+  openFind(host);
+  typeFind(host, "paris");
+  assert.equal(focusedCellOf(host), "1:city");
+  let e = keyDown(sh(host), "F3");
+  assert.equal(focusedCellOf(host), "4:city");
+  assert.ok(e.defaultPrevented);
+  keyDown(sh(host), "F3", { shiftKey: true });
+  assert.equal(focusedCellOf(host), "1:city");
+  keyDown(sh(host), "g", { metaKey: true });
+  assert.equal(focusedCellOf(host), "4:city");
+  keyDown(sh(host), "G", { ctrlKey: true, shiftKey: true });
+  assert.equal(focusedCellOf(host), "1:city");
+  findKey(host, "Escape");
+  e = keyDown(sh(host), "F3");
+  assert.ok(!e.defaultPrevented, "closed: F3 is the browser's again");
+});
+
+test("find: display templates are searched as shown; hidden columns are not, and showing them rescans", async () => {
+  const { host } = await createFindTable({
+    columns: ["name", "value"], display: { value: "${NUM(value, digits: 2)} pts" },
+  }, makeRows(3));
+  openFind(host);
+  typeFind(host, "2.00 pts");
+  assert.equal(findCountOf(host), "1 of 1");
+  assert.equal(focusedCellOf(host), "2:value");
+  host._paneEl._columns.set(["name"]);
+  assert.equal(findCountOf(host), "No matches", "a hidden column is out of reach");
+  host._paneEl._columns.set(null);
+  assert.equal(findCountOf(host), "1 match", "back, without moving the cursor");
+  findKey(host, "Enter");
+  assert.equal(findCountOf(host), "1 of 1");
+});
+
+test("find: data, filter, and sort changes rescan after a pause, keeping the current match by identity", async () => {
+  const { host } = await createFindTable();
+  openFind(host);
+  typeFind(host, "paris");
+  findKey(host, "Enter");
+  assert.equal(findCountOf(host), "2 of 2");
+  assert.equal(focusedCellOf(host), "4:city");
+  const sub = lastSubscribe();
+  sub.opts.onUpdate("insert", { _mkio_row: "5", name: "delta", city: "Paris" });
+  assert.equal(findCountOf(host), "2 of 2", "not yet: the rescan waits");
+  advanceTimers(); flushRaf();
+  assert.equal(findCountOf(host), "2 of 3", "the current match is the same record");
+  assert.deepEqual(matchCellsOf(host), ["1:city", "4:city", "5:city"]);
+  // Sorted descending by name (gamma, delta, beta, …): the same record is
+  // now the first match.
+  host._paneEl._sort.set("-name");
+  advanceTimers(); flushRaf();
+  assert.equal(findCountOf(host), "1 of 3");
+  assert.equal(focusedCellOf(host), "4:city");
+  // A live replace of the current match's text drops it: no current, the cursor stays.
+  sub.opts.onUpdate("replace", { _mkio_row: "4", name: "gamma", city: "Oslo" });
+  advanceTimers(); flushRaf();
+  assert.equal(findCountOf(host), "2 matches");
+  assert.equal(focusedCellOf(host), "4:city");
+  assert.deepEqual(matchCellsOf(host), ["5:city", "1:city"]);
+  // A filter that hides every match.
+  host._paneEl._filters.set({ name: ["beta"] });
+  advanceTimers(); flushRaf();
+  assert.equal(findCountOf(host), "No matches");
+});
+
+test("find: a big table scans in frames — the first chunk at once, the count filling in", async () => {
+  const { host } = await createFindTable({}, makeRows(5000));
+  openFind(host);
+  const { input } = findParts(findBarOf(host));
+  input.value = "row-49";
+  input._ev.input[0]();
+  advanceTimers(); // the input debounce: the scan starts, first chunk synchronous
+  assert.match(findCountOf(host), /^\d+…$/, "partial count while frames remain");
+  flushRaf();
+  assert.equal(findCountOf(host), "1 of 111"); // row-49, row-490..499, row-4900..4999
+  assert.equal(focusedCellOf(host), "49:name");
+  // A new query cancels the running scan: only the latest list survives,
+  // and it jumps from the cursor (row 49): row-1 and row-10..19 lie before
+  // it, so row-100 is the first match at or after.
+  input.value = "row-4999";
+  input._ev.input[0]();
+  advanceTimers();
+  input.value = "row-1";
+  input._ev.input[0]();
+  advanceTimers(); flushRaf();
+  assert.equal(findCountOf(host), "12 of 1111");
+  assert.equal(focusedCellOf(host), "100:name");
+});
+
+test("find: the strip closes with the pane and does not come back on reopen", async () => {
+  const { host } = await createFindTable();
+  openFind(host);
+  typeFind(host, "alpha");
+  host._paneEl._ev["mkui-pane-close"][0]();
+  assert.equal(findBarOf(host), null);
+  host._paneEl._ev["mkui-pane-open"][0]();
+  assert.equal(findBarOf(host), null);
+  // Reopened by hand: the last query is back, matching without moving the cursor.
+  triggerVisible(ioCallbacks.at(-1));
+  lastSubscribe().opts.onSnapshot(FIND_ROWS);
+  flushRaf();
+  const bar = openFind(host);
+  assert.equal(findParts(bar).input.value, "alpha");
+  flushRaf();
+  assert.equal(findCountOf(host), "2 matches");
+  assert.equal(focusedCellOf(host), null);
+});
+
+test("find: a tree searches the rows on screen — expanding a branch brings its rows in, the row-number column never matches", async () => {
+  const host = await treeTable({ rowColumn: true });
+  host._paneEl._editActions.find();
+  typeFind(host, "a2");
+  assert.equal(findCountOf(host), "No matches", "collapsed: a2 and a21 are off screen");
+  host._paneEl._tree.expand("all");
+  advanceTimers(); flushRaf();
+  // a2's name and id, a21's name, id, and parent — case-insensitive.
+  assert.equal(findCountOf(host), "5 matches", "opened: in, without moving the cursor");
+  findKey(host, "Enter");
+  assert.equal(focusedCellOf(host), "3:name");
+  findKey(host, "Enter");
+  assert.equal(focusedCellOf(host), "3:id");
+  findKey(host, "Enter");
+  assert.equal(focusedCellOf(host), "4:name");
+  // Row numbers ("1", "2", …) are chrome, not data: a bare digit finds
+  // only cells that carry it.
+  typeFind(host, "7");
+  assert.equal(findCountOf(host), "No matches");
+  typeFind(host, "9");
+  assert.equal(findCountOf(host), "1 of 1");
+  assert.equal(focusedCellOf(host), "6:qty");
+  // Collapsing the branch that holds the current match drops it.
+  typeFind(host, "a21");
+  assert.equal(findCountOf(host), "1 of 2");
+  host._paneEl._tree.expand(0);
+  advanceTimers(); flushRaf();
+  assert.equal(findCountOf(host), "No matches");
+});
+
+test("find: Enter while a keystroke is still debounced applies it first, then steps", async () => {
+  const { host } = await createFindTable();
+  openFind(host);
+  const { input } = findParts(findBarOf(host));
+  input.value = "gamma";
+  input._ev.input[0]();
+  assert.equal(findCountOf(host), "", "debounced: nothing yet");
+  findKey(host, "Enter");
+  flushRaf();
+  assert.equal(findCountOf(host), "1 of 1");
+  assert.equal(focusedCellOf(host), "4:name");
+  // The hook's find opens once; a second call just refocuses and keeps the
+  // query (the strip is one element).
+  openFind(host);
+  assert.equal(findParts(findBarOf(host)).input.value, "gamma");
+  assert.equal(findCountOf(host), "1 of 1");
+});

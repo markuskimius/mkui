@@ -9,6 +9,7 @@
   --mkui-accent:    #0e639c;
   --mkui-accent-fg: #ffffff;
   --mkui-focus:     #ffffff;
+  --mkui-match-bg:  rgba(255, 200, 60, 0.28);
   --mkui-menubar-h:   28px;
   --mkui-statusbar-h: 22px;
   --mkui-tabbar-h:    28px;
@@ -29,6 +30,7 @@ mkui-app[theme="light"] {
   --mkui-accent:    #0066b8;
   --mkui-accent-fg: #ffffff;
   --mkui-focus:     #000000;
+  --mkui-match-bg:  rgba(255, 190, 0, 0.35);
   --mkui-frame-shadow: 0 10px 30px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.08);
   color-scheme: light;
 }
@@ -986,6 +988,18 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-table tr.mkui-row-styled { background: var(--mkui-row-bg); }
 .mkui-table td.mkui-cell-styled { background: var(--mkui-cell-bg); }
 
+/* Find matches (the find strip): a class-based tint declared here, ahead of
+   the selection rules, so a selected or focused match still reads as
+   selected. Header matches tint their label; the current header match
+   gets the cursor's accent ring. */
+.mkui-table td.mkui-cell-match { background: var(--mkui-match-bg); }
+.mkui-table th.mkui-th-match .mkui-th-label {
+  background: var(--mkui-match-bg);
+  color: var(--mkui-fg);
+  border-radius: 2px;
+}
+.mkui-table th.mkui-th-match-current { box-shadow: inset 0 0 0 1px var(--mkui-accent); }
+
 /* Rich cell content (mkio-table `display` templates, built by lib/rich.js).
    Segment colors are inline on the span, never on the td, so they can't
    fight the selection tint or the styled-cell background above. */
@@ -1237,6 +1251,71 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-chip-x { padding-right: 5px; color: var(--mkui-fg-mute); }
 .mkui-chip-x:hover { color: var(--mkui-fg); }
 .mkui-chip .mkui-icon { width: 11px; height: 11px; flex-shrink: 0; }
+
+/* ── Find strip ────────────────────────────────────────────────────── */
+/* Between the toolbar and the scroll area, only while open (Ctrl/Cmd+F,
+   `edit.find`): one compact right-aligned row — input, the `.*` and `Aa`
+   toggles, the count, previous / next, close — so it takes no room from
+   the table when nobody is searching. */
+.mkui-table-find {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--mkui-border);
+  background: var(--mkui-bg-alt);
+  color: var(--mkui-fg);
+  font-size: 12px;
+}
+.mkui-find-icon { display: inline-flex; color: var(--mkui-fg-mute); }
+.mkui-find-icon .mkui-icon { width: 13px; height: 13px; }
+.mkui-find-input {
+  box-sizing: border-box;
+  width: 18em;
+  max-width: 50%;
+  min-width: 6em;
+  padding: 2px 6px;
+  background: var(--mkui-bg);
+  border: 1px solid var(--mkui-border);
+  color: var(--mkui-fg);
+  font-family: inherit;
+  font-size: 12px;
+  border-radius: 2px;
+  outline: none;
+}
+.mkui-find-input:focus { border-color: var(--mkui-accent); }
+.mkui-find-input.mkui-find-error { border-color: #e05252; }
+.mkui-find-toggle, .mkui-find-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: none;
+  color: var(--mkui-fg-mute);
+  cursor: pointer;
+}
+.mkui-find-toggle:hover, .mkui-find-btn:hover { color: var(--mkui-fg); background: var(--mkui-bg-hover); }
+.mkui-find-toggle.active {
+  color: var(--mkui-accent);
+  border-color: var(--mkui-accent);
+  background: color-mix(in srgb, var(--mkui-accent) 15%, transparent);
+}
+.mkui-find-toggle .mkui-icon, .mkui-find-btn .mkui-icon { width: 14px; height: 14px; }
+.mkui-find-count {
+  min-width: 6em;
+  margin: 0 4px;
+  text-align: right;
+  color: var(--mkui-fg-mute);
+  white-space: nowrap;
+}
+.mkui-find-count.mkui-find-none { color: #e05252; }
+.mkui-find-close { margin-left: 4px; }
 
 /* ── Columns button ────────────────────────────────────────────────── */
 /* Lives in the scroll area's right gutter at header height: a zero-height

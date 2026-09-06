@@ -24,6 +24,12 @@ const OUTLINE = {
   ],
   "chevron-left": ["m15 18-6-6 6-6"],
   "chevron-right": ["m9 18 6-6-6-6"],
+  "chevron-up": ["m18 15-6-6-6 6"],
+  "chevron-down": ["m6 9 6 6 6-6"],
+  // Find strip on tables (Lucide search / regex / case-sensitive).
+  search: ["M11 3a8 8 0 1 1 0 16 8 8 0 0 1 0-16z", "m21 21-4.3-4.3"],
+  regex: ["M17 3v10", "m12.67 5.5 8.66 5", "m12.67 10.5 8.66-5", "M9 17a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-2z"],
+  "case-sensitive": ["m3 15 4-8 4 8", "M4 13h6", "M18 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6z", "M21 9v6"],
   // Sort group icon on the table toolbar chips (Lucide arrow-up-down).
   sort: ["m21 16-4 4-4-4", "M17 20V4", "m3 8 4-4 4 4", "M7 4v16"],
   // Hidden-columns group icon on the table toolbar chips (Lucide columns-3).

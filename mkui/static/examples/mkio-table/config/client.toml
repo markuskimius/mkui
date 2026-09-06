@@ -15,6 +15,7 @@ items = [
   { label = "Copy", action = "edit.copy", shortcut = "mod+C" },
   { sep = true },
   { label = "Select All", action = "edit.selectAll", shortcut = "mod+A" },
+  { label = "Find…", action = "edit.find", shortcut = "mod+F" },
 ]
 
 [[menubar]]

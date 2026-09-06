@@ -77,9 +77,10 @@ class MkuiWorkspace extends HTMLElement {
     const t = e.target;
     const inText = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
 
-    // Edit shortcuts route to the focused frame's active pane via its
-    // _editActions hook. Guards: text inputs and native text selections
-    // always win — the browser's own copy/select-all must keep working.
+    // Edit shortcuts (Ctrl/Cmd+C, +A, +F, Escape) route to the focused
+    // frame's active pane via its _editActions hook. Guards: text inputs
+    // and native text selections always win — the browser's own
+    // copy/select-all must keep working.
     if (!inText) {
       if (e.key === "Escape") {
         if (this.editAction("clearSelection")) e.preventDefault();
@@ -96,6 +97,12 @@ class MkuiWorkspace extends HTMLElement {
         }
         if (k === "a") {
           if (this.editAction("selectAll")) e.preventDefault();
+          return;
+        }
+        if (k === "f") {
+          // Taken over from the browser: its own find can't see a
+          // virtualized table's off-screen rows.
+          if (this.editAction("find")) e.preventDefault();
           return;
         }
       }
@@ -130,7 +137,7 @@ class MkuiWorkspace extends HTMLElement {
     return id != null ? this._paneEls.get(id) ?? null : null;
   }
 
-  // Fire an edit action ("copy" | "selectAll" | "clearSelection") on the
+  // Fire an edit action ("copy" | "selectAll" | "clearSelection" | "find") on the
   // active pane's _editActions hook. Returns whether the pane handled it —
   // false means the caller should leave the browser default alone.
   editAction(name) {

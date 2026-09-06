@@ -1,7 +1,7 @@
 // Run with: node --test tests/edit-routing.test.js
 //
 // Edit shortcut routing: the workspace's window keydown handler forwards
-// Ctrl/Cmd+C, Ctrl/Cmd+A, and Escape to the focused frame's active pane
+// Ctrl/Cmd+C, Ctrl/Cmd+A, Ctrl/Cmd+F, and Escape to the focused frame's active pane
 // via its _editActions hook, with guards so text inputs and native text
 // selections keep the browser behavior. Also covers the menubar's
 // `shortcut` display field.
@@ -118,6 +118,7 @@ function routedWorkspace() {
         copy: () => { calls.push("copy"); return true; },
         selectAll: () => { calls.push("selectAll"); return true; },
         clearSelection: () => { calls.push("clear"); return true; },
+        find: () => { calls.push("find"); return true; },
       },
     },
   });
@@ -139,6 +140,24 @@ test("ctrl+A routes to selectAll, Escape to clearSelection", () => {
   ws._onKeyDown(keyEvent({ key: "a", ctrlKey: true }));
   ws._onKeyDown(keyEvent({ key: "Escape" }));
   assert.deepEqual(calls, ["selectAll", "clear"]);
+});
+
+test("ctrl+F and cmd+F route to find and swallow the browser's find", () => {
+  const { ws, calls } = routedWorkspace();
+  const e1 = keyEvent({ key: "f", ctrlKey: true });
+  ws._onKeyDown(e1);
+  const e2 = keyEvent({ key: "F", metaKey: true });
+  ws._onKeyDown(e2);
+  assert.deepEqual(calls, ["find", "find"]);
+  assert.ok(e1.defaultPrevented && e2.defaultPrevented);
+  // A pane without the hook leaves the browser's find alone.
+  const bare = makeWorkspace({
+    frames: [{ id: "f1", tree: tabs("t") }], focusedId: "f1",
+    paneActions: { t: { copy: () => true } },
+  });
+  const e3 = keyEvent({ key: "f", ctrlKey: true });
+  bare._onKeyDown(e3);
+  assert.ok(!e3.defaultPrevented);
 });
 
 test("text inputs keep the browser behavior", () => {

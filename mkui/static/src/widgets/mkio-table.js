@@ -196,6 +196,23 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   progress.style.display = "none";
   if (!isPaged) host.appendChild(progress);
 
+  /* ── Find state ──────────────────────────────────────────────────── */
+
+  // The find strip (see "Find" below) sits between the toolbar and the
+  // scroll area while open. Declared ahead of the toolbar, which inserts
+  // itself relative to it.
+  let findBar = null, findOpen = false;
+  let findInput = null, findCount = null;
+  let findQuery = "", findRegex = false, findCase = false;
+  let findRe = null;         // the matcher; null while closed, empty, or invalid
+  let findError = null;      // the RegExp error message, if any
+  let findMatches = [];      // [{ key, col, idx }] — key null (idx -1) for a header
+  let findPos = -1;          // index of the current match in findMatches, -1 = none
+  let findScanGen = 0;       // cancels a stale chunked scan
+  let findScanRev = -1;      // the viewRev the match list was built for
+  let findScanning = false;
+  let findInputTimer = null, findDataTimer = null;
+
   /* ── Toolbar (buttons + chips) ──────────────────────────────────── */
 
   const hasButtons = Array.isArray(spec.buttons) && spec.buttons.length > 0;
@@ -223,7 +240,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const show = hasButtons || chipsEl.children.length > 0;
     if (show === toolbarShown) return;
     toolbarShown = show;
-    if (show) host.insertBefore(toolbar, scrollArea); else toolbar.remove();
+    if (show) host.insertBefore(toolbar, findOpen ? findBar : scrollArea); else toolbar.remove();
   }
   syncToolbar();
 
@@ -1413,6 +1430,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (widthsInited) renderColgroup();
     }
     if (viewDirty) rebuildView();
+    // A data change under an open find strip: rescan after a pause.
+    if (findRe && findScanRev !== viewRev) scheduleFindRescan();
     const total = view.length;
     const vh = scrollHost.clientHeight || 400;
     const st = scrollHost.scrollTop || 0;
@@ -1679,6 +1698,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         cellRects.length > 0 && cellSelected(viewIdx, ci, key, col));
       td.classList.toggle("mkui-cell-focus",
         focusCell != null && focusCell.key === key && focusCell.col === col);
+      // Find: the cell's shown text (renderCell keeps it) against the matcher.
+      td.classList.toggle("mkui-cell-match", findRe != null && findRe.test(td._mkuiText ?? ""));
       ci++;
     }
   }
@@ -2015,6 +2036,14 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const meta = e.ctrlKey || e.metaKey;
     const cols = visibleColumns();
 
+    // Find strip open: F3 / ctrl-cmd+G step the matches (shift reverses).
+    if (findOpen && typeof e.key === "string" && !e.altKey &&
+        (e.key === "F3" || (meta && e.key.toLowerCase() === "g"))) {
+      findGo(e.shiftKey ? -1 : 1);
+      e.preventDefault?.();
+      return;
+    }
+
     // Tree: Enter toggles the focused row, `*` opens its whole subtree.
     if (onTreeKey(e)) { e.preventDefault?.(); return; }
 
@@ -2092,6 +2121,261 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   scrollHost.setAttribute?.("tabindex", "0");
   scrollHost.classList?.add("mkui-table-keys");
   scrollHost.addEventListener("keydown", onTableKeyDown);
+
+  /* ── Find ─────────────────────────────────────────────────────────── */
+
+  // Ctrl/Cmd+F (or the `edit.find` action) opens a find strip between the
+  // toolbar and the header — in the DOM only while open, so it costs no
+  // room otherwise. It navigates rather than filters: stepping to a match
+  // moves the keyboard cursor (a plain move, so the selection collapses as
+  // with an arrow key) and scrolls it into view; a header match scrolls
+  // sideways. Matched cells in the rendered slice carry .mkui-cell-match,
+  // matched headers .mkui-th-match (.mkui-th-match-current for the current
+  // one; a cell match's current is the cursor). Simple mode is a
+  // case-insensitive substring, escaped into a RegExp so both modes share
+  // one matcher; `.*` switches to a regular expression, `Aa` to
+  // case-sensitive; an invalid pattern tints the input and matches
+  // nothing. Cells match on what they show (the display text), so a
+  // `display` column is searched as read; hidden columns and collapsed
+  // subtrees are out of reach, as they are off the screen. The match list
+  // — header matches first, then (key, col) pairs in view order — comes
+  // from a scan in requestAnimationFrame chunks, the first one
+  // synchronous so a small table answers at once. A data, sort, filter,
+  // or column change under an open strip rescans after a pause, keeping
+  // the current match by identity where it survives. Keys: typing finds
+  // as you go (jumping to the first match at or after the cursor), Enter
+  // / shift+Enter step, Escape closes; in the table F3 / ctrl-cmd+G step
+  // and Escape closes once there is no selection left to clear.
+  const FIND_INPUT_MS = 100, FIND_DATA_MS = 250, FIND_CHUNK = 2000;
+
+  function buildFindBar() {
+    findBar = document.createElement("div");
+    findBar.className = "mkui-table-find";
+    const ico = document.createElement("span");
+    ico.className = "mkui-find-icon";
+    ico.appendChild(icon("search"));
+    findInput = document.createElement("input");
+    findInput.type = "text";
+    findInput.className = "mkui-find-input";
+    findInput.placeholder = "Find…";
+    findInput.value = findQuery;
+    findInput.addEventListener("input", () => {
+      findQuery = findInput.value ?? "";
+      if (findInputTimer) clearTimeout(findInputTimer);
+      findInputTimer = setTimeout(() => { findInputTimer = null; applyFind(true); }, FIND_INPUT_MS);
+    });
+    findInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault?.();
+        if (findInputTimer) { clearTimeout(findInputTimer); findInputTimer = null; applyFind(true); }
+        else findGo(e.shiftKey ? -1 : 1);
+      } else if (e.key === "Escape") {
+        e.preventDefault?.();
+        closeFind();
+      }
+    });
+    const toggle = (name, title, isOn, set) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "mkui-find-toggle";
+      b.title = title;
+      b.appendChild(icon(name));
+      b.addEventListener("click", () => {
+        set(!isOn());
+        b.classList.toggle("active", isOn());
+        applyFind(true);
+        findInput.focus?.();
+      });
+      return b;
+    };
+    const regexBtn = toggle("regex", "Regular expression", () => findRegex, (v) => { findRegex = v; });
+    const caseBtn = toggle("case-sensitive", "Match case", () => findCase, (v) => { findCase = v; });
+    findCount = document.createElement("span");
+    findCount.className = "mkui-find-count";
+    const button = (name, title, fn) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "mkui-find-btn";
+      b.title = title;
+      b.appendChild(icon(name));
+      b.addEventListener("click", fn);
+      return b;
+    };
+    const prev = button("chevron-up", "Previous match (Shift+Enter)", () => findGo(-1));
+    const next = button("chevron-down", "Next match (Enter)", () => findGo(1));
+    const close = button("close", "Close (Escape)", () => closeFind());
+    close.classList.add("mkui-find-close");
+    findBar.append(ico, findInput, regexBtn, caseBtn, findCount, prev, next, close);
+  }
+
+  function openFind() {
+    if (!findBar) buildFindBar();
+    if (!findOpen) {
+      findOpen = true;
+      host.insertBefore(findBar, scrollArea);
+      // Reopened with its last query: show the matches, leave the cursor.
+      if (findQuery) applyFind(false);
+    }
+    findInput.focus?.();
+    findInput.select?.();
+  }
+
+  function closeFind() {
+    if (!findOpen) return false;
+    findOpen = false;
+    findBar.remove();
+    if (findInputTimer) { clearTimeout(findInputTimer); findInputTimer = null; }
+    if (findDataTimer) { clearTimeout(findDataTimer); findDataTimer = null; }
+    findScanGen++;
+    findRe = null; findError = null;
+    findMatches = []; findPos = -1; findScanning = false; findScanRev = -1;
+    refreshFindStyles();
+    scrollHost.focus?.();
+    return true;
+  }
+
+  function compileFind() {
+    findRe = null; findError = null;
+    if (findQuery !== "") {
+      const src = findRegex ? findQuery : findQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      try { findRe = new RegExp(src, findCase ? "" : "i"); }
+      catch (e) { findError = e.message; }
+    }
+    if (findInput) {
+      findInput.classList.toggle("mkui-find-error", findError != null);
+      findInput.title = findError ?? "";
+    }
+  }
+
+  // Recompile and rescan; `jump` moves to the first match at or after the
+  // cursor once the scan is in (unless the current match still matches).
+  function applyFind(jump) {
+    compileFind();
+    refreshFindStyles();
+    scanFind(jump);
+  }
+
+  function headerMatches(col) {
+    if (!findRe) return false;
+    const l = label(col);
+    return findRe.test(l) || (l !== col && findRe.test(col));
+  }
+
+  function scanFind(jump = false) {
+    const gen = ++findScanGen;
+    findScanRev = viewRev;
+    const cur = findPos >= 0 ? findMatches[findPos] : null;
+    findMatches = [];
+    findPos = -1;
+    if (!findRe || !columns) { findScanning = false; updateFindCount(); refreshFindHeaderStyles(); return; }
+    const cols = visibleColumns();
+    for (const c of cols) if (headerMatches(c)) findMatches.push({ key: null, col: c, idx: -1 });
+    const texts = cols.map((c) => displayExprs[c]
+      ? (row) => cellDisplay(row, c).text
+      : (row) => cellText(row, c));
+    const chunk = Math.max(FIND_CHUNK, Math.ceil(view.length / 50));
+    let i = 0;
+    findScanning = true;
+    const step = () => {
+      if (gen !== findScanGen) return;
+      const end = Math.min(view.length, i + chunk);
+      for (; i < end; i++) {
+        const key = view[i], row = rows.get(key);
+        if (!row) continue;
+        for (let ci = 0; ci < cols.length; ci++)
+          if (findRe.test(texts[ci](row))) findMatches.push({ key, col: cols[ci], idx: i });
+      }
+      if (i < view.length) { updateFindCount(); requestAnimationFrame(step); return; }
+      findScanning = false;
+      if (cur) findPos = findMatches.findIndex((m) => m.key === cur.key && m.col === cur.col);
+      if (jump && findPos < 0) findGo(1);
+      else { updateFindCount(); refreshFindStyles(); }
+    };
+    step();
+  }
+
+  function scheduleFindRescan() {
+    if (findDataTimer) return;
+    findDataTimer = setTimeout(() => {
+      findDataTimer = null;
+      if (findOpen && findRe) scanFind(false);
+    }, FIND_DATA_MS);
+  }
+
+  // Step to the next (dir 1) or previous (dir -1) match, wrapping; with
+  // no current match, from the cursor's position in the view.
+  function findGo(dir) {
+    const n = findMatches.length;
+    if (!n) { updateFindCount(); return; }
+    let pos;
+    if (findPos >= 0) pos = (findPos + dir + n) % n;
+    else {
+      const cols = visibleColumns();
+      const ci = focusCell ? keyViewIdx(focusCell.key, focusCell.idx) : -1;
+      const cc = focusCell ? cols.indexOf(focusCell.col) : -1;
+      const atOrAfter = (m) => m.idx > ci || (m.idx === ci && cols.indexOf(m.col) >= cc);
+      const first = findMatches.findIndex(atOrAfter);
+      if (dir > 0) pos = first < 0 ? 0 : first;
+      else pos = first < 0 ? n - 1 : (first - 1 + n) % n;
+    }
+    findPos = pos;
+    showMatch(findMatches[pos]);
+    updateFindCount();
+  }
+
+  function showMatch(m) {
+    if (m.key == null) {
+      const th = thead.querySelector?.(`th[data-col="${CSS.escape(m.col)}"]`);
+      if (th) scrollHeaderIntoView(th);
+      refreshFindHeaderStyles();
+      return;
+    }
+    const idx = keyViewIdx(m.key, m.idx);
+    if (view[idx] !== m.key) return; // gone since the scan; the rescan catches up
+    selectedKeys.clear();
+    selectedAnchor = null;
+    clearCellSelection();
+    focusCell = { key: m.key, col: m.col, idx };
+    refreshSelectionStyles();
+    scrollFocusIntoView();
+    refreshFindHeaderStyles();
+  }
+
+  function updateFindCount() {
+    if (!findCount) return;
+    const n = findMatches.length;
+    let text;
+    if (findError != null) text = "Invalid pattern";
+    else if (!findRe) text = "";
+    else if (findScanning) text = n ? `${n}…` : "…";
+    else if (!n) text = "No matches";
+    else if (findPos >= 0) text = `${findPos + 1} of ${n}`;
+    else text = `${n} match${n === 1 ? "" : "es"}`;
+    findCount.textContent = text;
+    findCount.classList.toggle("mkui-find-none", findError != null || (findRe != null && !findScanning && n === 0));
+  }
+
+  function refreshFindHeaderStyles() {
+    if (!thead.querySelectorAll) return;
+    const cur = findPos >= 0 ? findMatches[findPos] : null;
+    for (const th of thead.querySelectorAll("th")) {
+      const col = th.dataset?.col;
+      if (col == null) continue;
+      const hit = headerMatches(col);
+      th.classList.toggle("mkui-th-match", hit);
+      th.classList.toggle("mkui-th-match-current", hit && cur != null && cur.key == null && cur.col === col);
+    }
+  }
+
+  // Restyle the rendered slice for the current matcher (selection styles
+  // ride along — styleRowSelection paints both).
+  function refreshFindStyles() {
+    for (const [key, tr] of rowEls) {
+      if (tr._viewIdx == null) continue;
+      styleRowSelection(tr, key, tr._viewIdx);
+    }
+    refreshFindHeaderStyles();
+  }
 
   /* ── Clipboard copy ───────────────────────────────────────────────── */
 
@@ -2650,6 +2934,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     initNewColWidths();
     rebuildAllRows();
     render();
+    if (findRe) scanFind(false);
   }
 
   function setVisible(s) {
@@ -3296,6 +3581,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     updateColumnsBtn();
     renderChips();
+    refreshFindHeaderStyles();
   }
 
   // The Columns button's badge counts hidden columns; its tooltip gives
@@ -4301,7 +4587,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         flash(td, "mkui-flash-update");
       }
       restyleRowStylers(tr, row);
+      if (findRe && tr._viewIdx != null) styleRowSelection(tr, key, tr._viewIdx);
     }
+    // New text under an open find strip: the match list follows (an
+    // in-place replace bumps no viewRev, so render() won't notice).
+    if (findRe && changed.length) scheduleFindRescan();
     // A live update to a row the buttons act on can flip an `enable.when`
     // verdict (a status column crossing a gate), so re-evaluate them.
     if (hasButtons && rowInSelection(key)) updateButtonStates();
@@ -4634,12 +4924,14 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   const paneEl = host.closest("mkui-pane");
   if (paneEl) {
-    // Edit hook: the workspace routes Ctrl/Cmd+C, Ctrl/Cmd+A, Escape, and
-    // the edit.* menu actions to the focused frame's active pane.
+    // Edit hook: the workspace routes Ctrl/Cmd+C, Ctrl/Cmd+A, Ctrl/Cmd+F,
+    // Escape, and the edit.* menu actions to the focused frame's active
+    // pane. Escape clears the selection first, then closes the find strip.
     paneEl._editActions = {
       copy: () => copySelection(),
       selectAll: () => { selectAllRows(); return true; },
-      clearSelection: () => clearSelectionKeepFocus(),
+      clearSelection: () => clearSelectionKeepFocus() || closeFind(),
+      find: () => { openFind(); return true; },
     };
     // Filter hook: `workspace.setPaneFilters` / `getPaneFilters` and the
     // `table.filter` action reach the column filters through it.
@@ -4665,6 +4957,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       closed = true;
       closeDropdown();
       closePicker();
+      closeFind();
       io.disconnect();
       ro.disconnect();
       subscribed = false;
@@ -4682,6 +4975,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       clearData();
       closeDropdown();
       closePicker();
+      closeFind();
       columns = spec.columns ?? null;
       loadVisibleSpec(spec.visible);
       loadSortSpec(spec.sort);

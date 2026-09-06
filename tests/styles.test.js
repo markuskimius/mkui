@@ -240,6 +240,22 @@ test("conditional-style backgrounds ride custom properties and yield to selectio
     /color-mix.*--mkui-row-bg/);
 });
 
+test("find matches tint by class and yield to selection", () => {
+  // Like the styled-cell background: a match tint that came after the
+  // selection rules would paint over a selected match.
+  assert.equal(declaration(".mkui-table td.mkui-cell-match", "background"), "var(--mkui-match-bg)");
+  assert.ok(css.indexOf(".mkui-table td.mkui-cell-match")
+    < css.indexOf(".mkui-table td.mkui-cell-sel"),
+    "match tint must precede the cell-selection tint");
+  assert.ok(css.indexOf(".mkui-table td.mkui-cell-match")
+    < css.indexOf(".mkui-table tr.mkui-selected"),
+    "match tint must precede the row-selection tint");
+  // Both themes define the tint.
+  assert.equal((css.match(/--mkui-match-bg:/g) ?? []).length, 2);
+  // The strip never scrolls with the table: it is a fixed flex row.
+  assert.equal(declaration(".mkui-table-find", "flex-shrink"), "0");
+});
+
 test("columns are separated by subtle dividers", () => {
   const div = declaration(".mkui-table th, .mkui-table td", "border-right");
   assert.match(div, /1px solid/);
