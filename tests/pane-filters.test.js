@@ -149,3 +149,24 @@ test("setPaneColumns reaches the named pane's columns hook; getPaneColumns reads
   assert.equal(ws.setPaneColumns(null, null), true, "no id targets the focused pane; null shows all");
   assert.deepEqual(log.at(-1), ["cols:b", null, undefined]);
 });
+
+/* ── Tree routing ─────────────────────────────────────────────────────── */
+// expandPane reaches a tree table's `_tree` hook; `table.expand` wraps it.
+
+test("expandPane reaches the named pane's tree hook; panes without one decline", () => {
+  const log = [];
+  const ws = makeWorkspace(log);
+  for (const [id, el] of ws._paneEls) if (el._filters) el._tree = { expand: (d) => log.push(["tree:" + id, d]) };
+  assert.equal(ws.expandPane("a", 2), true);
+  assert.deepEqual(log, [["tree:a", 2]]);
+  assert.equal(ws.expandPane("plain", 1), false, "a flat table has no tree hook");
+  assert.equal(ws.expandPane("nope", 1), false);
+  assert.equal(ws.expandPane(null, "all"), true, "no id targets the focused pane");
+  assert.deepEqual(log.at(-1), ["tree:b", "all"]);
+});
+
+test("table.expand action routes to the workspace", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../mkui/static/src/components/app.js", import.meta.url), "utf8");
+  assert.match(src, /registerAction\("table\.expand",\s*\(app, a = \{\}\) => ws\.expandPane\(a\.pane \?\? null, a\.depth \?\? 0\)\)/);
+});

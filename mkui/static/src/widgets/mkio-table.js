@@ -313,6 +313,52 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     colTypes[c] = o;
   }
+
+  // Tree rows: `tree = { child, parent, expand, filterScope, orphans,
+  // column }` nests rows like a file navigator. A row whose `child` fields
+  // (x, y, z) are all empty is a root; otherwise its parent is the row whose
+  // `parent` fields (a, b, c) carry the same values. The tree only shapes
+  // the view — `view` becomes the pre-order flattening of the rows whose
+  // ancestors are all expanded — so selection, copy, keyboard navigation,
+  // and Ctrl-A, which all walk `view`, see exactly the rows on screen.
+  // `expand` is the depth open at load (0 = roots only, or "all");
+  // `filterScope` is the default scope of a new filter; `orphans` says
+  // whether a child whose parent is absent shows as a root or hides;
+  // `column` pins the caret to a column (default: the first visible one).
+  const TREE_INDENT = 16;   // px per level, matches --mkui-tree-indent
+  const TREE_TOGGLE_W = 16; // px the caret (12px icon + gap) adds to the cell
+  const TREE_SCOPES = ["roots", "children", "all"];
+  let tree = null;
+  {
+    const t = spec.tree;
+    if (t != null && t !== "") {
+      const strs = (v) => typeof v === "string" ? (v ? [v] : []) : Array.isArray(v) ? v : null;
+      const child = strs(t.child), parent = strs(t.parent);
+      if (typeof t !== "object" || !child || !parent || !child.length || child.length !== parent.length ||
+          [...child, ...parent].some((f) => typeof f !== "string" || !f)) {
+        console.warn("[mkio-table] bad tree: expected { child, parent } as column names of equal count");
+      } else {
+        let expand = t.expand ?? 0;
+        if (expand === "all") expand = Infinity;
+        else if (typeof expand !== "number" || !(expand >= 0)) {
+          console.warn(`[mkio-table] bad tree.expand '${t.expand}': expected a depth or "all"`);
+          expand = 0;
+        }
+        let filterScope = t.filterScope ?? "roots";
+        if (!TREE_SCOPES.includes(filterScope)) {
+          console.warn(`[mkio-table] bad tree.filterScope '${filterScope}': use roots, children, or all`);
+          filterScope = "all";
+        }
+        let orphans = t.orphans ?? "root";
+        if (orphans !== "root" && orphans !== "hide") {
+          console.warn(`[mkio-table] bad tree.orphans '${orphans}': use root or hide`);
+          orphans = "root";
+        }
+        tree = { child, parent, expand, filterScope, orphans,
+                 column: typeof t.column === "string" && t.column ? t.column : null };
+      }
+    }
+  }
   // Data columns: everything known except mkio's identity fields.
   const dataColumns = () => columns.filter((c) => !c.startsWith("_mkio_"));
   // Names in `visible` that aren't (yet) known columns are skipped rather
@@ -493,15 +539,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function renderCell(td, row, col) {
     const d = cellDisplay(row, col);
     td._mkuiText = d.text;
+    const target = td._mkuiTreeText ?? td; // a tree cell keeps its caret
     if (d.error) {
-      td.textContent = "#ERR";
+      target.textContent = "#ERR";
       td.classList.add("mkui-cell-err");
       td.title = d.error;
       return;
     }
     if (td.classList.contains("mkui-cell-err")) { td.classList.remove("mkui-cell-err"); td.title = ""; }
-    if (d.rich) renderRich(td, d.rich);
-    else td.textContent = d.text;
+    if (d.rich) renderRich(target, d.rich);
+    else target.textContent = d.text;
   }
 
   /* ── Conditional styling ──────────────────────────────────────────── */
@@ -761,7 +808,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       // is judged on the value.
       const d = displayExprs[k] ? cellDisplay(row, k) : null;
       const s = d ? d.text : String(v);
-      const extraW = d?.rich ? richExtraWidth(d.rich) : 0;
+      let extraW = d?.rich ? richExtraWidth(d.rich) : 0;
+      // The caret column carries the indent and the toggle too.
+      if (tree && k === treeCol()) extraW += TREE_TOGGLE_W + rowDepth(row[idKey]) * TREE_INDENT;
       let grew = false;
       if (st.numeric) {
         let changed = false;
@@ -784,7 +833,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       // the mono table font; text is canvas-measured, skipped when even at
       // 2ch per char (fullwidth glyphs) it can't beat the current max.
       let w;
-      if (st.numeric) w = s.length * chW;
+      if (st.numeric) w = s.length * chW + extraW;
       else if (2 * s.length * chW + extraW <= st.maxTextW) w = 0;
       else w = measureCtx.measureText(s).width + extraW;
       if (w > st.maxTextW) { st.maxTextW = w; grew = true; }
@@ -794,6 +843,362 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       }
       if (grew) growColWidth(k, st);
     }
+  }
+
+  /* ── Tree rows ────────────────────────────────────────────────────── */
+
+  // Structure lives beside `rows`: `parentOf` (key → parent key, null for a
+  // root), `kids` (parent key, null for the roots → child keys in
+  // insertion order), `depthOf`, and `expanded`. Linking is by value:
+  // `byParentVals` maps a row's `parent` field values (joined) to the keys
+  // carrying them — the first is the parent — and `pendingKids` holds the
+  // children whose parent has not arrived (a later page, or a stream
+  // ordered child-first); when it does, they re-parent. Sorting is per
+  // sibling group (`sortedKids`, cached per parent and dropped when the
+  // group's membership or a member's sort key changes).
+  const parentOf = new Map();
+  const kids = new Map();
+  const depthOf = new Map();
+  const expanded = new Set();
+  const byParentVals = new Map(); // vals → Set<key>
+  const pendingKids = new Map();  // vals → Set<key>
+  const sortedKidsCache = new Map();
+  const warnedTree = new Set();
+  const EMPTY = [];
+
+  const fieldVals = (row, fields) => {
+    let allEmpty = true;
+    const parts = fields.map((f) => {
+      const v = cellValue(row, f);
+      if (v != null && v !== "") allEmpty = false;
+      return v == null ? "" : String(v);
+    });
+    return allEmpty ? null : parts.join("\0");
+  };
+  const childVals = (row) => fieldVals(row, tree.child);
+  const parentVals = (row) => fieldVals(row, tree.parent);
+  const rowDepth = (key) => depthOf.get(key) ?? 0;
+  const isRootKey = (key) => (parentOf.get(key) ?? null) === null;
+  const hasKids = (key) => (kids.get(key)?.length ?? 0) > 0;
+
+  function addKid(pk, key, at = -1) {
+    let a = kids.get(pk);
+    if (!a) kids.set(pk, (a = []));
+    if (at >= 0 && at < a.length) a.splice(at, 0, key); else a.push(key);
+    sortedKidsCache.delete(pk);
+  }
+  function dropKid(pk, key) {
+    const a = kids.get(pk);
+    if (!a) return;
+    const i = a.indexOf(key);
+    if (i >= 0) a.splice(i, 1);
+    if (!a.length && pk !== null) kids.delete(pk);
+    sortedKidsCache.delete(pk);
+  }
+  const addTo = (map, k, key) => { let s = map.get(k); if (!s) map.set(k, (s = new Set())); s.add(key); };
+  const dropFrom = (map, k, key) => { const s = map.get(k); if (s) { s.delete(key); if (!s.size) map.delete(k); } };
+
+  function setDepth(key, d) {
+    if (depthOf.get(key) !== d) {
+      depthOf.set(key, d);
+      syncDepth(key, d); // a re-parented row's element may be on screen
+    }
+    if (d < tree.expand) expanded.add(key);
+    for (const c of kids.get(key) ?? EMPTY) setDepth(c, d + 1);
+  }
+
+  // Re-indent a rendered row (render() reuses keyed elements, so a moved
+  // subtree keeps its trs).
+  function syncDepth(key, d) {
+    const tr = rowEls.get(key);
+    if (!tr) return;
+    tr.dataset.depth = String(d);
+    for (const td of tr.children) {
+      if (!td._mkuiTreeText) continue;
+      if (d) td.style.setProperty("--mkui-tree-depth", String(d));
+      else td.style.removeProperty("--mkui-tree-depth");
+    }
+  }
+
+  // Would making `pk` the parent of `key` close a loop?
+  function wouldCycle(key, pk) {
+    for (let k = pk; k != null; k = parentOf.get(k) ?? null) if (k === key) return true;
+    return false;
+  }
+
+  // Attach `key` under `pk` (null = root). Returns whether the view needs
+  // a rebuild (a re-parent moves a subtree; a fresh leaf does not).
+  function attach(key, pk, at = -1) {
+    parentOf.set(key, pk);
+    addKid(pk, key, at);
+    setDepth(key, pk === null ? 0 : rowDepth(pk) + 1);
+  }
+
+  // Link a new row: publish its parent values so pending children find
+  // it, then find its own parent (or wait for one). Returns true when the
+  // view needs a full rebuild — orphans re-parented under this row.
+  function linkRow(row) {
+    const key = row[idKey];
+    let rebuild = false;
+    const pv = parentVals(row);
+    if (pv !== null) {
+      addTo(byParentVals, pv, key);
+      const waiting = pendingKids.get(pv);
+      if (waiting && [...byParentVals.get(pv)][0] === key) {
+        pendingKids.delete(pv);
+        for (const ck of waiting) {
+          if (wouldCycle(ck, key)) continue; // stays an orphan
+          if (parentOf.has(ck)) dropKid(parentOf.get(ck), ck);
+          attach(ck, key);
+          rebuild = true;
+        }
+      }
+    }
+    const cv = childVals(row);
+    let pk = null;
+    if (cv !== null) {
+      const cands = byParentVals.get(cv);
+      const cand = cands ? [...cands][0] : undefined;
+      if (cand !== undefined && cand !== key && !wouldCycle(key, cand)) pk = cand;
+      else {
+        if (cand !== undefined && !warnedTree.has("cycle")) {
+          warnedTree.add("cycle");
+          console.warn("[mkio-table] tree: a row descends from itself; shown as a root");
+        }
+        addTo(pendingKids, cv, key);
+        if (tree.orphans === "hide") { parentOf.set(key, undefined); depthOf.set(key, 0); return rebuild; }
+      }
+    }
+    attach(key, pk);
+    return rebuild;
+  }
+
+  // Forget a row: its children become orphans (roots, or hidden), still
+  // waiting on the parent values they name. Returns whether the view needs
+  // a rebuild (the row had children).
+  function unlinkRow(row) {
+    const key = row[idKey];
+    const pv = parentVals(row);
+    if (pv !== null) dropFrom(byParentVals, pv, key);
+    const cv = childVals(row);
+    if (cv !== null) dropFrom(pendingKids, cv, key);
+    const pk = parentOf.get(key);
+    // Where the row sat among the roots: orphaned children take its place
+    // rather than trailing the list.
+    let slot = pk === null ? kids.get(null)?.indexOf(key) ?? -1 : -1;
+    if (pk !== undefined) dropKid(pk, key);
+    parentOf.delete(key);
+    depthOf.delete(key);
+    expanded.delete(key);
+    sortedKidsCache.delete(key);
+    const children = kids.get(key);
+    if (!children) return false;
+    kids.delete(key);
+    const next = pv !== null ? [...byParentVals.get(pv) ?? []][0] : undefined;
+    for (const ck of children) {
+      if (next !== undefined && !wouldCycle(ck, next)) { attach(ck, next); continue; }
+      const ccv = childVals(rows.get(ck));
+      if (ccv !== null) addTo(pendingKids, ccv, ck);
+      if (tree.orphans === "hide") { parentOf.set(ck, undefined); setDepth(ck, 0); }
+      else attach(ck, null, slot < 0 ? -1 : slot++);
+    }
+    return true;
+  }
+
+  // Hidden orphans (`orphans = "hide"`) have parentOf === undefined; a
+  // linked row has a key (or null for a root).
+  const isLinked = (key) => parentOf.get(key) !== undefined;
+
+  function sortedKids(pk) {
+    const a = kids.get(pk) ?? EMPTY;
+    if (!sortKeys.length || a.length < 2) return a;
+    let s = sortedKidsCache.get(pk);
+    if (!s) {
+      s = a.slice().sort((x, y) => compareRows(rows.get(x), rows.get(y)));
+      sortedKidsCache.set(pk, s);
+    }
+    return s;
+  }
+
+  // The visible flattening of `key`'s subtree, `key` first: children of an
+  // expanded row in sibling-sorted order, each pruned with its subtree when
+  // a filter hides it.
+  function flattenVisible(key, out = []) {
+    out.push(key);
+    if (!expanded.has(key)) return out;
+    for (const c of sortedKids(key)) {
+      if (!matchesFilters(rows.get(c))) continue;
+      flattenVisible(c, out);
+    }
+    return out;
+  }
+
+  // Index of the last view row inside the subtree that starts at view
+  // index vi — pre-order keeps a subtree contiguous.
+  function subtreeEnd(vi) {
+    const d = rowDepth(view[vi]);
+    let j = vi + 1;
+    while (j < view.length && rowDepth(view[j]) > d) j++;
+    return j - 1;
+  }
+
+  // Splice a freshly linked row (and whatever of its subtree shows) into
+  // the view: right after the parent, or after the visible subtree of its
+  // nearest visible earlier sibling. Nothing to do when the parent is
+  // collapsed or itself off-view.
+  function treeInsertIntoView(key) {
+    if (!isLinked(key)) return;
+    const pk = parentOf.get(key);
+    let base = -1;
+    if (pk !== null) {
+      base = view.indexOf(pk);
+      if (base < 0 || !expanded.has(pk)) return;
+    }
+    if (!matchesFilters(rows.get(key))) return;
+    const sibs = sortedKids(pk);
+    let pos = base + 1;
+    for (let j = sibs.indexOf(key) - 1; j >= 0; j--) {
+      const vi = view.indexOf(sibs[j]);
+      if (vi >= 0) { pos = subtreeEnd(vi) + 1; break; }
+    }
+    view.splice(pos, 0, ...flattenVisible(key));
+  }
+
+  // Drop hidden rows from the selection (a collapse, like a filter, takes
+  // them off the table the user sees). Cell rects lose the rows from their
+  // key snapshots; a rect left empty goes.
+  function pruneSelection(gone) {
+    if (!gone.size) return;
+    for (const k of gone) selectedKeys.delete(k);
+    if (selectedAnchor != null && gone.has(selectedAnchor)) selectedAnchor = null;
+    if (cellRects.length) {
+      for (const r of cellRects) if (r.keys) for (const k of gone) r.keys.delete(k);
+      cellRects = cellRects.filter((r) => r.keys?.size);
+    }
+    if (cellOff.size)
+      for (const k of [...cellOff]) if (gone.has(k.slice(0, k.indexOf("\0")))) cellOff.delete(k);
+  }
+
+  // Expand or collapse one row. Incremental: an expansion splices the
+  // visible subtree in after the row, a collapse cuts the contiguous run
+  // of its descendants; both O(subtree) plus one splice. The focused cell
+  // inside a collapsing subtree lands on the row that swallowed it.
+  function setExpanded(key, on) {
+    if (!tree || expanded.has(key) === on) return false;
+    if (on) expanded.add(key); else expanded.delete(key);
+    if (!hasKids(key)) return true; // remembered; nothing to show yet
+    const vi = viewDirty ? -1 : view.indexOf(key);
+    if (vi >= 0) {
+      if (on) {
+        const sub = flattenVisible(key);
+        sub.shift();
+        view.splice(vi + 1, 0, ...sub);
+      } else {
+        const gone = new Set(view.splice(vi + 1, subtreeEnd(vi) - vi));
+        pruneSelection(gone);
+        if (focusCell && gone.has(focusCell.key)) focusCell = { key, col: focusCell.col, idx: vi };
+      }
+      viewRev++;
+    }
+    syncToggle(key);
+    syncTreeAll();
+    render();
+    if (hasButtons) updateButtonStates();
+    publishSelection();
+    return true;
+  }
+
+  // Expand a whole subtree (shift+click, `*`) or collapse it.
+  function setExpandedDeep(key, on) {
+    const walk = (k) => { if (on) expanded.add(k); else expanded.delete(k); for (const c of kids.get(k) ?? EMPTY) walk(c); };
+    if (on) { walk(key); setExpandedApplied(); return; }
+    // Collapse the top first (one incremental cut), then forget the rest.
+    setExpanded(key, false);
+    walk(key);
+  }
+
+  // Open every row above `depth` (Infinity = all) and close the rest.
+  function setExpandDepth(depth) {
+    if (!tree) return;
+    expanded.clear();
+    for (const [k, d] of depthOf) if (d < depth) expanded.add(k);
+    setExpandedApplied();
+  }
+
+  // After bulk changes to `expanded`: rebuild, prune what left the view.
+  function setExpandedApplied() {
+    markViewDirty();
+    rebuildView();
+    const inView = new Set(view);
+    const gone = new Set();
+    for (const k of selectedKeys) if (!inView.has(k)) gone.add(k);
+    for (const r of cellRects) for (const k of r.keys ?? EMPTY) if (!inView.has(k)) gone.add(k);
+    pruneSelection(gone);
+    if (focusCell && !inView.has(focusCell.key)) {
+      // Climb to the nearest shown ancestor.
+      let k = parentOf.get(focusCell.key);
+      while (k != null && !inView.has(k)) k = parentOf.get(k);
+      focusCell = k != null ? { key: k, col: focusCell.col, idx: view.indexOf(k) } : null;
+    }
+    for (const key of rowEls.keys()) syncToggle(key);
+    syncTreeAll();
+    render();
+    if (hasButtons) updateButtonStates();
+    publishSelection();
+  }
+
+  const anyExpanded = () => { for (const k of expanded) if (hasKids(k)) return true; return false; };
+
+  // The column that carries the carets: the configured one while it shows,
+  // else the first visible column.
+  function treeCol() {
+    if (!tree || !columns) return null;
+    const vis = visibleColumns();
+    return tree.column && vis.includes(tree.column) ? tree.column : vis[0] ?? null;
+  }
+
+  function makeToggle(key) {
+    const t = document.createElement("span");
+    t.className = "mkui-tree-toggle";
+    t.appendChild(icon("chevron-right"));
+    t.addEventListener("pointerdown", (e) => { e.stopPropagation(); });
+    t.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!hasKids(key)) return;
+      if (e.shiftKey) setExpandedDeep(key, !expanded.has(key));
+      else setExpanded(key, !expanded.has(key));
+    });
+    return t;
+  }
+
+  // The caret reflects the row: open, closed, or a leaf (kept as a blank
+  // of the same width so text stays aligned per level).
+  function syncToggle(key, tr = rowEls.get(key)) {
+    const t = tr?.querySelector(".mkui-tree-toggle");
+    if (!t) return;
+    const leaf = !hasKids(key);
+    t.classList.toggle("mkui-tree-leaf", leaf);
+    t.classList.toggle("open", !leaf && expanded.has(key));
+    t.title = leaf ? "" : expanded.has(key) ? "Collapse (shift: whole subtree)" : "Expand (shift: whole subtree)";
+  }
+
+  function syncTreeAll() {
+    const t = thead.querySelector?.(".mkui-tree-all");
+    if (!t) return;
+    const open = anyExpanded();
+    t.classList.toggle("open", open);
+    t.title = open ? "Collapse all" : "Expand all roots (shift: every level)";
+  }
+
+  function onTreeKey(e) {
+    if (!tree || e.ctrlKey || e.metaKey || e.altKey) return false;
+    if (e.key !== "Enter" && e.key !== "*") return false;
+    if (!ensureFocusCell()) return false;
+    const key = focusCell.key;
+    if (!hasKids(key)) return false;
+    if (e.key === "*") setExpandedDeep(key, true);
+    else setExpanded(key, !expanded.has(key));
+    return true;
   }
 
   /* ── Virtualized rows ─────────────────────────────────────────────── */
@@ -812,6 +1217,15 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function rebuildView() {
     view = [];
+    if (tree) {
+      // Pre-order over the roots: a row shows when it passes the filters,
+      // its children when it is expanded too (see "Tree rows").
+      for (const key of sortedKids(null)) {
+        if (matchesFilters(rows.get(key))) flattenVisible(key, view);
+      }
+      viewDirty = false;
+      return;
+    }
     for (const key of baseOrder) {
       const r = rows.get(key);
       if (r && matchesFilters(r)) view.push(key);
@@ -834,7 +1248,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function viewIndexOf(row) {
     const key = row[idKey];
-    if (!sortKeys.length) return view.indexOf(key);
+    if (!sortKeys.length || tree) return view.indexOf(key); // a tree view is sorted per group, not globally
     // binary search to the start of the equal-compare range, then scan it
     let lo = 0, hi = view.length;
     while (lo < hi) {
@@ -847,12 +1261,26 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return view.indexOf(key); // row no longer matches its view slot — linear fallback
   }
 
-  // Data-level insert; the DOM row appears via render().
-  function insertRow(row) {
-    bumpStats(row);
+  // Data-level insert; the DOM row appears via render(). In a tree the row
+  // is linked first (its depth sizes the caret column), then spliced into
+  // the view incrementally — unless `deferView` (bulk ingestion: one
+  // rebuild per chunk beats a splice per row) or a re-parent made the
+  // view stale anyway.
+  function insertRow(row, deferView = false) {
     const key = row[idKey];
     rows.set(key, row);
     baseOrder.push(key);
+    if (tree) {
+      const rebuild = linkRow(row);
+      bumpStats(row);
+      if (rebuild || deferView) markViewDirty();
+      else if (!viewDirty) treeInsertIntoView(key);
+      const pk = parentOf.get(key);
+      if (pk != null) syncToggle(pk); // the parent may have just become one
+      viewRev++;
+      return;
+    }
+    bumpStats(row);
     if (matchesFilters(row)) {
       if (sortKeys.length) view.splice(viewInsertPos(row), 0, key);
       else view.push(key);
@@ -864,6 +1292,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     rows.clear();
     rowEls.clear();
     colStats.clear();
+    parentOf.clear(); kids.clear(); depthOf.clear(); expanded.clear();
+    byParentVals.clear(); pendingKids.clear(); sortedKidsCache.clear();
     baseOrder = [];
     view = [];
     viewDirty = false;
@@ -1469,6 +1899,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const meta = e.ctrlKey || e.metaKey;
     const cols = visibleColumns();
 
+    // Tree: Enter toggles the focused row, `*` opens its whole subtree.
+    if (onTreeKey(e)) { e.preventDefault?.(); return; }
+
     if (e.key === " ") {
       // Spacebar selects the focused row (shift+space is the same, Excel
       // muscle memory); ctrl/cmd+space toggles it within the set.
@@ -1896,7 +2329,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function matchesFilters(row) {
+    const root = tree ? isRootKey(row[idKey]) : true;
     for (const [col, f] of filters) {
+      // A scoped filter (tree tables) judges only roots, or only children.
+      if (tree && f.scope && f.scope !== "all" && (f.scope === "roots") !== root) continue;
       if (f.kind === "range") { if (!inRange(row, col, f)) return false; }
       else if (f.values.has(cellText(row, col)) === (f.mode === "exclude")) return false;
     }
@@ -1975,8 +2411,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   // The same summary the header tooltip and the toolbar chip show.
   function describeFilter(f) {
-    if (f.kind === "range") return describeRange(f);
-    return f.mode === "exclude" ? `All but ${f.values.size} values` : `${f.values.size} values`;
+    const s = f.kind === "range" ? describeRange(f)
+      : f.mode === "exclude" ? `All but ${f.values.size} values` : `${f.values.size} values`;
+    if (!tree || !f.scope || f.scope === "roots") return s;
+    return `${s} (${f.scope === "children" ? "children" : "top + children"})`;
   }
 
   /* ── Sort specs ───────────────────────────────────────────────────── */
@@ -2021,6 +2459,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function applySort() {
+    sortedKidsCache.clear();
     updateHeaderState();
     if (sortKeys.length) reorder(); else resetOrder();
   }
@@ -2172,6 +2611,17 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // date-time column covers the whole day, like the dropdown), or epoch
   // numbers on a `unit` column. A bad entry warns and is skipped.
   function filterFromSpec(col, s) {
+    const f = filterFromSpecBase(col, s);
+    if (!f || !tree) return f;
+    // Tree tables: `scope` says which rows the filter judges — roots,
+    // children, or all (the table's `tree.filterScope` default).
+    const scope = s.scope ?? tree.filterScope;
+    if (!TREE_SCOPES.includes(scope)) throw new Error(`bad scope '${scope}': use roots, children, or all`);
+    f.scope = scope;
+    return f;
+  }
+
+  function filterFromSpecBase(col, s) {
     if (s == null || s === "") return null;
     if (Array.isArray(s)) s = { include: s };
     if (typeof s !== "object") throw new Error("expected a value list or an object");
@@ -2240,14 +2690,18 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // The inverse: a filter in the shape filterFromSpec reads, so filters
   // round-trip through get/set and can be saved as config.
   function filterToSpec(f) {
-    if (f.kind === "values") return { [f.mode]: [...f.values] };
-    const out = { type: f.type };
-    if (f.preset) out.preset = f.preset;
+    let out;
+    if (f.kind === "values") out = { [f.mode]: [...f.values] };
     else {
-      out.from = f.type === "number" ? f.lo : (f.loText || null);
-      out.to = f.type === "number" ? f.hi : (f.hiText || null);
+      out = { type: f.type };
+      if (f.preset) out.preset = f.preset;
+      else {
+        out.from = f.type === "number" ? f.lo : (f.loText || null);
+        out.to = f.type === "number" ? f.hi : (f.hiText || null);
+      }
+      out.empty = f.empty;
     }
-    out.empty = f.empty;
+    if (tree) out.scope = f.scope ?? tree.filterScope;
     return out;
   }
 
@@ -2287,9 +2741,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     // Selection follows visibility: filtered-out rows drop from the row
     // selection so counts, copies, and actions only ever see view rows.
     if (selectedKeys.size) {
+      let inView = null;
+      if (tree) { rebuildView(); inView = new Set(view); } // a subtree hides with its root
       for (const key of [...selectedKeys]) {
         const r = rows.get(key);
-        if (!r || !matchesFilters(r)) selectedKeys.delete(key);
+        if (!r || (inView ? !inView.has(key) : !matchesFilters(r))) selectedKeys.delete(key);
       }
     }
     render();
@@ -2571,6 +3027,19 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
       const inner = document.createElement("div");
       inner.className = "mkui-th-inner";
+      if (tree && c === treeCol()) {
+        // Expand / collapse all, ahead of the label like the row carets.
+        const all = document.createElement("span");
+        all.className = "mkui-tree-toggle mkui-tree-all";
+        all.appendChild(icon("chevron-right"));
+        all.addEventListener("pointerdown", (e) => { e.stopPropagation(); });
+        all.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (e.ctrlKey || e.metaKey || e.altKey) return;
+          setExpandDepth(e.shiftKey ? Infinity : anyExpanded() ? 0 : 1);
+        });
+        inner.appendChild(all);
+      }
       inner.append(labelEl, filterBtn);
       th.appendChild(inner);
 
@@ -2583,7 +3052,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
       th.addEventListener("click", (e) => {
         if (suppressClick) { suppressClick = false; return; }
-        if (e.target.closest(".mkui-filter-btn")) return;
+        if (e.target.closest(".mkui-filter-btn") || e.target.closest(".mkui-tree-all")) return;
         // Shift builds multi-column sort; other modifiers are inert so a
         // stray ctrl/cmd/alt+click can't wipe an existing sort stack.
         if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -2611,11 +3080,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       filterBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         if (dropdownCol === c) { closeDropdown(); return; }
-        openFilterDropdown(c, th);
+        openFilterDropdown(c, th, { advanced: e.altKey }); // alt/option: scope row (tree tables)
       });
 
       th.addEventListener("pointerdown", (e) => {
-        if (e.target.closest(".mkui-filter-btn")) return;
+        if (e.target.closest(".mkui-filter-btn") || e.target.closest(".mkui-tree-all")) return;
         if (e.button !== 0) return;
         initColumnDrag(vi, e);
       });
@@ -2635,6 +3104,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     renderColgroup();
     maybeInitWidths();
     updateHeaderState(); // sort/filter marks on the new cells, and the chips
+    syncTreeAll();
   }
 
   function updateHeaderState() {
@@ -2771,13 +3241,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const chips = [...filters].map(([col, f]) => {
         const text = `${label(col)}: ${describeFilter(f)}`;
         return makeChip("mkui-chip-filter", col, text, text,
-          () => {
+          (e) => {
             if (dropdownCol === col) { closeDropdown(); return; }
             if (columns && !visibleColumns().includes(col)) showColumn(col); // hidden: bring it back first
             const th = thead.querySelector?.(`th[data-col="${CSS.escape(col)}"]`);
             if (!th) return;
             scrollHeaderIntoView(th);
-            openFilterDropdown(col, th);
+            openFilterDropdown(col, th, { advanced: !!e?.altKey });
           },
           () => clearFilters([col])).chip;
       });
@@ -3102,7 +3572,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   /* ── Filter dropdown ──────────────────────────────────────────────── */
 
-  function openFilterDropdown(col, thEl) {
+  function openFilterDropdown(col, thEl, { advanced = false } = {}) {
     closeDropdown();
     closePicker();
     dropdownCol = col;
@@ -3140,6 +3610,41 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     colOps.appendChild(hideOp);
     dd.appendChild(colOps);
+
+    // Tree tables: which rows this column's filter judges. A plain click
+    // opens the dropdown as on a flat table — the filter applies to the
+    // top level — while alt/option-click (or a filter already scoped
+    // elsewhere) shows the scope row. Changing it re-applies an existing
+    // filter at once; otherwise it is remembered for the filter the
+    // dropdown is about to build.
+    let scope = cur?.scope ?? tree?.filterScope ?? "roots";
+    if (tree && (advanced || scope !== "roots")) {
+      const scopes = document.createElement("div");
+      scopes.className = "mkui-filter-modes mkui-filter-scopes";
+      const sbtns = TREE_SCOPES.map((sc) => {
+        const b = document.createElement("span");
+        b.className = "mkui-filter-mode mkui-filter-scope";
+        b.dataset.scope = sc;
+        b.textContent = sc === "roots" ? "Top level" : sc === "children" ? "Children" : "Top + children";
+        b.title = sc === "roots" ? "Filter top-level rows; their children show with them"
+          : sc === "children" ? "Filter child rows; every top-level row shows"
+          : "Filter top-level rows and their children";
+        b.classList.toggle("active", sc === scope);
+        b.addEventListener("click", () => {
+          scope = sc;
+          for (const x of sbtns) x.classList.toggle("active", x.dataset.scope === sc);
+          const f = filters.get(col);
+          if (f && f.scope !== sc) {
+            f.scope = sc;
+            updateHeaderState();
+            applyVisibility();
+          }
+        });
+        return b;
+      });
+      scopes.append(...sbtns);
+      dd.appendChild(scopes);
+    }
 
     const rangePanel = document.createElement("div");
     rangePanel.className = "mkui-filter-range";
@@ -3237,7 +3742,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       // An exclusion of nothing is no filter; an inclusion always is —
       // "Clear, then tick every value" still means only those values.
       if (side === "exclude" && listed.length === 0) filters.delete(col);
-      else filters.set(col, { kind: "values", mode: side, values: new Set(listed) });
+      else filters.set(col, { kind: "values", mode: side, values: new Set(listed), scope });
       updateHeaderState();
       applyVisibility();
       syncPresetTimer();
@@ -3351,7 +3856,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       else filters.set(col, {
         kind: "range", type: rType, lo, hi, preset, empty: emptyCb.checked,
         loText: lo === null ? "" : String(loInput.value), hiText: hi === null ? "" : String(hiInput.value),
-        timeKind: kind, spec: timeSpec(col), localTz,
+        timeKind: kind, spec: timeSpec(col), localTz, scope,
       });
       updateHeaderState();
       applyVisibility();
@@ -3430,13 +3935,28 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       td.className = "mkui-td-rownum";
       tr.appendChild(td);
     }
+    const tc = treeCol();
     for (const c of visibleColumns()) {
       const td = document.createElement("td");
       td.dataset.col = c;
+      if (c === tc) {
+        // Caret + indented text; renderCell writes into the text span.
+        td.classList.add("mkui-tree-cell");
+        const depth = rowDepth(key);
+        if (depth) td.style.setProperty("--mkui-tree-depth", String(depth));
+        const text = document.createElement("span");
+        text.className = "mkui-tree-text";
+        td._mkuiTreeText = text;
+        td.append(makeToggle(key), text);
+      }
       renderCell(td, row, c);
       styleCell(td, c);
       styleCellStyler(td, row, c);
       tr.appendChild(td);
+    }
+    if (tc !== null) {
+      tr.dataset.depth = String(rowDepth(key));
+      syncToggle(key, tr);
     }
     styleRowStyler(tr, row);
     tr.addEventListener("pointerdown", (e) => handleRowPointerDown(key, e));
@@ -3474,7 +3994,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       for (; i < until; i++) {
         const row = snap[i];
         if (rows.has(row[idKey])) applyReplace(row);
-        else insertRow(row);
+        else insertRow(row, tree !== null);
       }
       render();
     };
@@ -3518,7 +4038,14 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const prev = rows.get(key);
     const gated = hasButtons && rowInSelection(key);
     const vi = viewIndexOf(prev ?? row);
-    if (vi >= 0) view.splice(vi, 1);
+    if (tree && prev) {
+      // Its children re-home (orphans become roots or hide): rebuild. A
+      // childless row just leaves its slot.
+      const pk = parentOf.get(key);
+      if (unlinkRow(prev)) markViewDirty();
+      else if (vi >= 0) view.splice(vi, 1);
+      if (pk != null) syncToggle(pk); // may have lost its last child
+    } else if (vi >= 0) view.splice(vi, 1);
     const bi = baseOrder.indexOf(key);
     if (bi >= 0) baseOrder.splice(bi, 1);
     rows.delete(key);
@@ -3562,17 +4089,33 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     const wasVis = matchesFilters(prev);
     const isVis = matchesFilters(row);
-    if (sortChanged || wasVis !== isVis) {
-      // Reposition: remove at the old view slot (found via prev, still in
-      // rows), then re-insert at the slot the new values sort into.
-      if (wasVis) {
-        const vi = viewIndexOf(prev);
-        if (vi >= 0) view.splice(vi, 1);
-      }
+    if (tree && (childVals(row) !== childVals(prev) || parentVals(row) !== parentVals(prev))) {
+      // Its place in the tree changed: relink and rebuild (its subtree
+      // moves with it; children that named the old values re-home).
+      unlinkRow(prev);
       rows.set(key, row);
-      if (isVis) view.splice(viewInsertPos(row), 0, key);
-      viewRev++;
+      linkRow(row);
+      markViewDirty();
       render();
+    } else if (sortChanged || wasVis !== isVis) {
+      if (tree) {
+        // Sibling order or a subtree's visibility changed: rebuild.
+        rows.set(key, row);
+        sortedKidsCache.delete(parentOf.get(key) ?? null);
+        markViewDirty();
+        render();
+      } else {
+        // Reposition: remove at the old view slot (found via prev, still in
+        // rows), then re-insert at the slot the new values sort into.
+        if (wasVis) {
+          const vi = viewIndexOf(prev);
+          if (vi >= 0) view.splice(vi, 1);
+        }
+        rows.set(key, row);
+        if (isVis) view.splice(viewInsertPos(row), 0, key);
+        viewRev++;
+        render();
+      }
     } else {
       rows.set(key, row);
     }
@@ -3940,6 +4483,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     // Columns hook: `workspace.setPaneColumns` / `getPaneColumns` and
     // `table.columns` set which columns show.
     paneEl._columns = { set: setVisible, get: getVisible };
+    // Tree hook (tree tables only): `workspace.expandPane` and
+    // `table.expand` open rows to a depth (a number, or "all"; 0 closes
+    // every row); `toggle(key)` flips one row by its identity.
+    if (tree) {
+      paneEl._tree = {
+        expand: (depth) => setExpandDepth(depth === "all" ? Infinity : Math.max(0, Number(depth) || 0)),
+        toggle: (key, on) => setExpanded(key, on ?? !expanded.has(key)),
+        expanded: () => [...expanded].filter(hasKids),
+      };
+    }
     paneEl.addEventListener("mkui-pane-close", () => {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       if (presetTimer) { clearTimeout(presetTimer); presetTimer = null; }

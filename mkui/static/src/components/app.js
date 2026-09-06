@@ -71,6 +71,9 @@ class MkuiApp extends HTMLElement {
     this._app.registerAction("table.sort",      (app, a = {}) => ws.setPaneSort(a.pane ?? null, a.sort ?? null));
     // Visible columns: `args = { pane, visible }`; no `visible` shows all.
     this._app.registerAction("table.columns",   (app, a = {}) => ws.setPaneColumns(a.pane ?? null, a.visible ?? null));
+    // Tree tables: `args = { pane, depth }` — a depth or "all"; no `depth`
+    // collapses everything.
+    this._app.registerAction("table.expand",    (app, a = {}) => ws.expandPane(a.pane ?? null, a.depth ?? 0));
 
     const hasAuth = !!config.auth;
     const st = this._app.state;

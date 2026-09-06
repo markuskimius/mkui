@@ -22,6 +22,7 @@ label = "Orders"
 items = [
   { label = "All Orders", action = "pane.show", args = "all-orders" },
   { label = "Pending", action = "pane.show", args = "pending" },
+  { label = "Order Tree", action = "pane.show", args = "order-tree" },
   { label = "Order Detail", action = "pane.show", args = "order-detail" },
 ]
 
@@ -45,6 +46,12 @@ items = [
   # matches `visible` under [panes.<id>]. No `visible` shows every column.
   { label = "All Orders: compact view", action = "table.columns", args = { pane = "all-orders", visible = ["symbol", "side", "qty", "notional"] } },
   { label = "All Orders: all columns", action = "table.columns", args = { pane = "all-orders" } },
+  { sep = true },
+  # table.expand opens a tree pane's rows down to a depth (or "all"); no
+  # `depth` collapses everything.
+  { label = "Order Tree: expand all", action = "table.expand", args = { pane = "order-tree", depth = "all" } },
+  { label = "Order Tree: children only", action = "table.expand", args = { pane = "order-tree", depth = 1 } },
+  { label = "Order Tree: collapse all", action = "table.expand", args = { pane = "order-tree" } },
 ]
 
 [[menubar]]
@@ -216,6 +223,84 @@ label = "Cancel"
 enable = { connected = true, minSelected = 1 }
 action = { type = "transaction", service = "orders", op = "cancel", data = { id = "${row.id}" } }
 
+# Tree rows: parent orders with their child orders nested under them (and
+# a child's children under it, any depth). `tree.child` names this row's
+# link field(s), `tree.parent` the field(s) on the parent they point at —
+# a row whose `parent_id` is empty is a top-level order. Only top-level
+# orders show at first; the caret in the first column expands a row
+# (shift+click: its whole subtree; the header caret: every root, or every
+# level with shift; Enter / `*` on the keyboard). `expand = 1` would open
+# the first level at load. Sorting orders the top level, then each group
+# of siblings. Filters apply to top-level orders (a match shows with its
+# children); alt/option-click a filter button for the scope row — Top
+# level, Children, or Top + children — and a configured filter takes
+# `scope` the same way. Ctrl/Cmd+A and copy see exactly the expanded rows.
+[panes.order-tree]
+title = "Order Tree"
+type = "mkio-table"
+service = "all_orders"
+protocol = "query"
+columns = ["symbol", "id", "parent_id", "side", "qty", "price", "notional", "status"]
+labels = { parent_id = "Parent" }
+values = { notional = "ROUND(qty * price, 2)" }
+tree = { child = "parent_id", parent = "id" }
+# Hide cancelled child orders while still listing every parent.
+filters = { status = { exclude = ["cancelled"], scope = "children" } }
+select = { state = "selected_order" }
+
+[panes.order-tree.display]
+symbol = "${BOLD(value)}"
+side = "${BADGE(value, IF(value == 'Buy', 'green', 'red'))}"
+notional = "${NUM(value, digits: 2, group: TRUE)}"
+status = "${ICON(CASE(value == 'filled', 'check', value == 'cancelled', 'close', 'clock'))} ${TITLE(value)}"
+
+# Place a child order under the selected order: the dialog carries the
+# parent's id in a hidden field and starts from its symbol and side.
+[[panes.order-tree.buttons]]
+label = "+ Child Order"
+unit = "row"
+enable = { connected = true }
+
+[panes.order-tree.buttons.action]
+type = "dialog"
+
+[panes.order-tree.buttons.action.dialog]
+title = "Child Order of #${row.id}"
+modal = true
+width = 420
+
+[[panes.order-tree.buttons.action.dialog.fields]]
+name = "parent_id"
+type = "hidden"
+value = "${row.id}"
+
+[[panes.order-tree.buttons.action.dialog.fields]]
+row = [
+  { name = "side", label = "Side", type = "select", width = 0.35, options = ["Buy", "Sell"], value = "${row.side}", required = true },
+  { name = "symbol", label = "Symbol", type = "text", width = 0.65, pattern = "^[A-Z]{1,5}$", value = "${row.symbol}", required = true },
+]
+
+[[panes.order-tree.buttons.action.dialog.fields]]
+row = [
+  { name = "qty", label = "Quantity", type = "number", width = 0.5, min = 1, required = true },
+  { name = "price", label = "Price", type = "number", width = 0.5, step = 0.01, min = 0, value = "${row.price}", required = true },
+]
+
+[panes.order-tree.buttons.action.dialog.submit]
+label = "Place Child Order"
+service = "orders"
+op = "child"
+
+[[panes.order-tree.buttons]]
+label = "Fill"
+enable = { connected = true, when = "LEN(rows) > 0 && ALL(rows, r -> r.status == 'pending')" }
+action = { type = "transaction", service = "orders", op = "fill", data = { id = "${row.id}" } }
+
+[[panes.order-tree.buttons]]
+label = "Cancel"
+enable = { connected = true, when = "LEN(rows) > 0 && ALL(rows, r -> r.status == 'pending')" }
+action = { type = "transaction", service = "orders", op = "cancel", data = { id = "${row.id}" } }
+
 [panes.order-detail]
 title = "Order Detail"
 type = "order-detail"
@@ -236,7 +321,7 @@ x = 0.02
 y = 0.03
 w = 0.64
 h = 0.94
-layout = { type = "tabs", active = 0, children = ["all-orders", "pending"] }
+layout = { type = "tabs", active = 0, children = ["all-orders", "pending", "order-tree"] }
 
 [[frames]]
 id = "sidebar"

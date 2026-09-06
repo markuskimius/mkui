@@ -195,6 +195,15 @@ class MkuiWorkspace extends HTMLElement {
     return this._paneHook(paneId, "_columns", false)?.get() ?? null;
   }
 
+  // Tree tables: open rows down to `depth` (a number, or "all"; 0 closes
+  // every row). Returns whether a pane took it.
+  expandPane(paneId, depth) {
+    const hook = this._paneHook(paneId, "_tree", true);
+    if (!hook) return false;
+    hook.expand(depth);
+    return true;
+  }
+
   setApp(app) {
     this._app = app;
     this._panes = new Map(Object.entries(app.config.panes ?? {}));

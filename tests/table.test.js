@@ -5751,3 +5751,483 @@ test("dropdowns are placed from their measured width after mount", async () => {
   columnsBtn(host).click();
   assert.equal(pickerOf(host).dd.style.left, "4px");
 });
+
+/* ── Tree rows ───────────────────────────────────────────────────────── */
+
+// Rows nest when `tree = { child, parent }` links them by value: a row
+// whose `parent` field is empty is a root; otherwise it hangs under the
+// row whose `id` carries that value. `x1` names a parent that never
+// arrives — an orphan, shown as a root by default.
+const TREE_COLS = ["name", "id", "parent", "qty"];
+const treeRows = () => [
+  { _mkio_row: "1", name: "a",   id: "A",   parent: "",  qty: 3 },
+  { _mkio_row: "2", name: "a1",  id: "A1",  parent: "A", qty: 1 },
+  { _mkio_row: "3", name: "a2",  id: "A2",  parent: "A", qty: 2 },
+  { _mkio_row: "4", name: "a21", id: "A21", parent: "A2", qty: 5 },
+  { _mkio_row: "5", name: "b",   id: "B",   parent: "",  qty: 1 },
+  { _mkio_row: "6", name: "b1",  id: "B1",  parent: "B", qty: 9 },
+  { _mkio_row: "7", name: "x1",  id: "X1",  parent: "Z", qty: 0 },
+];
+async function treeTable(extra = {}, data = treeRows()) {
+  const t = await createTable({ protocol: "query", columns: TREE_COLS, tree: { child: "parent", parent: "id" }, ...extra });
+  triggerVisible(t.io);
+  if (data) lastSubscribe().opts.onSnapshot(data);
+  return t.host;
+}
+// The mock's textContent doesn't aggregate children: rich text sits in
+// spans under the text span, so gather it.
+const deepText = (el) => el.textContent || (el._ch ?? []).map(deepText).join("");
+const treeText = (td) => { const t = td._ch.find(c => c.className === "mkui-tree-text"); return t ? deepText(t) : td.textContent; };
+// A deleted row's element fades out until animationend (never fired here).
+const liveRows = (host) => dataRows(host).filter(tr => !tr.classList.contains("mkui-flash-out"));
+const treeNames = (host) => liveRows(host).map(tr => treeText(tr._ch.find(td => td.dataset?.col === "name")));
+function treeRow(host, name) {
+  return liveRows(host).find(tr => treeText(tr._ch.find(td => td.dataset?.col === "name")) === name);
+}
+const toggleOf = (host, name) => treeRow(host, name)._ch.find(td => td.dataset?.col === "name")._ch[0];
+const isLeaf = (t) => t.classList.contains("mkui-tree-leaf");
+function clickToggle(host, name, shiftKey = false) {
+  toggleOf(host, name)._ev.click[0]({ shiftKey, stopPropagation() {} });
+}
+function treeAll(host) {
+  return getThs(host).find(t => t.dataset.col === "name")._ch[0]._ch.find(c => String(c.className).includes("mkui-tree-all"));
+}
+function copyText(host) {
+  let written = null;
+  globalThis.navigator = { clipboard: { writeText: (s) => { written = s; } } };
+  try { host._paneEl._editActions.copy(); } finally { delete globalThis.navigator; }
+  return written;
+}
+
+test("tree: only roots show at first; parents carry an open caret, leaves a blank one", async () => {
+  const host = await treeTable();
+  assert.deepEqual(treeNames(host), ["a", "b", "x1"], "orphan x1 shows as a root");
+  assert.ok(!isLeaf(toggleOf(host, "a")));
+  assert.ok(!isLeaf(toggleOf(host, "b")));
+  assert.ok(isLeaf(toggleOf(host, "x1")), "a row without children has no caret");
+  assert.ok(!toggleOf(host, "a").classList.contains("open"));
+  const tdA = treeRow(host, "a")._ch[0];
+  assert.ok(tdA.classList.contains("mkui-tree-cell"), "the first visible column carries the tree");
+  assert.equal(treeRow(host, "a").dataset.depth, "0");
+});
+
+test("tree: clicking a caret expands one level, again collapses; nested rows indent by depth", async () => {
+  const host = await treeTable();
+  clickToggle(host, "a");
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "x1"]);
+  assert.ok(toggleOf(host, "a").classList.contains("open"));
+  assert.equal(treeRow(host, "a1")._ch[0].style["--mkui-tree-depth"], "1");
+  assert.ok(!isLeaf(toggleOf(host, "a2")), "a2 has a child of its own");
+  clickToggle(host, "a2");
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "x1"]);
+  assert.equal(treeRow(host, "a21")._ch[0].style["--mkui-tree-depth"], "2");
+  assert.equal(treeRow(host, "a21").dataset.depth, "2");
+  clickToggle(host, "a");
+  assert.deepEqual(treeNames(host), ["a", "b", "x1"], "collapsing a parent hides the whole subtree");
+  clickToggle(host, "a");
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "x1"], "a2 remembered it was open");
+});
+
+test("tree: shift+click opens or closes a whole subtree; the header caret does all roots, shift every level", async () => {
+  const host = await treeTable();
+  clickToggle(host, "a", true);
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "x1"]);
+  clickToggle(host, "a", true);
+  assert.deepEqual(treeNames(host), ["a", "b", "x1"]);
+  clickToggle(host, "a");
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "x1"], "shift-collapse forgot a2 was open");
+  const all = treeAll(host);
+  assert.ok(all.classList.contains("open"), "header caret reads open while anything is");
+  all._ev.click[0]({ stopPropagation() {} });
+  assert.deepEqual(treeNames(host), ["a", "b", "x1"], "click while open: collapse all");
+  assert.ok(!all.classList.contains("open"));
+  all._ev.click[0]({ stopPropagation() {} });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "b1", "x1"], "click while closed: open every root");
+  all._ev.click[0]({ stopPropagation() {} });
+  all._ev.click[0]({ shiftKey: true, stopPropagation() {} });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"], "shift: every level");
+});
+
+test("tree: expand config opens to a depth or everything; the _tree hook does the same at runtime", async () => {
+  let host = await treeTable({ tree: { child: "parent", parent: "id", expand: 1 } });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "b1", "x1"]);
+  host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"]);
+  const api = host._paneEl._tree;
+  api.expand(0);
+  assert.deepEqual(treeNames(host), ["a", "b", "x1"]);
+  api.expand(1);
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "b1", "x1"]);
+  api.expand("all");
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"]);
+  api.toggle("5");
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "x1"]);
+  assert.deepEqual(api.expanded().sort(), ["1", "3"]);
+  const [, warned] = await withWarnings(() => treeTable({ tree: { child: "parent", parent: "id", expand: "some" } }));
+  assert.match(warned[0], /bad tree.expand/);
+});
+
+test("tree: a parent that arrives after its children adopts them; orphans can hide instead", async () => {
+  let host = await treeTable();
+  assert.deepEqual(treeNames(host), ["a", "b", "x1"]);
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "8", name: "z", id: "Z", parent: "", qty: 4 });
+  assert.deepEqual(treeNames(host), ["a", "b", "z"], "x1 left the roots for its parent");
+  assert.ok(!isLeaf(toggleOf(host, "z")));
+  clickToggle(host, "z");
+  assert.deepEqual(treeNames(host), ["a", "b", "z", "x1"]);
+  host = await treeTable({ tree: { child: "parent", parent: "id", orphans: "hide" } });
+  assert.deepEqual(treeNames(host), ["a", "b"], "hidden orphan");
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "8", name: "z", id: "Z", parent: "", qty: 4 });
+  clickToggle(host, "z");
+  assert.deepEqual(treeNames(host), ["a", "b", "z", "x1"], "hidden orphans still find a late parent");
+});
+
+test("tree: sorting orders roots, then each sibling group; live inserts land in sorted position", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
+  const thQty = getThs(host).find(t => t.dataset.col === "qty");
+  clickHeader(thQty);
+  assert.deepEqual(treeNames(host), ["x1", "b", "b1", "a", "a1", "a2", "a21"], "asc by qty, per level");
+  clickHeader(thQty);
+  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "a1", "b", "b1", "x1"], "desc");
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "9", name: "a15", id: "A15", parent: "A", qty: 1.5 });
+  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "a15", "a1", "b", "b1", "x1"], "between a2 and a1");
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "10", name: "c", id: "C", parent: "", qty: 2 });
+  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "a15", "a1", "c", "b", "b1", "x1"], "a root lands after a's subtree");
+  lastSubscribe().opts.onUpdate("replace", { _mkio_row: "2", name: "a1", id: "A1", parent: "A", qty: 7 });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "a15", "c", "b", "b1", "x1"], "a sort-key change re-sorts its group");
+  clickHeader(thQty);
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "a15", "b", "b1", "x1", "c"], "unsorted: insertion order per group");
+});
+
+test("tree: live inserts into an expanded parent show at once, into a collapsed one only mark the caret", async () => {
+  const host = await treeTable();
+  clickToggle(host, "a");
+  const sub = lastSubscribe();
+  sub.opts.onUpdate("insert", { _mkio_row: "8", name: "a3", id: "A3", parent: "A", qty: 0 });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a3", "b", "x1"]);
+  sub.opts.onUpdate("insert", { _mkio_row: "9", name: "b2", id: "B2", parent: "B", qty: 0 });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a3", "b", "x1"], "b is collapsed");
+  assert.ok(!isLeaf(toggleOf(host, "x1")) === false);
+  sub.opts.onUpdate("insert", { _mkio_row: "10", name: "x11", id: "X11", parent: "X1", qty: 0 });
+  assert.ok(!isLeaf(toggleOf(host, "x1")), "a leaf gaining a child grows a caret without a rebuild");
+  sub.opts.onUpdate("insert", { _mkio_row: "11", name: "a31", id: "A31", parent: "A3", qty: 0 });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a3", "b", "x1"], "a3 is collapsed");
+  clickToggle(host, "a3");
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a3", "a31", "b", "x1"]);
+});
+
+test("tree: deleting a parent re-homes its children; a re-parenting replace moves the subtree", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
+  const sub = lastSubscribe();
+  sub.opts.onUpdate("delete", { _mkio_row: "1" });
+  assert.deepEqual(treeNames(host), ["a1", "a2", "a21", "b", "b1", "x1"], "a's children became roots");
+  assert.equal(treeRow(host, "a21").dataset.depth, "1");
+  sub.opts.onUpdate("replace", { _mkio_row: "3", name: "a2", id: "A2", parent: "B", qty: 2 });
+  assert.deepEqual(treeNames(host), ["a1", "b", "b1", "a2", "a21", "x1"], "a2 moved under b with a21");
+  assert.equal(treeRow(host, "a21").dataset.depth, "2");
+  sub.opts.onUpdate("delete", { _mkio_row: "4" });
+  assert.ok(isLeaf(toggleOf(host, "a2")), "losing the last child drops the caret");
+});
+
+test("tree: a row that descends from itself is shown as a root, once warned", async () => {
+  const [host, warned] = await withWarnings(() => treeTable({}, [
+    { _mkio_row: "1", name: "p", id: "P", parent: "Q", qty: 1 },
+    { _mkio_row: "2", name: "q", id: "Q", parent: "P", qty: 1 },
+  ]));
+  assert.match(warned[0], /descends from itself/);
+  clickToggle(host, "q");
+  assert.deepEqual(treeNames(host), ["q", "p"], "q is the root, p its child; no infinite loop");
+});
+
+test("tree: filters judge roots, children, or all — a hidden row hides its subtree", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
+  const api = host._paneEl._filters;
+  api.set({ name: { exclude: ["a1"], scope: "children" } });
+  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "b", "b1", "x1"]);
+  assert.equal(filterTitle(host, "name"), "All but 1 values (children)");
+  assert.deepEqual(api.get(), { name: { exclude: ["a1"], scope: "children" } }, "scope round-trips");
+  api.set({ qty: { include: ["3"], scope: "roots" } });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21"], "roots must have qty 3; children pass untested");
+  api.set({ qty: { include: ["3"], scope: "all" } });
+  assert.deepEqual(treeNames(host), ["a"], "all: every row is tested");
+  assert.deepEqual(api.get(), { qty: { include: ["3"], scope: "all" } });
+  api.set({ qty: { include: ["1"], scope: "children" } });
+  assert.deepEqual(treeNames(host), ["a", "a1", "b", "x1"], "a2 fails, so a21 never shows");
+  api.set({ name: { exclude: ["a2"] } });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"], "default scope is the top level: a2 is a child");
+  api.set({ name: { exclude: ["a"] } });
+  assert.deepEqual(treeNames(host), ["b", "b1", "x1"], "a top-level match takes its subtree");
+  assert.equal(filterTitle(host, "name"), "All but 1 values", "the default scope isn't spelled out");
+  assert.deepEqual(api.get(), { name: { exclude: ["a"], scope: "roots" } });
+  api.set({ name: { exclude: ["a2"], scope: "all" } });
+  assert.deepEqual(treeNames(host), ["a", "a1", "b", "b1", "x1"], "all: both levels");
+  assert.equal(filterTitle(host, "name"), "All but 1 values (top + children)");
+  const [, warned] = await withWarnings(() => api.set({ name: { exclude: ["a2"], scope: "leaves" } }));
+  assert.match(warned[0], /bad filters.name: bad scope 'leaves'/);
+  api.set({ qty: { from: 2, scope: "children" } });
+  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "b", "b1", "x1"], "range filters scope too");
+  assert.deepEqual(api.get(), { qty: { type: "number", from: 2, to: null, empty: false, scope: "children" } });
+});
+
+// The scope row is the advanced view: alt/option-click the filter button
+// (or open a filter already scoped off the top level) to see it.
+function scopeRow(dd) {
+  const scopes = dd._ch.find(c => String(c.className).includes("mkui-filter-scopes")) ?? null;
+  return { scopes, btn: (s) => scopes?._ch.find(b => b.dataset?.scope === s) ?? null };
+}
+function openDropdownAlt(host, col) {
+  const th = getThs(host).find(t => t.dataset.col === col);
+  const click = () => th.querySelector(".mkui-filter-btn")._ev.click[0]({ stopPropagation() {}, altKey: true });
+  const open = () => host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).at(-1);
+  click();
+  if (!open()) click(); // the button toggles: a dropdown already open on this column closed
+  return open();
+}
+// Plain reopen of a column whose dropdown is still open (the scope buttons
+// leave it open): the first click closes, the second opens.
+function reopenDropdown(host, col) {
+  clickFilterBtn(getThs(host).find(t => t.dataset.col === col));
+  return openDropdown(host, col);
+}
+
+test("tree: a plain filter dropdown filters the top level; alt-click shows the scope row", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
+  let { dd } = openDropdown(host, "qty");
+  assert.equal(scopeRow(dd).scopes, null, "no scope row on a plain open");
+  let cbs = dd._ch.find(c => c.className === "mkui-filter-list")._ch.map(l => l._ch[0]);
+  const cb1 = cbs.find(c => c.dataset.val === "1");
+  cb1.checked = false;
+  cb1._ev.change[0]();
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "x1"], "b (qty 1) went with its child; a1 (qty 1) stayed");
+  assert.equal(host._paneEl._filters.get().qty.scope, "roots");
+  assert.equal(filterTitle(host, "qty"), "All but 1 values");
+  dd = openDropdownAlt(host, "qty");
+  const row = scopeRow(dd);
+  assert.ok(row.scopes, "alt-click: the scope row shows");
+  assert.ok(row.btn("roots").classList.contains("active"));
+  assert.deepEqual([...row.scopes._ch].map(b => b.textContent), ["Top level", "Children", "Top + children"], "no All");
+  row.btn("children")._ev.click[0]();
+  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "b", "b1", "x1"], "re-scoped to children: a1 goes, b is back");
+  assert.equal(filterTitle(host, "qty"), "All but 1 values (children)");
+  assert.equal(chipStrip(host).filter[0], "qty: All but 1 values (children)");
+  dd = reopenDropdown(host, "qty").dd;
+  assert.ok(scopeRow(dd).scopes, "a filter scoped off the top level opens with the row, no alt needed");
+  scopeRow(dd).btn("all")._ev.click[0]();
+  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "x1"], "both levels: b and a1 go");
+  assert.equal(filterTitle(host, "qty"), "All but 1 values (top + children)");
+  scopeRow(dd).btn("roots")._ev.click[0]();
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "x1"]);
+  dd = reopenDropdown(host, "qty").dd;
+  assert.equal(scopeRow(dd).scopes, null, "back on the top level: plain again");
+  clickFilterBtn(getThs(host).find(t => t.dataset.col === "qty")); // close
+  chipStrip(host).open("qty");
+  assert.equal(scopeRow(host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).at(-1)).scopes, null, "the chip opens plainly too");
+});
+
+test("tree: filterScope config is the default for new filters", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all", filterScope: "children" } });
+  const { dd } = openDropdown(host, "qty");
+  assert.ok(scopeRow(dd).btn("children").classList.contains("active"), "off the top level, so the row shows, on the configured default");
+  const cbs = dd._ch.find(c => c.className === "mkui-filter-list")._ch.map(l => l._ch[0]);
+  const cb3 = cbs.find(c => c.dataset.val === "3");
+  cb3.checked = false;
+  cb3._ev.change[0]();
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"], "no child has qty 3");
+  assert.equal(host._paneEl._filters.get().qty.scope, "children");
+});
+
+test("tree: select all and copy see only expanded rows; collapsing prunes the selection", async () => {
+  const host = await treeTable({ rowColumn: true });
+  clickToggle(host, "a");
+  host._paneEl._editActions.selectAll();
+  assert.equal(copyText(host), "name\tid\tparent\tqty\r\na\tA\t\t3\r\na1\tA1\tA\t1\r\na2\tA2\tA\t2\r\nb\tB\t\t1\r\nx1\tX1\tZ\t0",
+    "a21 and b1 are collapsed away");
+  clickToggle(host, "a");
+  assert.equal(copyText(host), "name\tid\tparent\tqty\r\na\tA\t\t3\r\nb\tB\t\t1\r\nx1\tX1\tZ\t0",
+    "collapse dropped a1 and a2 from the selection");
+  clickToggle(host, "a");
+  assert.ok(!treeRow(host, "a1").classList.contains("mkui-selected"), "re-expanding doesn't resurrect them");
+  assert.ok(treeRow(host, "a").classList.contains("mkui-selected"));
+});
+
+test("tree: cell rects prune on collapse and the cursor lands on the collapsed parent", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
+  const trs = dataRows(host);
+  pointerDown(trs[1], 0);                      // a1 / name
+  pointerDown(trs[3], 3, { shiftKey: true });  // .. a21 / qty
+  assert.equal(copyText(host), "a1\tA1\tA\t1\r\na2\tA2\tA\t2\r\na21\tA21\tA2\t5");
+  clickToggle(host, "a");
+  assert.equal(copyText(host), "3", "the rect is gone; the cursor sits on a, still in the qty column");
+  assert.ok(treeRow(host, "a")._ch[3].classList.contains("mkui-cell-focus"));
+  const e = keyDown(sh(host), "ArrowDown");
+  assert.ok(e.defaultPrevented);
+  assert.ok(treeRow(host, "b")._ch[3].classList.contains("mkui-cell-focus"), "navigation skips the hidden subtree");
+});
+
+test("tree: Enter toggles the focused row, * opens its whole subtree", async () => {
+  const host = await treeTable();
+  let e = keyDown(sh(host), "Enter");
+  assert.ok(e.defaultPrevented);
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "x1"], "no cursor yet: the first row is it");
+  keyDown(sh(host), "Enter");
+  assert.deepEqual(treeNames(host), ["a", "b", "x1"]);
+  keyDown(sh(host), "*");
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "x1"]);
+  keyDown(sh(host), "ArrowDown"); keyDown(sh(host), "ArrowDown"); keyDown(sh(host), "ArrowDown");
+  e = keyDown(sh(host), "Enter");
+  assert.ok(!e.defaultPrevented, "Enter on a leaf does nothing");
+  keyDown(sh(host), "ArrowDown");
+  keyDown(sh(host), "Enter");
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"]);
+});
+
+test("tree: the caret follows the first visible column unless tree.column pins it", async () => {
+  let host = await treeTable();
+  host._paneEl._columns.set(["qty", "name"]);
+  let tr = treeRow(host, "a");
+  assert.ok(tr._ch[0].classList.contains("mkui-tree-cell"), "qty leads now");
+  assert.ok(!tr._ch[1].classList.contains("mkui-tree-cell"));
+  assert.ok(treeAll(host) == null && getThs(host)[0]._ch[0]._ch.some(c => String(c.className).includes("mkui-tree-all")));
+  host = await treeTable({ tree: { child: "parent", parent: "id", column: "id" } });
+  tr = treeRow(host, "a");
+  assert.ok(tr._ch[1].classList.contains("mkui-tree-cell"), "pinned to id");
+  host._paneEl._columns.set(["name", "qty"]);
+  tr = treeRow(host, "a");
+  assert.ok(tr._ch[0].classList.contains("mkui-tree-cell"), "pinned column hidden: back to the first");
+});
+
+test("tree: a reopen and a fresh snapshot rebuild the structure from scratch", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: TREE_COLS, tree: { child: "parent", parent: "id", expand: 1 } });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(treeRows());
+  clickToggle(host, "a2");
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"]);
+  lastSubscribe().opts.onSnapshot(treeRows().slice(0, 3));
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2"], "reconnect snapshot: old rows gone, config depth again");
+  for (const fn of host._paneEl._ev["mkui-pane-close"] ?? []) fn();
+  for (const fn of host._paneEl._ev["mkui-pane-open"] ?? []) fn();
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(treeRows());
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "b1", "x1"], "reopen: the configured depth, a2 closed");
+});
+
+test("tree: bad specs warn and leave a flat table", async () => {
+  let [host, warned] = await withWarnings(() => treeTable({ tree: { child: "parent" } }));
+  assert.match(warned[0], /bad tree: expected \{ child, parent \}/);
+  assert.deepEqual(shownNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"], "flat");
+  [, warned] = await withWarnings(() => treeTable({ tree: { child: ["parent"], parent: ["id", "name"] } }));
+  assert.match(warned[0], /equal count/);
+  [, warned] = await withWarnings(() => treeTable({ tree: { child: "parent", parent: "id", orphans: "drop", filterScope: "top" } }));
+  assert.match(warned[0], /bad tree.filterScope 'top'/);
+  assert.match(warned[1], /bad tree.orphans 'drop'/);
+});
+
+test("tree: a snapshot links by several fields at once", async () => {
+  const host = await treeTable({ columns: ["name", "book", "acct", "pbook", "pacct"], tree: { child: ["pbook", "pacct"], parent: ["book", "acct"], expand: "all" } }, [
+    { _mkio_row: "1", name: "r1", book: "X", acct: "1", pbook: "", pacct: "" },
+    { _mkio_row: "2", name: "r2", book: "X", acct: "2", pbook: "", pacct: "" },
+    { _mkio_row: "3", name: "c1", book: "Y", acct: "1", pbook: "X", pacct: "1" },
+    { _mkio_row: "4", name: "c2", book: "Y", acct: "2", pbook: "X", pacct: "2" },
+    { _mkio_row: "5", name: "c3", book: "Y", acct: "3", pbook: "X", pacct: "" },
+  ]);
+  assert.deepEqual(treeNames(host), ["r1", "c1", "r2", "c2", "c3"], "c3 names a parent that doesn't exist: a root");
+});
+
+// Incremental expand/collapse and live inserts against a reference model:
+// a random sequence of caret clicks, inserts, and sort flips must always
+// show the pre-order a from-scratch flattening would.
+test("tree: incremental view surgery matches a full rebuild under random operations", async () => {
+  let seed = 12345;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+  const data = [];
+  for (let i = 0; i < 30; i++) {
+    const parent = i > 0 && rnd(3) > 0 ? data[rnd(i)].id : "";
+    data.push({ _mkio_row: String(i + 1), name: "n" + i, id: "I" + i, parent, qty: rnd(7) });
+  }
+  const host = await treeTable({}, data);
+  const opened = new Set();
+  let dir = null;
+  const expected = () => {
+    const byParent = new Map();
+    const ids = new Set(data.map(r => r.id));
+    for (const r of data) {
+      const pk = r.parent && ids.has(r.parent) ? r.parent : "";
+      if (!byParent.has(pk)) byParent.set(pk, []);
+      byParent.get(pk).push(r);
+    }
+    const out = [];
+    const walk = (pk) => {
+      let sibs = byParent.get(pk) ?? [];
+      if (dir) sibs = sibs.slice().sort((x, y) => dir === "asc" ? x.qty - y.qty : y.qty - x.qty);
+      for (const r of sibs) { out.push(r.name); if (opened.has(r.id)) walk(r.id); }
+    };
+    walk("");
+    return out;
+  };
+  const thQty = getThs(host).find(t => t.dataset.col === "qty");
+  for (let step = 0; step < 120; step++) {
+    const op = rnd(10);
+    if (op < 6) {
+      const shown = treeNames(host);
+      const name = shown[rnd(shown.length)];
+      const row = data.find(r => r.name === name);
+      if (isLeaf(toggleOf(host, name))) continue;
+      clickToggle(host, name);
+      if (opened.has(row.id)) opened.delete(row.id); else opened.add(row.id);
+    } else if (op < 9) {
+      const i = data.length;
+      const parent = rnd(4) > 0 ? data[rnd(i)].id : "";
+      const r = { _mkio_row: String(i + 1), name: "n" + i, id: "I" + i, parent, qty: rnd(7) };
+      data.push(r);
+      lastSubscribe().opts.onUpdate("insert", r);
+    } else {
+      clickHeader(thQty);
+      dir = dir === null ? "asc" : dir === "asc" ? "desc" : null;
+    }
+    assert.deepEqual(treeNames(host), expected(), `step ${step}`);
+  }
+});
+
+test("tree: a flat table ignores filter scope and has no tree hook or scope row", async () => {
+  const host = await filteredTable({ status: { exclude: ["closed"], scope: "children" } });
+  assert.deepEqual(shownNames(host), ["a", "c"], "scope is inert without a tree");
+  assert.deepEqual(host._paneEl._filters.get(), { status: { exclude: ["closed"] } }, "and isn't echoed back");
+  assert.equal(host._paneEl._tree, undefined);
+  const dd = openDropdownAlt(host, "status");
+  assert.equal(scopeRow(dd).scopes, null, "alt-click on a flat table is a plain open");
+});
+
+test("tree: the caret column keeps its caret through display templates and live updates", async () => {
+  const host = await treeTable({ display: { name: "${BOLD(value)}" } });
+  let td = treeRow(host, "a")._ch[0];
+  assert.equal(td._ch[0].className, "mkui-tree-toggle", "caret first");
+  assert.equal(td._ch[1].className, "mkui-tree-text");
+  assert.equal(td._mkuiText, "a", "flattened text remembered on the cell");
+  lastSubscribe().opts.onUpdate("replace", { _mkio_row: "1", name: "alpha", id: "A", parent: "", qty: 3 });
+  // (The mock's textContent setter doesn't clear children, so read the
+  // remembered text rather than the span's.)
+  const tr = liveRows(host).find(r => r.dataset.ref === "1");
+  td = tr._ch[0];
+  assert.equal(td._mkuiText, "alpha", "the live update re-rendered the cell's text");
+  assert.equal(td._ch[0].className, "mkui-tree-toggle", "into the text span — the caret survived");
+  assert.equal(td._ch[1].className, "mkui-tree-text");
+  assert.ok(!isLeaf(td._ch[0]));
+  td._ch[0]._ev.click[0]({ shiftKey: false, stopPropagation() {} });
+  assert.deepEqual(liveRows(host).map(r => r.dataset.ref), ["1", "2", "3", "5", "7"], "and still toggles");
+  pointerDown(tr, 0);
+  assert.equal(copyText(host), "alpha", "copy uses the flattened display text of the focused cell");
+});
+
+test("tree: works on a stream, where the parent may arrive in a later delta", async () => {
+  const { host, io } = await createTable({ protocol: "stream", maxcount: null, columns: TREE_COLS, tree: { child: "parent", parent: "id", expand: "all" } });
+  triggerVisible(io);
+  const sub = lastSubscribe();
+  sub.opts.onSnapshot([
+    { _mkio_ref: streamRef(1), name: "c1", id: "C1", parent: "P", qty: 1 },
+    { _mkio_ref: streamRef(2), name: "c2", id: "C2", parent: "P", qty: 2 },
+  ]);
+  assert.deepEqual(treeNames(host), ["c1", "c2"], "children of a parent not yet seen show as roots");
+  sub.opts.onDelta([{ op: "insert", row: { _mkio_ref: streamRef(3), name: "p", id: "P", parent: "", qty: 0 } }]);
+  assert.deepEqual(treeNames(host), ["p", "c1", "c2"], "the parent adopts them on arrival");
+  assert.equal(treeRow(host, "c1").dataset.depth, "1");
+});

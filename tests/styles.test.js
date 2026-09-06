@@ -527,3 +527,19 @@ test("chips are capped in width and ellipsize their text", () => {
   assert.equal(declaration(".mkui-chip-text", "text-overflow"), "ellipsis");
   assert.equal(declaration(".mkui-chip-text", "overflow"), "hidden");
 });
+
+// ── Tree rows ─────────────────────────────────────────────────────────────
+
+test("tree cells indent by the depth variable the table sets per cell", () => {
+  assert.match(declaration(".mkui-table td.mkui-tree-cell", "padding-left"),
+    /var\(--mkui-tree-depth, 0\) \* var\(--mkui-tree-indent, 16px\)/);
+});
+
+test("tree carets are pointer targets, rotate when open, and leaves keep the box hidden", () => {
+  assert.equal(declaration(".mkui-tree-toggle", "cursor"), "pointer");
+  assert.match(declaration(".mkui-tree-toggle.open", "transform"), /rotate\(90deg\)/);
+  assert.equal(declaration(".mkui-tree-toggle.mkui-tree-leaf", "visibility"), "hidden",
+    "a leaf's blank caret keeps sibling text aligned");
+  assert.doesNotMatch(rule(".mkui-tree-toggle"), /pointer-events\s*:\s*none/,
+    "the caret must take the click the icon inside it passes through");
+});

@@ -1067,6 +1067,35 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   background: color-mix(in srgb, var(--mkui-cell-bg) 92%, rgb(14, 99, 156));
 }
 
+/* Tree rows: the caret column indents its text one --mkui-tree-indent per
+   level (the depth rides a CSS variable on the cell, set by mkio-table,
+   which also adds indent + caret to the column's measured width — keep
+   16px in step with TREE_INDENT / TREE_TOGGLE_W there). The caret is a
+   span, not a button, so it inherits the cell's text metrics; it stops
+   pointerdown so a click never starts a cell selection. A leaf keeps the
+   caret's box, hidden, so siblings' text lines up. */
+.mkui-table td.mkui-tree-cell {
+  padding-left: calc(8px + var(--mkui-tree-depth, 0) * var(--mkui-tree-indent, 16px));
+}
+.mkui-tree-toggle {
+  display: inline-flex;
+  align-items: center;
+  width: 12px;
+  margin-right: 4px;
+  vertical-align: -2px;
+  color: var(--mkui-fg-mute);
+  cursor: pointer;
+  transition: transform 120ms;
+}
+.mkui-tree-toggle .mkui-icon { width: 12px; height: 12px; }
+.mkui-tree-toggle.open { transform: rotate(90deg); }
+.mkui-tree-toggle.mkui-tree-leaf { visibility: hidden; cursor: default; }
+.mkui-tree-toggle:hover { color: var(--mkui-fg); }
+.mkui-th-inner .mkui-tree-all { vertical-align: baseline; }
+/* Filter dropdown: the scope row on tree tables (alt/option-click the
+   filter button, or a filter already scoped off the top level). */
+.mkui-filter-scopes .mkui-filter-scope { white-space: nowrap; padding-left: 6px; padding-right: 6px; }
+
 /* Row-number column: sticky-left so numbers survive horizontal scroll
    (the header corner cell is sticky on both axes via th's sticky top). */
 .mkui-table th.mkui-th-rownum,
