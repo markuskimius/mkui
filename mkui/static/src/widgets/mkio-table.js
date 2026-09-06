@@ -1857,7 +1857,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function handleRowPointerDown(key, e) {
     if (e.button !== 0 && e.button !== undefined) return;
     scrollHost.focus?.({ preventScroll: true });
-    const td = e.target;
+    // The hit may land on a span inside the cell (tree text, rich
+    // segments), so climb to the td before reading its column.
+    const td = e.target?.closest?.("td") ?? e.target;
     if (td?.dataset?.col != null) {
       if (e.pointerType === "touch") return; // touch scrolls, no cell drag
       handleCellPointerDown(key, td.dataset.col, e);

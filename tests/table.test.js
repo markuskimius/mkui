@@ -103,7 +103,12 @@ function mockEl(tag) {
       walk(el);
       return out;
     },
-    closest() { return null; },
+    // Tag selectors climb the parent chain; anything else is unknown.
+    closest(sel) {
+      if (!/^[a-z]+$/i.test(sel)) return null;
+      for (let n = el; n; n = n._parent) if (n.tagName === sel.toUpperCase()) return n;
+      return null;
+    },
     contains() { return false; },
     getBoundingClientRect() { return { left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20 }; },
     dispatchEvent() {},
@@ -6485,6 +6490,32 @@ test("tree numbers: incremental ranks match a full renumbering under random oper
     }
     assert.deepEqual(numbered(host), expected(), `step ${step}`);
   }
+});
+
+test("tree: a click on the text inside a caret cell focuses that cell, not the row", async () => {
+  const host = await treeTable();
+  const tr = treeRow(host, "a");
+  const td = tr._ch.find(c => c.dataset?.col === "name");
+  const text = td._ch.find(c => c.className === "mkui-tree-text");
+  assert.ok(text, "tree cell carries a text span");
+  pointerDown(tr, tr._ch.indexOf(td), { target: text });
+  assert.ok(td.classList.contains("mkui-cell-focus"), "cursor lands on the cell");
+  assert.ok(!tr.classList.contains("mkui-selected"), "row is not selected");
+  assert.equal(copyText(host), "a");
+});
+
+test("a click on a rich segment inside a cell focuses that cell, not the row", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name", "value"],
+    display: { name: "${BOLD(value)} ${MUTED('#' + STR(row.value))}" },
+  });
+  const tr = dataRows(host)[1];
+  const td = tr._ch.find(c => c.dataset?.col === "name");
+  const span = td._ch.find(n => n.tagName === "SPAN");
+  pointerDown(tr, tr._ch.indexOf(td), { target: span });
+  assert.ok(td.classList.contains("mkui-cell-focus"), "cursor lands on the cell");
+  assert.ok(!tr.classList.contains("mkui-selected"), "row is not selected");
+  assert.equal(copyText(host), "row-1 #1");
 });
 
 test("tree: a saved layout round-trips a column's several scoped filters through the pane hook", async () => {
