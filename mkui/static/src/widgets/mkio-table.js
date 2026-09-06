@@ -1022,13 +1022,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   // Whether a row shows under the filters. Top-level and children-scoped
   // filters judge a row on its own and a miss hides its subtree
-  // (`matchesFilters`). A "top + children" filter judges every row but
+  // (`matchesFilters`). A "branch" filter judges every row but
   // keeps the way to a match: a row whose own values miss still shows
   // when any descendant matches, and a row with no match anywhere below
   // it goes — so `subtreeOk` (rebuilt with the view whenever such a filter
   // is active, else null) holds the post-order verdict per row.
   let subtreeOk = null;
-  const allScopeActive = () => { if (!tree) return false; for (const f of filters.values()) if (f.scope === "all") return true; return false; };
+  const allScopeActive = () => { if (!tree) return false; for (const k of filters.keys()) if (k.endsWith("\0all")) return true; return false; };
   const treeShown = (key) => matchesFilters(rows.get(key)) && (!subtreeOk || subtreeOk.get(key) === true);
 
   function buildSubtreeOk() {
@@ -1046,13 +1046,71 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     for (const key of kids.get(null) ?? EMPTY) walk(key);
   }
 
+  // Row numbers in a tree are positions: a row's 1-based rank among its
+  // siblings in the current order — top-level rows 1..n, the children of
+  // row 5 are 5.1..5.m, and so on. A filtered-out row keeps its slot, so
+  // the numbers around it show the gap. `rankOf` holds the rank of every
+  // row in an expanded group (a collapsed group's entries are stale and
+  // rewritten on expansion); the dotted label is built on demand by
+  // `rowLabel` from the ancestors' ranks, so shifting a row's siblings
+  // never touches its descendants. Ranks are written by the walks that
+  // already flatten the tree (`flattenVisible`, `rebuildView`) and nudged
+  // by one per later sibling on a live insert or delete (`shiftRanks`).
+  // A flat table numbers by view position until a filter is active; then
+  // `rankOf` holds positions over every row in sort order (`flatRanks`),
+  // kept by O(n) passes on live inserts and deletes.
+  const rankOf = new Map();
+  const flatRanked = () => !tree && filters.size > 0;
+  function flatRanks() {
+    const all = sortKeys.length ? baseOrder.slice().sort((a, b) => compareRows(rows.get(a), rows.get(b))) : baseOrder;
+    let i = 0;
+    for (const key of all) rankOf.set(key, ++i);
+  }
+  // A new row's rank among every row: after all rows that sort before it
+  // (ties keep arrival order, so after equals too); later rows move down.
+  function flatRankInsert(row) {
+    const key = row[idKey];
+    if (!sortKeys.length) { rankOf.set(key, baseOrder.length); return; }
+    let rank = 1;
+    for (const k of baseOrder) {
+      if (k === key) continue;
+      if (compareRows(rows.get(k), row) <= 0) rank++;
+      else rankOf.set(k, (rankOf.get(k) ?? 0) + 1);
+    }
+    rankOf.set(key, rank);
+  }
+  function flatRankDelete(key) {
+    const r = rankOf.get(key);
+    if (r == null) return;
+    rankOf.delete(key);
+    for (const [k, v] of rankOf) if (v > r) rankOf.set(k, v - 1);
+  }
+  function rowLabel(key, memo) {
+    let s = memo?.get(key);
+    if (s !== undefined) return s;
+    const p = parentOf.get(key);
+    s = p == null ? String(rankOf.get(key) ?? 0) : rowLabel(p, memo) + "." + (rankOf.get(key) ?? 0);
+    memo?.set(key, s);
+    return s;
+  }
+  // Move the ranks of `key`'s later siblings (shown or not) by `delta`.
+  function shiftRanks(pk, key, delta) {
+    const sibs = sortedKids(pk);
+    for (let j = sibs.indexOf(key) + 1; j < sibs.length; j++) {
+      const s = sibs[j];
+      rankOf.set(s, (rankOf.get(s) ?? 0) + delta);
+    }
+  }
+
   // The visible flattening of `key`'s subtree, `key` first: children of an
   // expanded row in sibling-sorted order, each pruned with its subtree when
-  // a filter hides it.
+  // a filter hides it, ranked as they go.
   function flattenVisible(key, out = []) {
     out.push(key);
     if (!expanded.has(key)) return out;
+    let i = 0;
     for (const c of sortedKids(key)) {
+      rankOf.set(c, ++i); // every sibling takes a number, hidden ones too
       if (!treeShown(c)) continue;
       flattenVisible(c, out);
     }
@@ -1080,10 +1138,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       base = view.indexOf(pk);
       if (base < 0 || !expanded.has(pk)) return;
     }
-    if (!treeShown(key)) return;
     const sibs = sortedKids(pk);
+    const si = sibs.indexOf(key);
+    rankOf.set(key, si + 1); // its slot among all siblings, shown or not
+    shiftRanks(pk, key, 1);
+    if (!treeShown(key)) return;
     let pos = base + 1;
-    for (let j = sibs.indexOf(key) - 1; j >= 0; j--) {
+    for (let j = si - 1; j >= 0; j--) {
       const vi = view.indexOf(sibs[j]);
       if (vi >= 0) { pos = subtreeEnd(vi) + 1; break; }
     }
@@ -1248,7 +1309,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       // its children when it is expanded too (see "Tree rows").
       subtreeOk = null;
       if (allScopeActive()) buildSubtreeOk();
+      let i = 0;
       for (const key of sortedKids(null)) {
+        rankOf.set(key, ++i);
         if (treeShown(key)) flattenVisible(key, view);
       }
       viewDirty = false;
@@ -1259,6 +1322,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (r && matchesFilters(r)) view.push(key);
     }
     if (sortKeys.length) view.sort((a, b) => compareRows(rows.get(a), rows.get(b)));
+    if (flatRanked()) flatRanks();
     viewDirty = false;
   }
 
@@ -1301,7 +1365,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (tree) {
       const rebuild = linkRow(row);
       bumpStats(row);
-      // A "top + children" filter can change an ancestor's verdict: rebuild.
+      // A "branch" filter can change an ancestor's verdict: rebuild.
       if (rebuild || deferView || allScopeActive()) markViewDirty();
       else if (!viewDirty) treeInsertIntoView(key);
       const pk = parentOf.get(key);
@@ -1310,6 +1374,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       return;
     }
     bumpStats(row);
+    if (flatRanked() && !deferView) flatRankInsert(row);
     if (matchesFilters(row)) {
       if (sortKeys.length) view.splice(viewInsertPos(row), 0, key);
       else view.push(key);
@@ -1322,7 +1387,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     rowEls.clear();
     colStats.clear();
     parentOf.clear(); kids.clear(); depthOf.clear(); expanded.clear();
-    byParentVals.clear(); pendingKids.clear(); sortedKidsCache.clear();
+    byParentVals.clear(); pendingKids.clear(); sortedKidsCache.clear(); rankOf.clear();
+    if (tree) { rowNumDigits = 2; widthsDirty = true; } // the label-width ratchet restarts with the data
     baseOrder = [];
     view = [];
     viewDirty = false;
@@ -1335,8 +1401,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function render() {
-    if (rowColumn) {
-      const d = String(Math.max(1, view.length)).length;
+    if (rowColumn && !tree) {
+      const d = String(Math.max(1, rows.size)).length; // numbers span every row, filtered or not
       if (d !== rowNumDigits) {
         rowNumDigits = d;
         if (widthsInited) widthsDirty = true;
@@ -1361,6 +1427,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     // Walk the slice in order, moving/creating only rows that are out of
     // place — untouched rows keep their running CSS flash animations.
     let cursor = topSpacer;
+    const labels = tree && rowColumn ? new Map() : null; // rowLabel memo for this slice
+    let labelW = 0;
     for (let i = start; i < end; i++) {
       const key = view[i];
       let tr = rowEls.get(key);
@@ -1373,7 +1441,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       tr._viewIdx = i;
       if (rowColumn) {
         const nd = tr.children[0];
-        const num = String(i + 1);
+        const num = labels ? rowLabel(key, labels) : flatRanked() ? String(rankOf.get(key) ?? i + 1) : String(i + 1);
+        if (num.length > labelW) labelW = num.length;
         if (nd && nd.textContent !== num) nd.textContent = num;
       }
       styleRowSelection(tr, key, i);
@@ -1384,6 +1453,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       for (const [key, tr] of rowEls) {
         if (!want.has(key)) { tr.remove(); rowEls.delete(key); }
       }
+    }
+    // Tree labels ratchet the number column: the widest label painted so
+    // far sets it (reset with the data), so it never jitters as you scroll.
+    if (labels && labelW > rowNumDigits) {
+      rowNumDigits = labelW;
+      if (widthsInited) renderColgroup();
     }
 
     if (!rowHMeasured && end > start) {
@@ -1421,11 +1496,23 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // so that a typed date/minute covers its whole unit), the typed bound
   // texts (`loText`/`hiText`) for restoring the inputs, `preset` naming a
   // relative range resolved against the clock on each evaluation, and
-  // `empty` whether unparseable/blank values pass. One filter per column:
-  // the dropdown's Values/Range modes replace each other.
+  // `empty` whether unparseable/blank values pass. One filter per column —
+  // per scope on a tree table, where a column can carry a top, a child,
+  // and a branch filter at once: the map is keyed by `fkey(col, scope)`
+  // and every filter records its `col` (and `scope`). The dropdown's
+  // Values/Range modes replace each other within one filter.
   const filters = new Map();
+  const fkey = (col, scope) => tree ? col + "\0" + (scope ?? tree.filterScope) : col;
+  // A column's filters in scope order (top, child, branch).
+  function colFilters(col) {
+    if (!tree) { const f = filters.get(col); return f ? [f] : []; }
+    const out = [];
+    for (const sc of TREE_SCOPES) { const f = filters.get(fkey(col, sc)); if (f) out.push(f); }
+    return out;
+  }
   let dropdown = null;
   let dropdownCol = null;
+  let dropdownScope = null; // the scope tab open in a tree table's dropdown
   let dropdownCleanup = null;
   let suppressClick = false;
 
@@ -2289,7 +2376,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function closeDropdown() {
-    if (dropdown) { rememberListHeight(dropdown, "filter"); dropdown.remove(); dropdown = null; dropdownCol = null; }
+    if (dropdown) { rememberListHeight(dropdown, "filter"); dropdown.remove(); dropdown = null; dropdownCol = null; dropdownScope = null; }
     if (dropdownCleanup) { dropdownCleanup(); dropdownCleanup = null; }
   }
 
@@ -2359,22 +2446,22 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function matchesFilters(row) {
     const root = tree ? isRootKey(row[idKey]) : true;
-    for (const [col, f] of filters) {
+    for (const f of filters.values()) {
       if (tree && f.scope) {
-        // Scoped filters (tree tables): top-level and children filters
-        // judge only their level; "top + children" ones are judged by
-        // the subtree pass (buildSubtreeOk), not here.
+        // Scoped filters (tree tables): top and child filters judge only
+        // their level; branch ones are judged by the subtree pass
+        // (buildSubtreeOk), not here.
         if (f.scope === "all") continue;
         if ((f.scope === "roots") !== root) continue;
       }
-      if (!passesFilter(row, col, f)) return false;
+      if (!passesFilter(row, f.col, f)) return false;
     }
     return true;
   }
 
-  // The "top + children" filters alone, on the row's own values.
+  // The branch filters alone, on the row's own values.
   function passesAllScoped(row) {
-    for (const [col, f] of filters) if (f.scope === "all" && !passesFilter(row, col, f)) return false;
+    for (const f of filters.values()) if (f.scope === "all" && !passesFilter(row, f.col, f)) return false;
     return true;
   }
 
@@ -2458,7 +2545,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const s = f.kind === "range" ? describeRange(f)
       : f.mode === "exclude" ? `All but ${f.values.size} values` : `${f.values.size} values`;
     if (!tree || !f.scope || f.scope === "roots") return s;
-    return `${s} (${f.scope === "children" ? "children" : "top + children"})`;
+    return `${s} (${f.scope === "children" ? "child" : "branch"})`;
   }
 
   /* ── Sort specs ───────────────────────────────────────────────────── */
@@ -2656,13 +2743,32 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // numbers on a `unit` column. A bad entry warns and is skipped.
   function filterFromSpec(col, s) {
     const f = filterFromSpecBase(col, s);
-    if (!f || !tree) return f;
+    if (!f) return f;
+    f.col = col;
+    if (!tree) return f;
     // Tree tables: `scope` says which rows the filter judges — roots,
     // children, or all (the table's `tree.filterScope` default).
     const scope = s.scope ?? tree.filterScope;
     if (!TREE_SCOPES.includes(scope)) throw new Error(`bad scope '${scope}': use roots, children, or all`);
     f.scope = scope;
     return f;
+  }
+
+  // A column's spec is one filter, or — on a tree table — an array of
+  // filter objects, one per scope (a bare array of values is still an
+  // include list). Returns the filters to key into the map.
+  function filtersFromSpec(col, s) {
+    const many = Array.isArray(s) && s.length > 0 && s.every((x) => x && typeof x === "object" && !Array.isArray(x));
+    if (!many) { const f = filterFromSpec(col, s); return f ? [f] : []; }
+    if (!tree) throw new Error("one filter per column without a tree");
+    const out = new Map();
+    for (const item of s) {
+      const f = filterFromSpec(col, item);
+      if (!f) continue;
+      if (out.has(f.scope)) throw new Error(`two filters for scope '${f.scope}'`);
+      out.set(f.scope, f);
+    }
+    return [...out.values()];
   }
 
   function filterFromSpecBase(col, s) {
@@ -2758,8 +2864,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     for (const [col, s] of Object.entries(map)) {
       try {
-        const f = filterFromSpec(col, s);
-        if (f) filters.set(col, f); else filters.delete(col);
+        const fs = filtersFromSpec(col, s);
+        for (const f of colFilters(col)) filters.delete(fkey(col, f.scope)); // an entry replaces the column's filters
+        for (const f of fs) filters.set(fkey(col, f.scope), f);
       } catch (e) {
         console.warn(`[mkio-table] bad filters.${col}: ${e.message}`);
       }
@@ -2776,7 +2883,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function getFilters() {
     const out = {};
-    for (const [col, f] of filters) out[col] = filterToSpec(f);
+    for (const f of filters.values()) {
+      const spec = filterToSpec(f);
+      if (!(f.col in out)) out[f.col] = spec;
+      else if (Array.isArray(out[f.col])) out[f.col].push(spec);
+      else out[f.col] = [out[f.col], spec]; // several scopes: an array of filters
+    }
     return out;
   }
 
@@ -3178,9 +3290,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       } else {
         btn.appendChild(icon("filter"));
       }
-      const f = filters.get(col);
-      btn.classList.toggle("active", !!f);
-      btn.title = f ? describeFilter(f) : "";
+      const fs = colFilters(col);
+      btn.classList.toggle("active", fs.length > 0);
+      btn.title = fs.map(describeFilter).join("; ");
     }
     updateColumnsBtn();
     renderChips();
@@ -3211,9 +3323,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // Each group leads with its icon, which clears the whole group. The
   // cluster is empty — and the toolbar gone, absent buttons — while
   // nothing is active.
-  function clearFilters(cols) {
-    for (const col of cols) filters.delete(col);
-    if (dropdownCol && !filters.has(dropdownCol)) closeDropdown();
+  // Drop filters by map key (a column, or column + scope on a tree).
+  function clearFilters(keys) {
+    for (const k of keys) filters.delete(k);
+    if (dropdownCol && !colFilters(dropdownCol).length) closeDropdown();
     updateHeaderState();
     applyVisibility();
     syncPresetTimer();
@@ -3282,18 +3395,21 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         () => { sortKeys.length = 0; applySort(); }, chips));
     }
     if (filters.size) {
-      const chips = [...filters].map(([col, f]) => {
+      const chips = [...filters].map(([key, f]) => {
+        const col = f.col;
         const text = `${label(col)}: ${describeFilter(f)}`;
-        return makeChip("mkui-chip-filter", col, text, text,
+        const { chip } = makeChip("mkui-chip-filter", col, text, text,
           (e) => {
-            if (dropdownCol === col) { closeDropdown(); return; }
+            if (dropdownCol === col && dropdownScope === (f.scope ?? null)) { closeDropdown(); return; }
             if (columns && !visibleColumns().includes(col)) showColumn(col); // hidden: bring it back first
             const th = thead.querySelector?.(`th[data-col="${CSS.escape(col)}"]`);
             if (!th) return;
             scrollHeaderIntoView(th);
-            openFilterDropdown(col, th, { advanced: !!e?.altKey });
+            openFilterDropdown(col, th, { advanced: !!e?.altKey, scope: f.scope });
           },
-          () => clearFilters([col])).chip;
+          () => clearFilters([key]));
+        if (f.scope) chip.dataset.scope = f.scope;
+        return chip;
       });
       chipsEl.appendChild(makeGroup("mkui-chips-filter", "filter", "Clear all filters",
         () => clearFilters([...filters.keys()]), chips));
@@ -3616,7 +3732,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   /* ── Filter dropdown ──────────────────────────────────────────────── */
 
-  function openFilterDropdown(col, thEl, { advanced = false } = {}) {
+  function openFilterDropdown(col, thEl, { advanced = false, scope: wantScope = null } = {}) {
     closeDropdown();
     closePicker();
     dropdownCol = col;
@@ -3627,7 +3743,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     dd.style.position = "fixed";
     dd.style.zIndex = "10001";
 
-    const cur = filters.get(col);
+    // Tree tables: one filter per scope, the scope row picking which the
+    // dropdown edits — the default scope, else the first scoped one the
+    // column has. A plain open on a column filtered only at the top looks
+    // like a flat table's; alt/option-click, a filter (or the default
+    // scope) off the top, or an asked-for scope shows the row.
+    const mine = tree ? colFilters(col) : [];
+    const scope = !tree ? null
+      : wantScope ?? (filters.has(fkey(col, tree.filterScope)) ? tree.filterScope : mine[0]?.scope ?? tree.filterScope);
+    dropdownScope = scope;
+    const cur = tree ? filters.get(fkey(col, scope)) : filters.get(col);
     const type = filterType(col);
     // Numeric and time columns get a Values | Range mode switch; text
     // columns look exactly as before. A range filter on a column that has
@@ -3655,34 +3780,24 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     colOps.appendChild(hideOp);
     dd.appendChild(colOps);
 
-    // Tree tables: which rows this column's filter judges. A plain click
-    // opens the dropdown as on a flat table — the filter applies to the
-    // top level — while alt/option-click (or a filter already scoped
-    // elsewhere) shows the scope row. Changing it re-applies an existing
-    // filter at once; otherwise it is remembered for the filter the
-    // dropdown is about to build.
-    let scope = cur?.scope ?? tree?.filterScope ?? "roots";
-    if (tree && (advanced || scope !== "roots")) {
+    // The scope row: tabs, one filter each. Switching reopens the dropdown
+    // on that scope's filter (or an empty one); a tab whose scope holds a
+    // filter is marked.
+    if (tree && (advanced || scope !== "roots" || mine.some((f) => f.scope !== "roots"))) {
       const scopes = document.createElement("div");
       scopes.className = "mkui-filter-modes mkui-filter-scopes";
       const sbtns = TREE_SCOPES.map((sc) => {
         const b = document.createElement("span");
         b.className = "mkui-filter-mode mkui-filter-scope";
         b.dataset.scope = sc;
-        b.textContent = sc === "roots" ? "Top level" : sc === "children" ? "Children" : "Top + children";
+        b.textContent = sc === "roots" ? "Top" : sc === "children" ? "Child" : "Branch";
         b.title = sc === "roots" ? "Filter top-level rows; their children show with them"
           : sc === "children" ? "Filter child rows; every top-level row shows"
-          : "Filter every row; a row stays while any row below it matches";
+          : "Filter every row; a branch stays while any row on it matches";
         b.classList.toggle("active", sc === scope);
+        b.classList.toggle("mkui-filter-scope-set", filters.has(fkey(col, sc)));
         b.addEventListener("click", () => {
-          scope = sc;
-          for (const x of sbtns) x.classList.toggle("active", x.dataset.scope === sc);
-          const f = filters.get(col);
-          if (f && f.scope !== sc) {
-            f.scope = sc;
-            updateHeaderState();
-            applyVisibility();
-          }
+          if (sc !== scope) openFilterDropdown(col, thEl, { advanced: true, scope: sc });
         });
         return b;
       });
@@ -3785,8 +3900,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         .map((c) => c.dataset.val);
       // An exclusion of nothing is no filter; an inclusion always is —
       // "Clear, then tick every value" still means only those values.
-      if (side === "exclude" && listed.length === 0) filters.delete(col);
-      else filters.set(col, { kind: "values", mode: side, values: new Set(listed), scope });
+      const key = fkey(col, scope);
+      if (side === "exclude" && listed.length === 0) filters.delete(key);
+      else filters.set(key, { kind: "values", mode: side, values: new Set(listed), col, scope });
       updateHeaderState();
       applyVisibility();
       syncPresetTimer();
@@ -3896,11 +4012,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     function commitRange() {
       const lo = readBound(loInput, "lo"), hi = readBound(hiInput, "hi");
       for (const b of presetBtns) b.classList.toggle("active", b.dataset.preset === preset);
-      if (preset === null && lo === null && hi === null && !emptyCb.checked) filters.delete(col);
-      else filters.set(col, {
+      const key = fkey(col, scope);
+      if (preset === null && lo === null && hi === null && !emptyCb.checked) filters.delete(key);
+      else filters.set(key, {
         kind: "range", type: rType, lo, hi, preset, empty: emptyCb.checked,
         loText: lo === null ? "" : String(loInput.value), hiText: hi === null ? "" : String(hiInput.value),
-        timeKind: kind, spec: timeSpec(col), localTz, scope,
+        timeKind: kind, spec: timeSpec(col), localTz, col, scope,
       });
       updateHeaderState();
       applyVisibility();
@@ -4084,12 +4201,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const vi = viewIndexOf(prev ?? row);
     if (tree && prev) {
       // Its children re-home (orphans become roots or hide): rebuild. A
-      // childless row just leaves its slot.
+      // childless row just leaves its slot, its later siblings moving up.
       const pk = parentOf.get(key);
+      if (pk !== undefined) shiftRanks(pk, key, -1); // its later siblings move up, shown or not
       if (unlinkRow(prev) || allScopeActive()) markViewDirty();
       else if (vi >= 0) view.splice(vi, 1);
       if (pk != null) syncToggle(pk); // may have lost its last child
-    } else if (vi >= 0) view.splice(vi, 1);
+    } else {
+      if (flatRanked()) flatRankDelete(key);
+      if (vi >= 0) view.splice(vi, 1);
+    }
     const bi = baseOrder.indexOf(key);
     if (bi >= 0) baseOrder.splice(bi, 1);
     rows.delete(key);
@@ -4157,6 +4278,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         }
         rows.set(key, row);
         if (isVis) view.splice(viewInsertPos(row), 0, key);
+        if (flatRanked() && sortChanged) { flatRankDelete(key); flatRankInsert(row); }
         viewRev++;
         render();
       }

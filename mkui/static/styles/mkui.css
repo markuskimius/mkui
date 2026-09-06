@@ -1094,7 +1094,16 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-th-inner .mkui-tree-all { vertical-align: baseline; }
 /* Filter dropdown: the scope row on tree tables (alt/option-click the
    filter button, or a filter already scoped off the top level). */
-.mkui-filter-scopes .mkui-filter-scope { white-space: nowrap; padding-left: 6px; padding-right: 6px; }
+.mkui-filter-scopes .mkui-filter-scope { white-space: nowrap; padding-left: 6px; padding-right: 6px; position: relative; }
+/* A scope that holds a filter wears an accent dot at its top-right corner. */
+.mkui-filter-scope.mkui-filter-scope-set::after {
+  content: "";
+  position: absolute;
+  top: 4px; right: 2px;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--mkui-accent);
+}
 
 /* Row-number column: sticky-left so numbers survive horizontal scroll
    (the header corner cell is sticky on both axes via th's sticky top). */
@@ -1104,7 +1113,9 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   left: 0;
   background: var(--mkui-bg-alt);
   color: var(--mkui-fg-mute);
-  text-align: right;
+  /* Left-aligned so tree numbers (1, 1.2, 1.2.1) line up at their first
+     digit and the level reads down the column. */
+  text-align: left;
   cursor: pointer;
   border-right: 1px solid var(--mkui-border);
   touch-action: none;

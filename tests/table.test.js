@@ -5944,7 +5944,7 @@ test("tree: filters judge roots, children, or all — a hidden row hides its sub
   const api = host._paneEl._filters;
   api.set({ name: { exclude: ["a1"], scope: "children" } });
   assert.deepEqual(treeNames(host), ["a", "a2", "a21", "b", "b1", "x1"]);
-  assert.equal(filterTitle(host, "name"), "All but 1 values (children)");
+  assert.equal(filterTitle(host, "name"), "All but 1 values (child)");
   assert.deepEqual(api.get(), { name: { exclude: ["a1"], scope: "children" } }, "scope round-trips");
   api.set({ qty: { include: ["3"], scope: "roots" } });
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21"], "roots must have qty 3; children pass untested");
@@ -5961,7 +5961,7 @@ test("tree: filters judge roots, children, or all — a hidden row hides its sub
   assert.deepEqual(api.get(), { name: { exclude: ["a"], scope: "roots" } });
   api.set({ name: { exclude: ["a2"], scope: "all" } });
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"], "all: a2 misses but a21 below it matches, so it stays");
-  assert.equal(filterTitle(host, "name"), "All but 1 values (top + children)");
+  assert.equal(filterTitle(host, "name"), "All but 1 values (branch)");
   api.set({ name: { exclude: ["a21"], scope: "all" } });
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "b1", "x1"], "a leaf that misses just goes");
   const [, warned] = await withWarnings(() => api.set({ name: { exclude: ["a2"], scope: "leaves" } }));
@@ -5985,8 +5985,9 @@ function openDropdownAlt(host, col) {
   if (!open()) click(); // the button toggles: a dropdown already open on this column closed
   return open();
 }
-// Plain reopen of a column whose dropdown is still open (the scope buttons
-// leave it open): the first click closes, the second opens.
+const currentDropdown = (host) => host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).at(-1);
+// Plain reopen of a column whose dropdown is still open (a change inside
+// the dropdown leaves it open): the first click closes, the second opens.
 function reopenDropdown(host, col) {
   clickFilterBtn(getThs(host).find(t => t.dataset.col === col));
   return openDropdown(host, col);
@@ -6004,29 +6005,50 @@ test("tree: a plain filter dropdown filters the top level; alt-click shows the s
   assert.equal(host._paneEl._filters.get().qty.scope, "roots");
   assert.equal(filterTitle(host, "qty"), "All but 1 values");
   dd = openDropdownAlt(host, "qty");
-  const row = scopeRow(dd);
+  let row = scopeRow(dd);
   assert.ok(row.scopes, "alt-click: the scope row shows");
   assert.ok(row.btn("roots").classList.contains("active"));
-  assert.deepEqual([...row.scopes._ch].map(b => b.textContent), ["Top level", "Children", "Top + children"], "no All");
+  assert.ok(row.btn("roots").classList.contains("mkui-filter-scope-set"), "the top tab is marked: it holds a filter");
+  assert.ok(!row.btn("children").classList.contains("mkui-filter-scope-set"));
+  assert.deepEqual([...row.scopes._ch].map(b => b.textContent), ["Top", "Child", "Branch"], "no All");
+  // The tabs each hold their own filter: Child opens empty, the top filter stays.
   row.btn("children")._ev.click[0]();
-  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "b", "b1", "x1"], "re-scoped to children: a1 goes, b is back");
-  assert.equal(filterTitle(host, "qty"), "All but 1 values (children)");
-  assert.equal(chipStrip(host).filter[0], "qty: All but 1 values (children)");
+  dd = currentDropdown(host);
+  row = scopeRow(dd);
+  assert.ok(row.btn("children").classList.contains("active"), "switched to the Child tab");
+  cbs = dd._ch.find(c => c.className === "mkui-filter-list")._ch.map(l => l._ch[0]);
+  assert.ok(cbs.every(c => c.checked), "no child filter yet: every value ticked");
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "x1"], "the top filter is untouched");
+  const cb9 = cbs.find(c => c.dataset.val === "9");
+  cb9.checked = false;
+  cb9._ev.change[0]();
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "x1"], "b1 (qty 9) was already hidden under b");
+  assert.equal(filterTitle(host, "qty"), "All but 1 values; All but 1 values (child)", "both filters in the tooltip");
+  assert.deepEqual(chipStrip(host).filter, ["qty: All but 1 values", "qty: All but 1 values (child)"], "a chip each");
+  assert.deepEqual(host._paneEl._filters.get(), { qty: [{ exclude: ["1"], scope: "roots" }, { exclude: ["9"], scope: "children" }] }, "get(): an array per column with several scopes");
+  // Clear the top filter by its chip: b returns, minus b1 (child filter).
+  chipStrip(host).dropFilter("qty");
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "x1"]);
+  assert.deepEqual(chipStrip(host).filter, ["qty: All but 1 values (child)"]);
   dd = reopenDropdown(host, "qty").dd;
-  assert.ok(scopeRow(dd).scopes, "a filter scoped off the top level opens with the row, no alt needed");
-  scopeRow(dd).btn("all")._ev.click[0]();
-  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "b", "b1", "x1"], "top + children: a1 goes; b misses but b1 matches, so b stays");
-  assert.equal(filterTitle(host, "qty"), "All but 1 values (top + children)");
-  scopeRow(dd).btn("roots")._ev.click[0]();
-  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "x1"]);
-  dd = reopenDropdown(host, "qty").dd;
-  assert.equal(scopeRow(dd).scopes, null, "back on the top level: plain again");
+  row = scopeRow(dd);
+  assert.ok(row.scopes && row.btn("children").classList.contains("active"), "a column filtered only off the top opens on that tab, no alt needed");
+  // Add a branch filter too: three scopes at once.
+  row.btn("all")._ev.click[0]();
+  dd = currentDropdown(host);
+  cbs = dd._ch.find(c => c.className === "mkui-filter-list")._ch.map(l => l._ch[0]);
+  const cb0 = cbs.find(c => c.dataset.val === "0");
+  cb0.checked = false;
+  cb0._ev.change[0]();
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b"], "branch: x1 (qty 0) goes; b passes it itself, b1 stays pruned by the child filter");
+  assert.equal(host._paneEl._filters.get().qty.length, 2);
   clickFilterBtn(getThs(host).find(t => t.dataset.col === "qty")); // close
   chipStrip(host).open("qty");
-  assert.equal(scopeRow(host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).at(-1)).scopes, null, "the chip opens plainly too");
+  dd = currentDropdown(host);
+  assert.ok(scopeRow(dd).btn("children").classList.contains("active"), "a chip opens its own scope's tab");
 });
 
-test("tree: a top + children filter keeps the way to a match and drops rows with none below", async () => {
+test("tree: a branch filter keeps the way to a match and drops rows with none below", async () => {
   const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
   const api = host._paneEl._filters;
   api.set({ qty: { include: ["5"], scope: "all" } });
@@ -6058,10 +6080,40 @@ test("tree: a top + children filter keeps the way to a match and drops rows with
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "b1", "x1", "x11"]);
 });
 
+test("tree: a column's filters config can be an array, one filter per scope", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" },
+    filters: { qty: [{ exclude: [1], scope: "roots" }, { exclude: [9], scope: "children" }, { from: 1, scope: "all" }] } });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21"], "top drops b; child drops b1; branch drops x1 (qty 0)");
+  const api = host._paneEl._filters;
+  const got = api.get();
+  assert.deepEqual(got, { qty: [
+    { exclude: ["1"], scope: "roots" }, { exclude: ["9"], scope: "children" },
+    { type: "number", from: 1, to: null, empty: false, scope: "all" },
+  ] });
+  assert.equal(filterTitle(host, "qty"), "All but 1 values; All but 1 values (child); ≥ 1 (branch)");
+  assert.deepEqual(chipStrip(host).filter, ["qty: All but 1 values", "qty: All but 1 values (child)", "qty: ≥ 1 (branch)"]);
+  api.set(got);
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21"], "round-trips");
+  api.set({ qty: { include: ["1"], scope: "children" } }, { merge: true });
+  assert.deepEqual(treeNames(host), ["a", "a1", "b", "x1"], "an entry replaces every filter the column had");
+  api.set({ name: ["b"] }, { merge: true });
+  assert.deepEqual(treeNames(host), ["b"], "merge keeps the other column's filters");
+  api.set({ qty: null }, { merge: true });
+  assert.deepEqual(treeNames(host), ["b", "b1"], "null under merge clears all of a column's filters");
+  assert.deepEqual(api.get(), { name: { include: ["b"], scope: "roots" } });
+  let [, warned] = await withWarnings(() => api.set({ qty: [{ exclude: [1], scope: "roots" }, { exclude: [2], scope: "roots" }] }));
+  assert.match(warned[0], /bad filters.qty: two filters for scope 'roots'/);
+  assert.deepEqual(api.get(), {}, "a bad entry is skipped whole; the replace still cleared the old filters");
+  const flat = await filteredTable({});
+  [, warned] = await withWarnings(() => flat._paneEl._filters.set({ status: [{ exclude: ["closed"] }, { include: ["open"] }] }));
+  assert.match(warned[0], /bad filters.status: one filter per column without a tree/);
+  assert.deepEqual(shownNames(flat), ["a", "b", "c", "d"]);
+});
+
 test("tree: filterScope config is the default for new filters", async () => {
   const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all", filterScope: "children" } });
   const { dd } = openDropdown(host, "qty");
-  assert.ok(scopeRow(dd).btn("children").classList.contains("active"), "off the top level, so the row shows, on the configured default");
+  assert.ok(scopeRow(dd).btn("children").classList.contains("active"), "a default off the top shows the row, on that tab");
   const cbs = dd._ch.find(c => c.className === "mkui-filter-list")._ch.map(l => l._ch[0]);
   const cb3 = cbs.find(c => c.dataset.val === "3");
   cb3.checked = false;
@@ -6264,4 +6316,187 @@ test("tree: works on a stream, where the parent may arrive in a later delta", as
   sub.opts.onDelta([{ op: "insert", row: { _mkio_ref: streamRef(3), name: "p", id: "P", parent: "", qty: 0 } }]);
   assert.deepEqual(treeNames(host), ["p", "c1", "c2"], "the parent adopts them on arrival");
   assert.equal(treeRow(host, "c1").dataset.depth, "1");
+});
+
+/* ── Tree row numbers ────────────────────────────────────────────────── */
+
+// A tree's row numbers are positions per level: 1..n over the shown
+// top-level rows, 5.1..5.m under row 5, and so on — renumbered by sorts,
+// filters, expansion, and live changes.
+const rowNums = (host) => liveRows(host).map(tr => tr._ch[0].textContent);
+const numbered = (host) => liveRows(host).map(tr => tr._ch[0].textContent + " " + treeText(tr._ch.find(td => td.dataset?.col === "name")));
+
+test("tree numbers: positions per level, renumbered on expand, sort, and filter", async () => {
+  const host = await treeTable({ rowColumn: true });
+  assert.deepEqual(numbered(host), ["1 a", "2 b", "3 x1"]);
+  clickToggle(host, "a", true);
+  assert.deepEqual(numbered(host), ["1 a", "1.1 a1", "1.2 a2", "1.2.1 a21", "2 b", "3 x1"]);
+  clickToggle(host, "b");
+  assert.deepEqual(numbered(host), ["1 a", "1.1 a1", "1.2 a2", "1.2.1 a21", "2 b", "2.1 b1", "3 x1"]);
+  const thQty = getThs(host).find(t => t.dataset.col === "qty");
+  clickHeader(thQty); // asc: x1(0) b(1) a(3); under a: a1(1) a2(2)
+  assert.deepEqual(numbered(host), ["1 x1", "2 b", "2.1 b1", "3 a", "3.1 a1", "3.2 a2", "3.2.1 a21"], "sorted: numbers follow the new positions");
+  clickHeader(thQty); // desc
+  assert.deepEqual(numbered(host), ["1 a", "1.1 a2", "1.1.1 a21", "1.2 a1", "2 b", "2.1 b1", "3 x1"]);
+  clickHeader(thQty); // off
+  host._paneEl._filters.set({ name: { exclude: ["a1"], scope: "children" } });
+  assert.deepEqual(numbered(host), ["1 a", "1.2 a2", "1.2.1 a21", "2 b", "2.1 b1", "3 x1"], "a filtered row keeps its slot: 1.1 is skipped");
+  host._paneEl._filters.set({ name: { exclude: ["a"] } });
+  assert.deepEqual(numbered(host), ["2 b", "2.1 b1", "3 x1"], "a hidden root leaves its number unused");
+  host._paneEl._filters.set({ qty: { include: ["5"], scope: "all" } });
+  assert.deepEqual(numbered(host), ["1 a", "1.2 a2", "1.2.1 a21"], "branch: kept ancestors keep their positions");
+  host._paneEl._filters.set({ name: { exclude: ["a1"], scope: "children" } });
+  clickHeader(thQty);
+  assert.deepEqual(numbered(host), ["1 x1", "2 b", "2.1 b1", "3 a", "3.2 a2", "3.2.1 a21"], "the gap follows the sorted position");
+  clickHeader(thQty); clickHeader(thQty);
+  host._paneEl._filters.set({});
+  clickToggle(host, "a");
+  assert.deepEqual(numbered(host), ["1 a", "2 b", "2.1 b1", "3 x1"], "collapse keeps siblings' numbers");
+  clickToggle(host, "a");
+  assert.deepEqual(numbered(host), ["1 a", "1.1 a1", "1.2 a2", "1.2.1 a21", "2 b", "2.1 b1", "3 x1"]);
+});
+
+test("tree numbers: live inserts and deletes shift later siblings only; a late parent renumbers its orphan", async () => {
+  const host = await treeTable({ rowColumn: true, tree: { child: "parent", parent: "id", expand: "all" } });
+  const sub = lastSubscribe();
+  assert.deepEqual(numbered(host), ["1 a", "1.1 a1", "1.2 a2", "1.2.1 a21", "2 b", "2.1 b1", "3 x1"]);
+  sub.opts.onUpdate("insert", { _mkio_row: "8", name: "a0", id: "A0", parent: "A", qty: 0 });
+  assert.deepEqual(numbered(host), ["1 a", "1.1 a1", "1.2 a2", "1.2.1 a21", "1.3 a0", "2 b", "2.1 b1", "3 x1"], "unsorted: appended to its group");
+  clickHeader(getThs(host).find(t => t.dataset.col === "qty"));
+  assert.deepEqual(numbered(host), ["1 x1", "2 b", "2.1 b1", "3 a", "3.1 a0", "3.2 a1", "3.3 a2", "3.3.1 a21"]);
+  sub.opts.onUpdate("insert", { _mkio_row: "9", name: "a15", id: "A15", parent: "A", qty: 1.5 });
+  assert.deepEqual(numbered(host), ["1 x1", "2 b", "2.1 b1", "3 a", "3.1 a0", "3.2 a1", "3.3 a15", "3.4 a2", "3.4.1 a21"], "sorted insert: a2 moves to 3.4, a21 stays its .1");
+  sub.opts.onUpdate("insert", { _mkio_row: "10", name: "c", id: "C", parent: "", qty: 2 });
+  assert.deepEqual(numbered(host), ["1 x1", "2 b", "2.1 b1", "3 c", "4 a", "4.1 a0", "4.2 a1", "4.3 a15", "4.4 a2", "4.4.1 a21"], "a root insert shifts later roots, not their children");
+  sub.opts.onUpdate("delete", { _mkio_row: "9" });
+  assert.deepEqual(numbered(host), ["1 x1", "2 b", "2.1 b1", "3 c", "4 a", "4.1 a0", "4.2 a1", "4.3 a2", "4.3.1 a21"], "a delete closes the gap");
+  sub.opts.onUpdate("delete", { _mkio_row: "10" });
+  assert.deepEqual(numbered(host), ["1 x1", "2 b", "2.1 b1", "3 a", "3.1 a0", "3.2 a1", "3.3 a2", "3.3.1 a21"]);
+  sub.opts.onUpdate("insert", { _mkio_row: "11", name: "z", id: "Z", parent: "", qty: 9 });
+  assert.deepEqual(numbered(host), ["1 b", "1.1 b1", "2 a", "2.1 a0", "2.2 a1", "2.3 a2", "2.3.1 a21", "3 z", "3.1 x1"], "orphan x1 becomes 3.1 under its late parent");
+  sub.opts.onUpdate("insert", { _mkio_row: "12", name: "b0", id: "B0", parent: "B", qty: 0 });
+  sub.opts.onUpdate("delete", { _mkio_row: "1" });
+  assert.deepEqual(numbered(host), ["1 a0", "2 a1", "3 b", "3.1 b0", "3.2 b1", "4 a2", "4.1 a21", "5 z", "5.1 x1"], "deleting a parent promotes its children into the top-level count");
+});
+
+test("tree numbers: the number column widens to the longest label painted and resets with the data", async () => {
+  const host = await treeTable({ rowColumn: true });
+  const colW = () => getTable(host)._ch.find(c => c.tagName === "COLGROUP")._ch[0].style.width;
+  const w1 = colW();
+  clickToggle(host, "a", true);
+  const w2 = colW();
+  assert.ok(parseInt(w2) > parseInt(w1), `"1.2.1" widens the column (${w1} → ${w2})`);
+  clickToggle(host, "a");
+  assert.equal(colW(), w2, "collapsing keeps the width: a ratchet, no jitter");
+  lastSubscribe().opts.onSnapshot(treeRows().slice(0, 2));
+  assert.deepEqual(rowNums(host), ["1"]);
+  assert.equal(colW(), w1, "a fresh snapshot restarts the ratchet");
+});
+
+test("tree numbers: a flat table numbers 1..n by position and skips filtered rows too", async () => {
+  const { host } = await createSelTable();
+  assert.deepEqual(rowNums(host), ["1", "2", "3", "4"]);
+  clickHeader(getThs(host)[1]); clickHeader(getThs(host)[1]); // value desc
+  assert.deepEqual(rowNums(host), ["1", "2", "3", "4"]);
+  const api = host._paneEl._filters;
+  api.set({ value: { exclude: [2] } });
+  assert.deepEqual(rowNums(host), ["1", "3", "4"], "desc: row-3, row-2 (hidden), row-1, row-0 — 2 is skipped");
+  clickHeader(getThs(host)[1]); // sort off: arrival order
+  assert.deepEqual(rowNums(host), ["1", "2", "4"]);
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "9", name: "row-9", value: 9 });
+  assert.deepEqual(rowNums(host), ["1", "2", "4", "5"], "a live insert takes the next slot");
+  clickHeader(getThs(host)[1]); // asc
+  assert.deepEqual(rowNums(host), ["1", "2", "4", "5"]);
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "10", name: "row-x", value: 1.5 });
+  assert.deepEqual(rowNums(host), ["1", "2", "3", "5", "6"], "a sorted live insert shifts the rows after it (hidden 2 became 4)");
+  lastSubscribe().opts.onUpdate("delete", { _mkio_row: "10" });
+  assert.deepEqual(rowNums(host), ["1", "2", "4", "5"]);
+  lastSubscribe().opts.onUpdate("replace", { _mkio_row: "0", name: "row-0", value: 7 });
+  assert.deepEqual(rowNums(host), ["1", "3", "4", "5"], "a sort-key change moves the row and renumbers");
+  api.set({});
+  assert.deepEqual(rowNums(host), ["1", "2", "3", "4", "5"], "no filter: plain view positions again");
+});
+
+// The same random walk as the structure check, now comparing every
+// painted label against a reference numbering of the model.
+test("tree numbers: incremental ranks match a full renumbering under random operations", async () => {
+  let seed = 4242;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+  const data = [];
+  for (let i = 0; i < 30; i++) {
+    const parent = i > 0 && rnd(3) > 0 ? data[rnd(i)].id : "";
+    data.push({ _mkio_row: String(i + 1), name: "n" + i, id: "I" + i, parent, qty: rnd(7) });
+  }
+  const host = await treeTable({ rowColumn: true }, data);
+  const opened = new Set();
+  let dir = null;
+  let hideQty = null; // a child-scoped filter: children with this qty hide with their subtrees
+  const expected = () => {
+    const byParent = new Map();
+    const ids = new Set(data.map(r => r.id));
+    for (const r of data) {
+      const pk = r.parent && ids.has(r.parent) ? r.parent : "";
+      if (!byParent.has(pk)) byParent.set(pk, []);
+      byParent.get(pk).push(r);
+    }
+    const out = [];
+    const walk = (pk, prefix) => {
+      let sibs = byParent.get(pk) ?? [];
+      if (dir) sibs = sibs.slice().sort((x, y) => dir === "asc" ? x.qty - y.qty : y.qty - x.qty);
+      sibs.forEach((r, i) => {
+        const label = prefix + (i + 1); // every sibling takes a number, hidden or not
+        if (pk !== "" && hideQty !== null && r.qty === hideQty) return;
+        out.push(label + " " + r.name);
+        if (opened.has(r.id)) walk(r.id, label + ".");
+      });
+    };
+    walk("", "");
+    return out;
+  };
+  const thQty = getThs(host).find(t => t.dataset.col === "qty");
+  let nextId = data.length; // ids never reused after a delete
+  for (let step = 0; step < 200; step++) {
+    const op = rnd(14);
+    if (op < 6) {
+      const shown = treeNames(host);
+      const name = shown[rnd(shown.length)];
+      const row = data.find(r => r.name === name);
+      if (isLeaf(toggleOf(host, name))) continue;
+      clickToggle(host, name);
+      if (opened.has(row.id)) opened.delete(row.id); else opened.add(row.id);
+    } else if (op < 9) {
+      const i = nextId++;
+      const parent = rnd(4) > 0 ? data[rnd(data.length)].id : "";
+      const r = { _mkio_row: String(i + 1), name: "n" + i, id: "I" + i, parent, qty: rnd(7) };
+      data.push(r);
+      lastSubscribe().opts.onUpdate("insert", r);
+    } else if (op < 11) {
+      // delete a leaf (a parent delete re-homes children: covered above)
+      const leaves = data.filter(r => !data.some(c => c.parent === r.id));
+      const r = leaves[rnd(leaves.length)];
+      data.splice(data.indexOf(r), 1);
+      lastSubscribe().opts.onUpdate("delete", { _mkio_row: r._mkio_row });
+    } else if (op < 13) {
+      clickHeader(thQty);
+      dir = dir === null ? "asc" : dir === "asc" ? "desc" : null;
+    } else {
+      hideQty = hideQty === null ? rnd(7) : null;
+      host._paneEl._filters.set(hideQty === null ? {} : { qty: { exclude: [hideQty], scope: "children" } });
+    }
+    assert.deepEqual(numbered(host), expected(), `step ${step}`);
+  }
+});
+
+test("tree: a saved layout round-trips a column's several scoped filters through the pane hook", async () => {
+  const host = await treeTable({ rowColumn: true, tree: { child: "parent", parent: "id", expand: "all" } });
+  const api = host._paneEl._filters;
+  api.set({ qty: [{ exclude: [1], scope: "roots" }, { exclude: [9], scope: "children" }, { from: 0, scope: "all" }], name: ["a", "x1", "b"] });
+  const saved = JSON.parse(JSON.stringify(api.get())); // as a layout store would keep it
+  assert.deepEqual(numbered(host), ["1 a", "1.1 a1", "1.2 a2", "1.2.1 a21", "3 x1"], "b (qty 1) hidden by the top filter; numbers keep its slot");
+  api.set({});
+  assert.deepEqual(numbered(host), ["1 a", "1.1 a1", "1.2 a2", "1.2.1 a21", "2 b", "2.1 b1", "3 x1"]);
+  api.set(saved);
+  assert.deepEqual(numbered(host), ["1 a", "1.1 a1", "1.2 a2", "1.2.1 a21", "3 x1"], "restored exactly");
+  assert.deepEqual(api.get(), saved);
+  assert.deepEqual(chipStrip(host).filter, ["qty: All but 1 values", "qty: All but 1 values (child)", "qty: ≥ 0 (branch)", "name: 3 values"]);
 });

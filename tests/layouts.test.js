@@ -116,14 +116,16 @@ test("sanitizeLayout validates frames, drops empty ones, and keeps state for ope
       "junk",
     ],
     focused: "main",
-    panes: { a: { filters: { s: ["x"] }, sort: "-s", visible: null }, d: { sort: "s" }, b: "junk", c: { extra: 1 } },
+    // A tree table's column may carry several scoped filters: an array
+    // of filter objects passes through untouched.
+    panes: { a: { filters: { s: ["x"], q: [{ exclude: [1], scope: "roots" }, { from: 2, scope: "all" }] }, sort: "-s", visible: null }, d: { sort: "s" }, b: "junk", c: { extra: 1 } },
   }, known);
   assert.deepEqual(clean.frames, [
     { id: "main", title: null, x: 0.1, y: 0.1, w: 0.5, h: 0.5, layout: tabs("a", "b") },
     { id: null, title: null, x: 0.2, y: 0.2, w: 0.4, h: 0.4, layout: "c" },
   ]);
   assert.equal(clean.focused, "main");
-  assert.deepEqual(clean.panes, { a: { filters: { s: ["x"] }, sort: "-s", visible: null }, c: {} });
+  assert.deepEqual(clean.panes, { a: { filters: { s: ["x"], q: [{ exclude: [1], scope: "roots" }, { from: 2, scope: "all" }] }, sort: "-s", visible: null }, c: {} });
   assert.deepEqual(clean.dropped, ["zz"]);
   assert.equal(clean.version, LAYOUT_VERSION);
 });

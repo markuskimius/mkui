@@ -232,10 +232,12 @@ action = { type = "transaction", service = "orders", op = "cancel", data = { id 
 # level with shift; Enter / `*` on the keyboard). `expand = 1` would open
 # the first level at load. Sorting orders the top level, then each group
 # of siblings. Filters apply to top-level orders (a match shows with its
-# children); alt/option-click a filter button for the scope row — Top
-# level, Children (children tested, a miss hides its subtree), or Top +
-# children (every row tested, but a row stays while any row below it
-# matches) — and a configured filter takes `scope` the same way.
+# children); alt/option-click a filter button for the scope tabs — Top,
+# Child (children tested, a miss hides its subtree), and Branch (every
+# row tested, but a row stays while any row below it matches) — each
+# holding its own filter, so a column can filter all three ways at once.
+# A configured filter takes `scope` the same way, and a column takes an
+# array of them for several scopes.
 # Ctrl/Cmd+A and copy see exactly the expanded rows.
 [panes.order-tree]
 title = "Order Tree"
