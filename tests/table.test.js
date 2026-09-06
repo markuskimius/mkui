@@ -5960,8 +5960,10 @@ test("tree: filters judge roots, children, or all — a hidden row hides its sub
   assert.equal(filterTitle(host, "name"), "All but 1 values", "the default scope isn't spelled out");
   assert.deepEqual(api.get(), { name: { exclude: ["a"], scope: "roots" } });
   api.set({ name: { exclude: ["a2"], scope: "all" } });
-  assert.deepEqual(treeNames(host), ["a", "a1", "b", "b1", "x1"], "all: both levels");
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"], "all: a2 misses but a21 below it matches, so it stays");
   assert.equal(filterTitle(host, "name"), "All but 1 values (top + children)");
+  api.set({ name: { exclude: ["a21"], scope: "all" } });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "b1", "x1"], "a leaf that misses just goes");
   const [, warned] = await withWarnings(() => api.set({ name: { exclude: ["a2"], scope: "leaves" } }));
   assert.match(warned[0], /bad filters.name: bad scope 'leaves'/);
   api.set({ qty: { from: 2, scope: "children" } });
@@ -6013,7 +6015,7 @@ test("tree: a plain filter dropdown filters the top level; alt-click shows the s
   dd = reopenDropdown(host, "qty").dd;
   assert.ok(scopeRow(dd).scopes, "a filter scoped off the top level opens with the row, no alt needed");
   scopeRow(dd).btn("all")._ev.click[0]();
-  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "x1"], "both levels: b and a1 go");
+  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "b", "b1", "x1"], "top + children: a1 goes; b misses but b1 matches, so b stays");
   assert.equal(filterTitle(host, "qty"), "All but 1 values (top + children)");
   scopeRow(dd).btn("roots")._ev.click[0]();
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "x1"]);
@@ -6022,6 +6024,38 @@ test("tree: a plain filter dropdown filters the top level; alt-click shows the s
   clickFilterBtn(getThs(host).find(t => t.dataset.col === "qty")); // close
   chipStrip(host).open("qty");
   assert.equal(scopeRow(host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).at(-1)).scopes, null, "the chip opens plainly too");
+});
+
+test("tree: a top + children filter keeps the way to a match and drops rows with none below", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
+  const api = host._paneEl._filters;
+  api.set({ qty: { include: ["5"], scope: "all" } });
+  assert.deepEqual(treeNames(host), ["a", "a2", "a21"], "only a21 matches: its ancestors show, every other root goes");
+  api.set({ qty: { include: ["9"], scope: "all" } });
+  assert.deepEqual(treeNames(host), ["b", "b1"]);
+  api.set({ qty: { include: ["3"], scope: "all" } });
+  assert.deepEqual(treeNames(host), ["a"], "a matches itself; its children don't and have no match below");
+  api.set({ qty: { include: ["2"], scope: "all" } });
+  assert.deepEqual(treeNames(host), ["a", "a2"], "a2 matches; a21 below it doesn't");
+  api.set({ qty: { from: 4, scope: "all" } });
+  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "b", "b1"], "ranges too");
+  host._paneEl._tree.expand(0);
+  assert.deepEqual(treeNames(host), ["a", "b"], "collapsed: the kept roots stay, their paths fold");
+  host._paneEl._tree.expand("all");
+  const sub = lastSubscribe();
+  sub.opts.onUpdate("insert", { _mkio_row: "8", name: "x11", id: "X11", parent: "X1", qty: 7 });
+  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "b", "b1", "x1", "x11"], "a live match brings its root back");
+  sub.opts.onUpdate("replace", { _mkio_row: "8", name: "x11", id: "X11", parent: "X1", qty: 1 });
+  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "b", "b1"], "and a live miss takes it away again");
+  sub.opts.onUpdate("delete", { _mkio_row: "4" });
+  assert.deepEqual(treeNames(host), ["b", "b1"], "deleting the only match under a drops a's path");
+  // A children-scoped filter still prunes first: a21 alone can't rescue a2.
+  api.set({ qty: { from: 4, scope: "all" }, name: { exclude: ["b"], scope: "children" } });
+  assert.deepEqual(treeNames(host), ["b", "b1"], "b is top-level: the children filter never judges it");
+  api.set({ qty: { from: 4, scope: "all" }, name: { exclude: ["b1"], scope: "children" } });
+  assert.deepEqual(treeNames(host), [], "b1 pruned by the children filter, so b has no match below and goes too");
+  api.set({});
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "b1", "x1", "x11"]);
 });
 
 test("tree: filterScope config is the default for new filters", async () => {

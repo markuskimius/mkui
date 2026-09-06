@@ -233,8 +233,10 @@ action = { type = "transaction", service = "orders", op = "cancel", data = { id 
 # the first level at load. Sorting orders the top level, then each group
 # of siblings. Filters apply to top-level orders (a match shows with its
 # children); alt/option-click a filter button for the scope row — Top
-# level, Children, or Top + children — and a configured filter takes
-# `scope` the same way. Ctrl/Cmd+A and copy see exactly the expanded rows.
+# level, Children (children tested, a miss hides its subtree), or Top +
+# children (every row tested, but a row stays while any row below it
+# matches) — and a configured filter takes `scope` the same way.
+# Ctrl/Cmd+A and copy see exactly the expanded rows.
 [panes.order-tree]
 title = "Order Tree"
 type = "mkio-table"

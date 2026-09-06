@@ -1020,6 +1020,32 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return s;
   }
 
+  // Whether a row shows under the filters. Top-level and children-scoped
+  // filters judge a row on its own and a miss hides its subtree
+  // (`matchesFilters`). A "top + children" filter judges every row but
+  // keeps the way to a match: a row whose own values miss still shows
+  // when any descendant matches, and a row with no match anywhere below
+  // it goes — so `subtreeOk` (rebuilt with the view whenever such a filter
+  // is active, else null) holds the post-order verdict per row.
+  let subtreeOk = null;
+  const allScopeActive = () => { if (!tree) return false; for (const f of filters.values()) if (f.scope === "all") return true; return false; };
+  const treeShown = (key) => matchesFilters(rows.get(key)) && (!subtreeOk || subtreeOk.get(key) === true);
+
+  function buildSubtreeOk() {
+    subtreeOk = new Map();
+    const walk = (key) => {
+      const row = rows.get(key);
+      // Off-scope filters prune first (with the subtree); the rest decide
+      // between the row's own values and its descendants'.
+      if (!matchesFilters(row)) { subtreeOk.set(key, false); return false; }
+      let ok = passesAllScoped(row);
+      for (const c of kids.get(key) ?? EMPTY) if (walk(c)) ok = true;
+      subtreeOk.set(key, ok);
+      return ok;
+    };
+    for (const key of kids.get(null) ?? EMPTY) walk(key);
+  }
+
   // The visible flattening of `key`'s subtree, `key` first: children of an
   // expanded row in sibling-sorted order, each pruned with its subtree when
   // a filter hides it.
@@ -1027,7 +1053,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     out.push(key);
     if (!expanded.has(key)) return out;
     for (const c of sortedKids(key)) {
-      if (!matchesFilters(rows.get(c))) continue;
+      if (!treeShown(c)) continue;
       flattenVisible(c, out);
     }
     return out;
@@ -1054,7 +1080,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       base = view.indexOf(pk);
       if (base < 0 || !expanded.has(pk)) return;
     }
-    if (!matchesFilters(rows.get(key))) return;
+    if (!treeShown(key)) return;
     const sibs = sortedKids(pk);
     let pos = base + 1;
     for (let j = sibs.indexOf(key) - 1; j >= 0; j--) {
@@ -1220,8 +1246,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (tree) {
       // Pre-order over the roots: a row shows when it passes the filters,
       // its children when it is expanded too (see "Tree rows").
+      subtreeOk = null;
+      if (allScopeActive()) buildSubtreeOk();
       for (const key of sortedKids(null)) {
-        if (matchesFilters(rows.get(key))) flattenVisible(key, view);
+        if (treeShown(key)) flattenVisible(key, view);
       }
       viewDirty = false;
       return;
@@ -1273,7 +1301,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (tree) {
       const rebuild = linkRow(row);
       bumpStats(row);
-      if (rebuild || deferView) markViewDirty();
+      // A "top + children" filter can change an ancestor's verdict: rebuild.
+      if (rebuild || deferView || allScopeActive()) markViewDirty();
       else if (!viewDirty) treeInsertIntoView(key);
       const pk = parentOf.get(key);
       if (pk != null) syncToggle(pk); // the parent may have just become one
@@ -2331,12 +2360,27 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function matchesFilters(row) {
     const root = tree ? isRootKey(row[idKey]) : true;
     for (const [col, f] of filters) {
-      // A scoped filter (tree tables) judges only roots, or only children.
-      if (tree && f.scope && f.scope !== "all" && (f.scope === "roots") !== root) continue;
-      if (f.kind === "range") { if (!inRange(row, col, f)) return false; }
-      else if (f.values.has(cellText(row, col)) === (f.mode === "exclude")) return false;
+      if (tree && f.scope) {
+        // Scoped filters (tree tables): top-level and children filters
+        // judge only their level; "top + children" ones are judged by
+        // the subtree pass (buildSubtreeOk), not here.
+        if (f.scope === "all") continue;
+        if ((f.scope === "roots") !== root) continue;
+      }
+      if (!passesFilter(row, col, f)) return false;
     }
     return true;
+  }
+
+  // The "top + children" filters alone, on the row's own values.
+  function passesAllScoped(row) {
+    for (const [col, f] of filters) if (f.scope === "all" && !passesFilter(row, col, f)) return false;
+    return true;
+  }
+
+  function passesFilter(row, col, f) {
+    if (f.kind === "range") return inRange(row, col, f);
+    return f.values.has(cellText(row, col)) !== (f.mode === "exclude");
   }
 
   // The filter type a column offers: explicit `types` first, then the
@@ -3628,7 +3672,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         b.textContent = sc === "roots" ? "Top level" : sc === "children" ? "Children" : "Top + children";
         b.title = sc === "roots" ? "Filter top-level rows; their children show with them"
           : sc === "children" ? "Filter child rows; every top-level row shows"
-          : "Filter top-level rows and their children";
+          : "Filter every row; a row stays while any row below it matches";
         b.classList.toggle("active", sc === scope);
         b.addEventListener("click", () => {
           scope = sc;
@@ -4042,7 +4086,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       // Its children re-home (orphans become roots or hide): rebuild. A
       // childless row just leaves its slot.
       const pk = parentOf.get(key);
-      if (unlinkRow(prev)) markViewDirty();
+      if (unlinkRow(prev) || allScopeActive()) markViewDirty();
       else if (vi >= 0) view.splice(vi, 1);
       if (pk != null) syncToggle(pk); // may have lost its last child
     } else if (vi >= 0) view.splice(vi, 1);
@@ -4087,8 +4131,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         if (sortKeys.some((k) => k.col === c)) sortChanged = true;
       }
     }
-    const wasVis = matchesFilters(prev);
-    const isVis = matchesFilters(row);
+    const wasVis = matchesFilters(prev) && passesAllScoped(prev);
+    const isVis = matchesFilters(row) && passesAllScoped(row);
     if (tree && (childVals(row) !== childVals(prev) || parentVals(row) !== parentVals(prev))) {
       // Its place in the tree changed: relink and rebuild (its subtree
       // moves with it; children that named the old values re-home).
