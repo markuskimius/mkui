@@ -3666,6 +3666,82 @@ test("row-unit buttons act on the rows implied by a cell selection", async () =>
   }
 });
 
+function toolbarBtn(host, i = 0) {
+  return host._ch.find(c => String(c.className).includes("mkui-table-toolbar"))._ch[i];
+}
+
+test("a button's static style map colors, weights, and caps it from the start", async () => {
+  const { host } = await createSelTable({
+    buttons: [{ label: "Cancel", style: { color: "black", background: "red", bold: true, caps: true },
+                action: { type: "action", name: "x" } }],
+  });
+  const btn = toolbarBtn(host);
+  assert.equal(btn.style.color, "black");
+  assert.equal(btn.style.fontWeight, "bold");
+  assert.equal(btn.style.textTransform, "uppercase");
+  assert.equal(btn.textContent, "Cancel", "the label is upper-cased by CSS, not rewritten");
+  assert.ok(btn.classList.contains("mkui-btn-styled"));
+  assert.equal(btn.style["--mkui-btn-bg"], "red");
+  assert.equal(btn.style.background, "", "no inline background — CSS keeps hover and press");
+  assert.ok(String(btn.className).includes("mkui-toolbar-btn"), "own classes stay");
+});
+
+test("button style rules see the selection and `enabled`, and follow both", async () => {
+  const { host } = await createSelTable({
+    buttons: [{ label: "Act", enable: { minSelected: 2 },
+                style: [{ when: "enabled && selection.rowCount > 2", background: "red", class: "hot" },
+                        { when: "enabled", background: "orange" },
+                        { italic: true }],
+                action: { type: "action", name: "x" } }],
+  });
+  const btn = toolbarBtn(host);
+  assert.equal(btn.disabled, true);
+  assert.equal(btn.style.fontStyle, "italic", "fallback rule while disabled");
+  assert.ok(!btn.classList.contains("mkui-btn-styled"));
+  const trs = dataRows(host);
+  pointerDown(trs[0], 0);                      // one row: still disabled
+  assert.equal(btn.disabled, true);
+  assert.equal(btn.style.fontStyle, "italic");
+  pointerDown(trs[1], 0, { shiftKey: true });  // two rows: enabled
+  assert.equal(btn.disabled, false);
+  assert.equal(btn.style["--mkui-btn-bg"], "orange");
+  assert.ok(btn.classList.contains("mkui-btn-styled"));
+  assert.equal(btn.style.fontStyle, "", "the earlier match replaces the fallback wholesale");
+  pointerDown(trs[2], 0, { shiftKey: true });  // three rows
+  assert.equal(btn.style["--mkui-btn-bg"], "red");
+  assert.ok(btn.classList.contains("hot"));
+  // Escape (via the edit hook) clears the selection but keeps the cursor:
+  // one implied row, below the minimum.
+  host._paneEl._editActions.clearSelection();
+  assert.equal(btn.disabled, true);
+  assert.equal(btn.style["--mkui-btn-bg"], "", "background cleared with the rule");
+  assert.ok(!btn.classList.contains("mkui-btn-styled"));
+  assert.ok(!btn.classList.contains("hot"));
+  assert.equal(btn.style.fontStyle, "italic");
+});
+
+test("a button style expression yields a map or NULL, and a bad one warns and styles nothing", async () => {
+  const warned = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warned.push(a.join(" "));
+  try {
+    const { host } = await createSelTable({
+      buttons: [
+        { label: "A", style: "IF(state.hot, {color: 'red', caps: TRUE}, NULL)", action: { type: "action", name: "x" } },
+        { label: "B", style: "UPPER(", action: { type: "action", name: "y" } },
+        { label: "C", style: "", action: { type: "action", name: "z" } },
+      ],
+    });
+    const a = toolbarBtn(host, 0), b = toolbarBtn(host, 1), c = toolbarBtn(host, 2);
+    assert.equal(a.style.color, "", "NULL styles nothing");
+    assert.equal(b.style.color, "");
+    assert.equal(c.style.color, "");
+    assert.equal(warned.filter(w => w.includes("bad styler expression in buttons[1].style")).length, 1);
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
 test("cell-unit buttons count cells and default to exactly one", async () => {
   const { host } = await createSelTable({
     buttons: [{ label: "C", unit: "cell", action: { type: "action", name: "x" } }],
@@ -4134,6 +4210,30 @@ test("styled backgrounds ride the marker class + custom property", async () => {
   assert.equal(tds[1].style["--mkui-cell-bg"], "#400");
   assert.equal(tds[1].style.background, "", "no inline background — CSS keeps precedence");
   assert.ok(!tds[0].classList.contains("mkui-cell-styled"));
+});
+
+test("a plain style map is one unconditional rule, and caps upper-cases", async () => {
+  const { host } = await createFmtTable({
+    styles: { name: { color: "teal", caps: true } },
+    rowStyle: { italic: true },
+  });
+  const tds = colCells(host, "name");
+  assert.deepEqual(tds.map(td => td.style.color), ["teal", "teal", "teal"]);
+  assert.deepEqual(tds.map(td => td.style.textTransform), ["uppercase", "uppercase", "uppercase"]);
+  assert.equal(tds[0].textContent, "row-0", "caps is presentation only — the text is untouched");
+  for (const tr of dataRows(host)) assert.equal(tr.style.fontStyle, "italic");
+});
+
+test("caps clears with the rest of a style when the rule stops matching", async () => {
+  const { host } = await createFmtTable({
+    columns: ["name", "value"],
+    styles: { name: [{ when: "row.value > 1", caps: true, bold: true }] },
+  });
+  const td = colCells(host, "name")[2];
+  assert.equal(td.style.textTransform, "uppercase");
+  lastSubscribe().opts.onUpdate("replace", { _mkio_row: "2", name: "row-2", value: 0 });
+  assert.equal(td.style.textTransform, "");
+  assert.equal(td.style.fontWeight, "");
 });
 
 test("row rules condition on multiple columns via when", async () => {

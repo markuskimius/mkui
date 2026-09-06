@@ -240,6 +240,16 @@ test("conditional-style backgrounds ride custom properties and yield to selectio
     /color-mix.*--mkui-row-bg/);
 });
 
+test("styled toolbar buttons keep hover and press as tints on the configured color", () => {
+  // A button `style` background is never inline: it rides --mkui-btn-bg
+  // on a marker class so :hover and :active can still mix it.
+  assert.equal(declaration(".mkui-btn.mkui-btn-styled", "background"), "var(--mkui-btn-bg)");
+  assert.match(declaration(".mkui-btn.mkui-btn-styled:hover", "background"), /color-mix.*--mkui-btn-bg/);
+  assert.match(declaration(".mkui-btn.mkui-btn-styled:active", "background"), /color-mix.*--mkui-btn-bg/);
+  assert.ok(css.indexOf(".mkui-btn:hover") < css.indexOf(".mkui-btn.mkui-btn-styled:hover"),
+    "the styled hover must come after the plain one to win at equal specificity");
+});
+
 test("find matches tint by class and yield to selection", () => {
   // Like the styled-cell background: a match tint that came after the
   // selection rules would paint over a selected match.

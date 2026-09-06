@@ -196,6 +196,15 @@ action = { type = "transaction", service = "orders", op = "fill", data = { id = 
 [[panes.all-orders.buttons]]
 label = "Cancel"
 enable = { connected = true, when = "LEN(rows) > 0 && ALL(rows, r -> r.status == 'pending')" }
+# `style` takes the same keys as a cell styler: a plain map, or rules whose
+# conditions see the button's scope plus `enabled` — red only once armed.
+# Rules don't merge, so keep what sets the button's size (bold, caps) the
+# same in every branch and let only the colors follow the state; otherwise
+# the label changes width as the button arms and its neighbours shift.
+style = [
+  { when = "enabled", background = "#c62828", color = "white", bold = true, caps = true },
+  { bold = true, caps = true },
+]
 action = { type = "transaction", service = "orders", op = "cancel", data = { id = "${row.id}" } }
 
 [panes.pending]
@@ -214,14 +223,22 @@ sort = ["symbol", "-qty"]
 # `columns` later; with it, the set is exactly this until someone changes it.
 visible = ["symbol", "side", "qty", "price"]
 
+# Button styling. A plain `style` map applies from the start, whatever the
+# button's state — the same keys as a cell styler (`color`, `background`,
+# `bold`, `italic`, `underline`, `strike`, `caps`, `class`, `css`); the
+# background keeps hover and press as tints of the configured color, and a
+# disabled button fades as usual. Compare the All Orders pane, whose Cancel
+# uses a rule array so the color arrives only once the button is armed.
 [[panes.pending.buttons]]
 label = "Fill"
 enable = { connected = true, minSelected = 1 }
+style = { background = "#2e7d32", color = "white", bold = true }
 action = { type = "transaction", service = "orders", op = "fill", data = { id = "${row.id}" } }
 
 [[panes.pending.buttons]]
 label = "Cancel"
 enable = { connected = true, minSelected = 1 }
+style = { background = "red", color = "black", bold = true, caps = true }
 action = { type = "transaction", service = "orders", op = "cancel", data = { id = "${row.id}" } }
 
 # Tree rows: parent orders with their child orders nested under them (and

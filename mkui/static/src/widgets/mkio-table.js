@@ -227,7 +227,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       btn.disabled = true;
       btn.addEventListener("click", () => handleButtonClick(btnSpec));
       toolbar.appendChild(btn);
-      buttonEls.push({ el: btn, spec: btnSpec });
+      // `style = <styler>` — compiled once the styler helpers exist
+      // (below); applied with the gate in updateButtonStates.
+      buttonEls.push({ el: btn, spec: btnSpec, styler: undefined });
     }
   }
   // Buttons keep the first slots (tests and users find them there); the
@@ -573,13 +575,14 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // `styles = { col = <styler> }` styles a cell; `rowStyle = <styler>` styles
   // the whole row. A styler is a rule array evaluated first-match-wins —
   // each rule is `{ when = "<expr>", ...style keys }`, and a rule with no
-  // `when` always matches (fallback) — or a single expression string that
-  // yields a style map (or NULL). Style keys: color, background, bold,
-  // italic, underline, strike, class (own CSS classes), css (extra inline
-  // properties); string values may be ${...} templates. Cell expressions see
-  // the cell scope with `value` = cellValue (the derived value); row
-  // expressions see the row scope.
-  const STYLE_KEYS = ["color", "background", "bold", "italic", "underline", "strike", "class", "css"];
+  // `when` always matches (fallback) — a plain style map (one unconditional
+  // rule), or a single expression string that yields a style map (or NULL).
+  // Style keys: color, background, bold, italic, underline, strike, caps
+  // (upper-case), class (own CSS classes), css (extra inline properties);
+  // string values may be ${...} templates. Cell expressions see the cell
+  // scope with `value` = cellValue (the derived value); row expressions see
+  // the row scope; button stylers the button scope (see updateButtonStates).
+  const STYLE_KEYS = ["color", "background", "bold", "italic", "underline", "strike", "caps", "class", "css"];
 
   function compileRules(rules, label) {
     const compiled = rules.map((rule, i) => {
@@ -640,6 +643,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function compileStyler(spec_, label) {
     if (Array.isArray(spec_)) return compileRules(spec_, label);
+    if (spec_ && typeof spec_ === "object") return compileRules([spec_], label);
     let c;
     try { c = compileExpr(String(spec_)); }
     catch (e) {
@@ -677,6 +681,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       el.style.fontWeight = "";
       el.style.fontStyle = "";
       el.style.textDecoration = "";
+      el.style.textTransform = "";
       el.style.removeProperty(bgProp);
       el.classList.remove(bgClass);
       if (prev.class) el.classList.remove(...String(prev.class).split(/\s+/));
@@ -690,6 +695,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const deco = [style.underline && "underline", style.strike && "line-through"]
       .filter(Boolean).join(" ");
     if (deco) el.style.textDecoration = deco;
+    if (style.caps) el.style.textTransform = "uppercase";
     if (style.background) {
       el.style.setProperty(bgProp, style.background);
       el.classList.add(bgClass);
@@ -2598,7 +2604,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function updateButtonStates() {
     const rowCount = effectiveRowCount();
     let matRows = null; // materialized lazily, only for `when`
-    for (const { el, spec: bs } of buttonEls) {
+    buttonEls.forEach((b, i) => {
+      const { el, spec: bs } = b;
       const en = bs.enable ?? {};
       const unit = buttonUnit(bs);
       const cellUnit = unit === "cell" || unit === "cells";
@@ -2617,19 +2624,30 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const max = en.maxSelected ?? (single ? 1 : null);
       if (ok && min != null && count < min) ok = false;
       if (ok && max != null && count > max) ok = false;
-      // `when = "<expr>"` — scope: rows (the rows the selection implies),
-      // row (the first of them or NULL), cells, selection, connected, state.
-      if (ok && en.when != null) {
+      // Button scope — for `enable.when` and `style` rules: rows (the rows
+      // the selection implies), row (the first of them or NULL), cells,
+      // selection, connected, state. Built lazily; the rows once per pass.
+      let scope = null;
+      const buttonScope = () => {
+        if (scope) return scope;
         matRows ??= getSelectedRows();
         const cells = cellUnit ? getSelectedCells() : [];
-        ok = expr.truthy(evalExpr(String(en.when), {
+        return scope = {
           rows: matRows, row: matRows[0] ?? null, cells,
           selection: { count, rowCount: matRows.length, cellCount: cellUnit ? cells.length : undefined, unit },
           connected: mkioConnected, state: stateRoot(),
-        }));
-      }
+        };
+      };
+      if (ok && en.when != null) ok = expr.truthy(evalExpr(String(en.when), buttonScope()));
       el.disabled = !ok;
-    }
+      if (b.styler === undefined)
+        b.styler = bs.style == null || bs.style === "" ? null : compileStyler(bs.style, `buttons[${i}].style`);
+      if (b.styler) {
+        // Rules see `enabled` too, so a style can follow the gate.
+        const sc = buttonScope();
+        applyStyle(el, b.styler(new expr.Scope({ ...sc, enabled: ok }, null, false)), "--mkui-btn-bg", "mkui-btn-styled");
+      }
+    });
   }
 
   async function handleButtonClick(btnSpec) {

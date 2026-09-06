@@ -1163,6 +1163,15 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   opacity: 0.4;
   cursor: default;
 }
+/* A button `style` background rides a custom property + marker class, so
+   hover and press still register as a tint on the configured color. */
+.mkui-btn.mkui-btn-styled { background: var(--mkui-btn-bg); }
+.mkui-btn.mkui-btn-styled:hover {
+  background: color-mix(in srgb, var(--mkui-btn-bg) 85%, var(--mkui-fg));
+}
+.mkui-btn.mkui-btn-styled:active {
+  background: color-mix(in srgb, var(--mkui-btn-bg) 70%, var(--mkui-fg));
+}
 
 /* Sort/filter chips: one wrapping cluster pushed to the bar's right edge.
    Flex line-breaking sizes the cluster at its max-content width, so it
