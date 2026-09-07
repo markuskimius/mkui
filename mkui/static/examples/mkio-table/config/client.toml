@@ -131,9 +131,9 @@ select = { state = "selected_order" }
 # `symbol` as "symbol". The Child Orders pane listens for "order_id" on its
 # `parent_id` column and the Pending pane for "symbol", so selecting
 # orders here filters both (several rows: all their values). The chips on
-# the toolbar show the links; click one to pause that direction. Each
-# header dropdown has "Broadcast as…" / "Listen for…" to set them up by
-# hand, and a saved layout keeps them.
+# the toolbar show the links; click one to pause that direction.
+# Alt/option-click a header's filter button for "Broadcast as…" /
+# "Listen for…" to set them up by hand; a saved layout keeps them.
 link.broadcast = { order_id = "id", symbol = "symbol" }
 # Conditional styling, config-only: rules are evaluated first-match-wins;
 # `value` is the cell's value, row fields are in scope by name, and string

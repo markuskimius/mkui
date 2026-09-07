@@ -3791,7 +3791,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       filterBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         if (dropdownCol === c) { closeDropdown(); return; }
-        openFilterDropdown(c, th, { advanced: e.altKey }); // alt/option: scope row (tree tables)
+        openFilterDropdown(c, th, { advanced: e.altKey }); // alt/option: link ops, scope row (tree tables)
       });
 
       th.addEventListener("pointerdown", (e) => {
@@ -4058,8 +4058,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     th.classList.toggle("mkui-th-listen", l.length > 0);
   }
 
-  // The header dropdown's link ops: "Broadcast as…" / "Listen for…", or
-  // the name the column already has in that direction. A click swaps the
+  // The header dropdown's link ops (alt/option-click): "Broadcast as…" /
+  // "Listen for…", or the name the column already has in that direction. A click swaps the
   // op for an inline name input (the column's name is the default, and
   // the listen input offers every name currently broadcast); Enter or blur
   // commits, Escape cancels, an emptied name removes the link.
@@ -4482,7 +4482,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       hideOp.addEventListener("click", () => hideColumn(col)); // closes the dropdown
     }
     colOps.appendChild(hideOp);
-    if (hub) colOps.append(makeLinkOp("broadcast", col), makeLinkOp("listen", col));
+    // Link ops are advanced: alt/option-click the button (or a chip) to
+    // see them, like the tree scope row. An existing link stays visible
+    // on the toolbar chips and the header mark either way.
+    if (hub && advanced) colOps.append(makeLinkOp("broadcast", col), makeLinkOp("listen", col));
     dd.appendChild(colOps);
 
     // The scope row: tabs, one filter each. Switching reopens the dropdown

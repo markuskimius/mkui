@@ -3019,8 +3019,8 @@ function clickHeader(th, { shift = false, ctrl = false, meta = false, alt = fals
                     target: { closest: () => null } });
 }
 
-function clickFilterBtn(th) {
-  th.querySelector(".mkui-filter-btn")._ev.click[0]({ stopPropagation() {} });
+function clickFilterBtn(th, { alt = false } = {}) {
+  th.querySelector(".mkui-filter-btn")._ev.click[0]({ stopPropagation() {}, altKey: alt });
 }
 
 // Describes what the header cell's single icon slot currently shows.
@@ -4575,9 +4575,9 @@ function byClass(el, cls) {
   walk(el);
   return out;
 }
-function openDropdown(host, col) {
+function openDropdown(host, col, opts = {}) {
   const th = getThs(host).find(t => t.dataset.col === col);
-  clickFilterBtn(th);
+  clickFilterBtn(th, opts);
   const dd = host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).at(-1);
   const modes = dd._ch.find(c => c.className === "mkui-filter-modes");
   const range = dd._ch.find(c => c.className === "mkui-filter-range");
@@ -7084,8 +7084,8 @@ function linkChips(host) {
   };
 }
 const linkMark = (host, col) => getThs(host).find(t => t.dataset.col === col).querySelector(".mkui-th-linkmark");
-function linkOps(host, col) {
-  const { dd } = openDropdown(host, col);
+function linkOps(host, col, opts = { alt: true }) {
+  const { dd } = openDropdown(host, col, opts);
   const ops = byClass(dd, "mkui-filter-actions mkui-filter-colops")[0];
   const op = (dir) => ops._ch.find(c => String(c.className).includes(`mkui-link-op-${dir}`));
   return { dd, op, text: (dir) => byClass(op(dir), "mkui-link-op-text")[0]?.textContent ?? null };
@@ -7355,11 +7355,15 @@ test("links: linked columns wear a header mark, dimmed while the direction is of
   assert.equal(linkMark(host, "id"), null, "gone with the link");
 });
 
-test("links: the header dropdown's ops name a column's links and take a name inline", async () => {
+test("links: the header dropdown's ops appear on alt/option-click only, name a column's links, and take a name inline", async () => {
   const hub = new LinkHub();
   hub.publish("elsewhere", { order: ["1"] });
   const { host } = await createTable({ columns: LINK_COLS, link: { broadcast: { order: "id" } } }, { hub, id: "t" });
-  let ops = linkOps(host, "id");
+  let ops = linkOps(host, "id", { alt: false });
+  assert.equal(ops.op("broadcast"), undefined, "a plain click shows no link ops, even on a linked column");
+  assert.equal(ops.op("listen"), undefined);
+  clickFilterBtn(ops.dd && getThs(host).find(t => t.dataset.col === "id")); // toggle the plain dropdown closed
+  ops = linkOps(host, "id");
   assert.equal(ops.text("broadcast"), "Broadcasting as order");
   assert.equal(ops.text("listen"), "Listen for…");
   ops.op("listen")._ev.click[0]();

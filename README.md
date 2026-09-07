@@ -467,10 +467,12 @@ link.broadcasting = false       # configured, but paused until turned on
   chip to pause or resume that direction (paused is dimmed; pausing
   listening releases the linked filters, pausing broadcasting retracts,
   resuming re-announces the current selection); × removes it (two clicks
-  when it holds several names); the group's icon removes every link. Each
-  header dropdown has *Broadcast as…* and *Listen for…* under *Hide
-  column*: click for an inline name (the column's name by default, and
-  the listen input offers every name currently broadcast), Enter or blur
+  when it holds several names); the group's icon removes every link. Alt/option-click a
+  header's filter button (or a filter chip) and its dropdown adds
+  *Broadcast as…* and *Listen for…* under *Hide column* — an advanced
+  row, like the tree scope tabs, so the everyday dropdown stays as it
+  was: click for an inline name (the column's name by default, and the
+  listen input offers every name currently broadcast), Enter or blur
   commits, an emptied name removes the link, Escape cancels. Linked
   columns wear the direction icons ahead of their label.
 - **Programmatic.** `workspace.setPaneLink(id, link, { merge })` /
