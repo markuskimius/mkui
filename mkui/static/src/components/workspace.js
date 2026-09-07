@@ -153,8 +153,8 @@ class MkuiWorkspace extends HTMLElement {
     return fn ? fn() !== false : false;
   }
 
-  // A pane's view hook (`_filters`, `_sort`, or `_columns`, exposed by
-  // mkio-table). By
+  // A pane's view hook (`_filters`, `_sort`, `_columns`, or `_link`,
+  // exposed by mkio-table). By
   // id, a pane that was never shown is built first when `build` is set,
   // so a setter can run ahead of opening it; with no id, the focused
   // frame's active pane is the target.
@@ -208,6 +208,22 @@ class MkuiWorkspace extends HTMLElement {
   // The list back, null when every column shows (or without a columns hook).
   getPaneColumns(paneId) {
     return this._paneHook(paneId, "_columns", false)?.get() ?? null;
+  }
+
+  // Table links: the shape the pane's `link` key takes — `{ broadcast,
+  // listen, broadcasting, listening }`; `merge` overlays the keys given
+  // (a null name entry drops it), else the whole configuration is
+  // replaced (null clears). Returns whether a pane took it.
+  setPaneLink(paneId, link, opts = {}) {
+    const hook = this._paneHook(paneId, "_link", true);
+    if (!hook) return false;
+    hook.set(link, opts);
+    return true;
+  }
+
+  // The same shape back, or null without a link hook.
+  getPaneLink(paneId) {
+    return this._paneHook(paneId, "_link", false)?.get() ?? null;
   }
 
   // Tree tables: open rows down to `depth` (a number, or "all"; 0 closes
@@ -436,7 +452,8 @@ class MkuiWorkspace extends HTMLElement {
   //
   // A layout is the dockable frames (z-order, fractional rects, trees —
   // so the active tabs come along) plus the view state of every pane open
-  // in one, read through the `_filters` / `_sort` / `_columns` hooks. Modal
+  // in one, read through the `_filters` / `_sort` / `_columns` / `_link`
+  // hooks. Modal
   // dialogs and the login frame (noDock) are never part of one. See
   // lib/layouts.js for the format; src/layouts.js for the menu and stores.
 
@@ -472,6 +489,7 @@ class MkuiWorkspace extends HTMLElement {
       if (el._filters) st.filters = el._filters.get();
       if (el._sort) st.sort = el._sort.get();
       if (el._columns) st.visible = el._columns.get();
+      if (el._link) st.link = el._link.get();
       if (Object.keys(st).length) panes[id] = structuredClone(st);
     }
     const focused = frames.some(f => f.id === this._focusedId) ? this._focusedId : null;
@@ -540,12 +558,13 @@ class MkuiWorkspace extends HTMLElement {
       if ("filters" in st) el._filters?.set(st.filters);
       if ("sort" in st) el._sort?.set(st.sort);
       if ("visible" in st) el._columns?.set(st.visible);
+      if ("link" in st) el._link?.set(st.link);
     };
     for (const [id, st] of Object.entries(clean.panes)) {
       const el = this._paneEls.get(id);
       if (!el) continue;
       const gen = el._viewGen = (el._viewGen ?? 0) + 1;
-      if (el._filters || el._sort || el._columns || !el._ready) applyView(el, st);
+      if (el._filters || el._sort || el._columns || el._link || !el._ready) applyView(el, st);
       else el._ready.then(() => { if (el._viewGen === gen) applyView(el, st); });
     }
 

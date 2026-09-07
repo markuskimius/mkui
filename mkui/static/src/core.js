@@ -4,10 +4,11 @@
 // The state store is intentionally tiny: it's a Proxy over a plain object,
 // supports dot-path get/set, and notifies subscribers per path.
 
-export const VERSION = "0.2.16";
+export const VERSION = "0.2.17";
 export function version() { return VERSION; }
 
 import { registerExprFunction, registerExprLibrary, registerExprType, expr } from "./lib/expressions.js";
+import { LinkHub } from "./lib/links.js";
 
 const widgetTypes = new Map();
 const paneTypes = new Map();
@@ -16,7 +17,7 @@ const paneTypes = new Map();
 // extension surface for derived values, styling rules, enable/showWhen
 // conditions, and ${...} templates. Applications add functions with
 // registerExprFunction(name, fn, meta) and call them from config.
-export { registerExprFunction, registerExprLibrary, registerExprType, expr };
+export { registerExprFunction, registerExprLibrary, registerExprType, expr, LinkHub };
 
 export function registerWidget(name, factory) {
   widgetTypes.set(name, factory);
@@ -78,6 +79,9 @@ export class App {
   constructor(config = {}) {
     this.config = config;
     this.state = new State(config.state ?? {});
+    // Table links (lib/links.js): broadcasting tables publish here,
+    // listening tables follow; values mirror into state at `link.<name>`.
+    this.links = new LinkHub(() => this.state);
     this.actions = new Map();
     this._listeners = new Set();
     this._element = null;

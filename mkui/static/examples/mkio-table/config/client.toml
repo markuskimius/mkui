@@ -127,6 +127,14 @@ groups = [
 ]
 # Mirror the current row into app state; the order-detail pane follows it.
 select = { state = "selected_order" }
+# Table linking: broadcast the selected rows' `id` as "order_id" and their
+# `symbol` as "symbol". The Child Orders pane listens for "order_id" on its
+# `parent_id` column and the Pending pane for "symbol", so selecting
+# orders here filters both (several rows: all their values). The chips on
+# the toolbar show the links; click one to pause that direction. Each
+# header dropdown has "Broadcast as…" / "Listen for…" to set them up by
+# hand, and a saved layout keeps them.
+link.broadcast = { order_id = "id", symbol = "symbol" }
 # Conditional styling, config-only: rules are evaluated first-match-wins;
 # `value` is the cell's value, row fields are in scope by name, and string
 # values may be ${...} templates. A rule without `when` is the fallback.
@@ -222,6 +230,10 @@ sort = ["symbol", "-qty"]
 # away). Without `visible`, every column shows — including any added to
 # `columns` later; with it, the set is exactly this until someone changes it.
 visible = ["symbol", "side", "qty", "price"]
+# Follow All Orders: whatever symbol is selected there filters this table
+# (the link's filter shows as a tinted chip; clearing the selection there
+# lets every symbol back). Click the Listen chip to stop following.
+link.listen = { symbol = "symbol" }
 
 # Button styling. A plain `style` map applies from the start, whatever the
 # button's state — the same keys as a cell styler (`color`, `background`,
@@ -328,6 +340,20 @@ title = "Order Detail"
 type = "order-detail"
 follow = "selected_order"
 
+# The children of whatever is selected in All Orders: the "order_id" it
+# broadcasts (the parent's `id`) filters this table's `parent_id`. A pane
+# may listen and broadcast at once — selecting a child here sends its own
+# id on under "child_id" for a table further down a chain.
+[panes.child-orders]
+title = "Child Orders"
+type = "mkio-table"
+service = "all_orders"
+protocol = "query"
+columns = ["id", "parent_id", "side", "symbol", "qty", "price", "status"]
+labels = { parent_id = "Parent" }
+link.listen = { order_id = "parent_id" }
+link.broadcast = { child_id = "id" }
+
 [panes.last-trade]
 title = "Last Trade"
 type = "mkio-table"
@@ -353,10 +379,23 @@ w = 0.30
 h = 0.55
 layout = { type = "tabs", active = 0, children = ["last-trade", "order-detail"] }
 
+[[frames]]
+id = "children"
+x = 0.68
+y = 0.60
+w = 0.30
+h = 0.37
+layout = { type = "tabs", active = 0, children = ["child-orders"] }
+
 # ─── mkio connection ──────────────────────────────────────────────────
 
 [mkio]
 url = "ws://localhost:8080/ws"
+# The control channel: a Python process embedding mkio can push actions
+# (table.link, table.filter, pane.show, …) to every open browser through
+# this service — see control.py beside this config. `mkui serve` installs
+# it too, so the subscription always succeeds.
+control = "_mkui"
 
 [mkio.expect]
 name = "order-book"

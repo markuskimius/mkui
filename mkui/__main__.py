@@ -333,6 +333,12 @@ def cmd_serve(args):
         webbrowser.open(url)
 
     app = create_app(config)
+    # The control channel (mkui/control.py): the browser subscribes to it
+    # when the client config names it (`mkio.control = "_mkui"`); pushing
+    # through it needs Python in this process, so under `mkui serve` it
+    # only keeps that subscription from failing.
+    from mkui.control import install
+    install(app)
     app.run()
 
 

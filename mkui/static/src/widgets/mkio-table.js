@@ -1727,6 +1727,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // the cursor's row, else the first selected row in view order, else null —
   // so clearing the selection publishes null rather than a stale row.
   function publishSelection() {
+    broadcastSelection();
     if (!selectStatePath) return;
     let key = focusCell?.key ?? null;
     if (key == null && selectedKeys.size) {
@@ -2870,8 +2871,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   // The same summary the header tooltip and the toolbar chip show.
   function describeFilter(f) {
-    const s = f.kind === "range" ? describeRange(f)
+    let s = f.kind === "range" ? describeRange(f)
       : f.mode === "exclude" ? `All but ${f.values.size} values` : `${f.values.size} values`;
+    if (f.link) s += ` (linked: ${f.link})`;
     if (!tree || !f.scope || f.scope === "roots") return s;
     return `${s} (${f.scope === "children" ? "child" : "branch"})`;
   }
@@ -3185,7 +3187,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function loadFilterSpecs(map, merge = false) {
-    if (!merge) filters.clear();
+    if (!merge) {
+      // Linked filters ride with their link, not with the filter set: only
+      // an entry naming their column replaces them.
+      for (const [k, f] of [...filters]) if (!f.link) filters.delete(k);
+      linkStash.clear();
+    }
     if (map == null) return;
     if (typeof map !== "object" || Array.isArray(map)) {
       console.warn("[mkio-table] filters must map column names to filters");
@@ -3194,7 +3201,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     for (const [col, s] of Object.entries(map)) {
       try {
         const fs = filtersFromSpec(col, s);
-        for (const f of colFilters(col)) filters.delete(fkey(col, f.scope)); // an entry replaces the column's filters
+        for (const f of colFilters(col)) { filters.delete(fkey(col, f.scope)); dropLinkStash(fkey(col, f.scope)); } // an entry replaces the column's filters
         for (const f of fs) filters.set(fkey(col, f.scope), f);
       } catch (e) {
         console.warn(`[mkio-table] bad filters.${col}: ${e.message}`);
@@ -3213,6 +3220,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function getFilters() {
     const out = {};
     for (const f of filters.values()) {
+      if (f.link) continue; // a link's filter belongs to the link
       const spec = filterToSpec(f);
       if (!(f.col in out)) out[f.col] = spec;
       else if (Array.isArray(out[f.col])) out[f.col].push(spec);
@@ -3220,6 +3228,224 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     return out;
   }
+
+  /* ── Table links ──────────────────────────────────────────────────── */
+
+  // Linking couples tables through named values (lib/links.js): one table
+  // broadcasts its selection under names, another filters by them.
+  //   link = { broadcast = { order_id = "id" },
+  //            listen = { order_id = "parent_id" | { column, scope } },
+  //            broadcasting = true, listening = true }
+  // in the pane spec; the same shape drives `paneEl._link.set(spec, {
+  // merge })` / `.get()`, `workspace.setPaneLink`, the `table.link`
+  // action, and saved layouts (the configuration travels, never the
+  // momentary filter it produces).
+  //
+  // Broadcast: whenever the selection changes — or a row in it is replaced
+  // live — the rows the selection implies (what a row-unit button gets)
+  // yield, per name, the distinct text values of its column in view order;
+  // nothing selected sends null. The hub dedupes. Pane close retracts;
+  // broadcasting off retracts, on re-announces.
+  //
+  // Listen: a delivery under a listened name becomes an include filter on
+  // the mapped column, marked `link: name` in the filters map. It
+  // displaces the column's own filter (stashed, restored when the link
+  // clears), is replaced in place by the next value, and stays out of
+  // getFilters(). A user edit of that column takes the marker off — the
+  // filter is theirs until the next broadcast re-links it. A table never
+  // follows its own broadcasts, and listening off releases every linked
+  // filter while the configuration stays.
+  const hub = app.links ?? null;
+  let linkSource = null; // the pane's id, set once the pane element is known
+  const link = { broadcast: {}, listen: {}, broadcasting: true, listening: true };
+  const linkStash = new Map(); // filter key -> the filter a linked one displaced
+  const linkSubs = new Map();  // name -> hub unsubscribe
+
+  function linkFromSpec(s) {
+    const out = { broadcast: {}, listen: {}, broadcasting: true, listening: true };
+    if (s == null || s === "") return out;
+    if (typeof s !== "object" || Array.isArray(s)) throw new Error("expected { broadcast, listen, broadcasting, listening }");
+    const isMap = (v) => v && typeof v === "object" && !Array.isArray(v);
+    if (s.broadcast != null && s.broadcast !== "") {
+      if (!isMap(s.broadcast)) throw new Error("broadcast must map names to column names");
+      for (const [name, col] of Object.entries(s.broadcast)) {
+        if (col == null || col === "") continue; // a null entry removes under merge, is nothing otherwise
+        if (typeof col !== "string") throw new Error(`broadcast.${name}: expected a column name`);
+        out.broadcast[name] = col;
+      }
+    }
+    if (s.listen != null && s.listen !== "") {
+      if (!isMap(s.listen)) throw new Error("listen must map names to column names");
+      for (const [name, v] of Object.entries(s.listen)) {
+        if (v == null || v === "") continue;
+        let column, scope = null;
+        if (typeof v === "string") column = v;
+        else if (isMap(v) && typeof v.column === "string" && v.column) { column = v.column; scope = v.scope ?? null; }
+        else throw new Error(`listen.${name}: expected a column name or { column, scope }`);
+        if (scope != null && !TREE_SCOPES.includes(scope)) throw new Error(`listen.${name}: bad scope '${scope}': use roots, children, or all`);
+        out.listen[name] = scope != null ? { column, scope } : { column };
+      }
+    }
+    for (const flag of ["broadcasting", "listening"]) {
+      if (s[flag] == null || s[flag] === "") continue;
+      if (typeof s[flag] !== "boolean") throw new Error(`${flag} must be true or false`);
+      out[flag] = s[flag];
+    }
+    return out;
+  }
+
+  // Set the link configuration: replace it, or under `merge` overlay the
+  // keys given — a null entry under `broadcast` / `listen` drops that
+  // name. A bad spec warns `bad link` and changes nothing.
+  function setLink(spec, { merge = false } = {}) {
+    let next;
+    try {
+      const parsed = linkFromSpec(spec);
+      if (!merge) next = parsed;
+      else {
+        next = { broadcast: { ...link.broadcast }, listen: { ...link.listen },
+                 broadcasting: link.broadcasting, listening: link.listening };
+        const s = spec && typeof spec === "object" ? spec : {};
+        for (const dir of ["broadcast", "listen"]) {
+          if (!s[dir] || typeof s[dir] !== "object") continue;
+          for (const [name, v] of Object.entries(s[dir])) {
+            if (v == null || v === "") delete next[dir][name];
+            else next[dir][name] = parsed[dir][name];
+          }
+        }
+        for (const flag of ["broadcasting", "listening"])
+          if (typeof s[flag] === "boolean") next[flag] = s[flag];
+      }
+    } catch (e) {
+      console.warn(`[mkio-table] bad link: ${e.message}`);
+      return;
+    }
+    applyLinkConfig(next);
+  }
+
+  function getLink() {
+    const listen = {};
+    for (const [n, e] of Object.entries(link.listen)) listen[n] = e.scope ? { column: e.column, scope: e.scope } : e.column;
+    return { broadcast: { ...link.broadcast }, listen, broadcasting: link.broadcasting, listening: link.listening };
+  }
+
+  const sameEntry = (a, b) => a && b && a.column === b.column && (a.scope ?? null) === (b.scope ?? null);
+
+  function applyLinkConfig(next) {
+    // Names no longer broadcast (or a direction turned off) are retracted
+    // so their listeners release; the hub ignores a retraction of a name
+    // this table doesn't hold.
+    const retract = {};
+    for (const n of Object.keys(link.broadcast))
+      if (!(n in next.broadcast) || !next.broadcasting) retract[n] = null;
+    // A name no longer listened for, or remapped, releases its filter under
+    // the old mapping before the new one is followed.
+    let changed = false;
+    for (const n of Object.keys(link.listen))
+      if (!(n in next.listen) || !sameEntry(link.listen[n], next.listen[n]))
+        if (putLinkFilter(n, null)) changed = true;
+    for (const [n, off] of linkSubs) if (!(n in next.listen)) { off(); linkSubs.delete(n); }
+    link.broadcast = next.broadcast;
+    link.listen = next.listen;
+    link.broadcasting = next.broadcasting;
+    link.listening = next.listening;
+    subscribeLinks();
+    if (hub && linkSource != null && Object.keys(retract).length) hub.publish(linkSource, retract);
+    if (refreshLinkFilters()) changed = true;
+    if (changed) linkFiltersChanged(); else updateHeaderState(); // chips and header marks follow the config
+    broadcastSelection();
+  }
+
+  function subscribeLinks() {
+    if (!hub) return;
+    for (const n of Object.keys(link.listen))
+      if (!linkSubs.has(n)) linkSubs.set(n, hub.subscribe(n, onLinkDelivery));
+  }
+
+  function unsubscribeLinks() {
+    for (const off of linkSubs.values()) off();
+    linkSubs.clear();
+  }
+
+  function onLinkDelivery(values, source, name) {
+    if (source === linkSource || !link.listening || closed) return;
+    if (putLinkFilter(name, values)) linkFiltersChanged();
+  }
+
+  // Set (a value list) or clear (null) the linked filter of a listened
+  // name. Returns whether the filters map changed.
+  function putLinkFilter(name, values) {
+    const e = link.listen[name];
+    if (!e) return false;
+    const key = fkey(e.column, e.scope);
+    const cur = filters.get(key);
+    if (values == null) {
+      if (!cur || cur.link !== name) return false;
+      const stash = linkStash.get(key);
+      linkStash.delete(key);
+      if (stash) filters.set(key, stash); // in place: the chip keeps its slot
+      else filters.delete(key);
+      return true;
+    }
+    if (cur && !cur.link) linkStash.set(key, cur);
+    else if (cur && cur.link === name && cur.values.size === values.length && values.every((v) => cur.values.has(v))) return false;
+    const f = { kind: "values", mode: "include", values: new Set(values), col: e.column, link: name };
+    if (tree) f.scope = e.scope ?? tree.filterScope;
+    filters.set(key, f);
+    return true;
+  }
+
+  // Catch up with what the hub holds for every listened name (a listener
+  // opened after the selection was made) — or release everything while
+  // listening is off. Returns whether the filters map changed.
+  function refreshLinkFilters() {
+    let changed = false;
+    for (const name of Object.keys(link.listen)) {
+      const cur = hub && link.listening && !closed ? hub.current(name) : null;
+      const values = cur && cur.source !== linkSource ? cur.values : null;
+      if (putLinkFilter(name, values)) changed = true;
+    }
+    return changed;
+  }
+
+  // After the filters map changed under a link: same follow-through as
+  // setFilters. A dropdown open on the column would show stale state.
+  function linkFiltersChanged() {
+    if (dropdownCol != null) closeDropdown();
+    updateHeaderState();
+    applyVisibility();
+    syncPresetTimer();
+  }
+
+  // The user took a column's filter over (an edit, a clear): the link's
+  // stash for it is void — nothing should come back when the link clears.
+  function dropLinkStash(key) { linkStash.delete(key); }
+
+  // Publish the selection under every broadcast name. Runs on every
+  // selection change (publishSelection) and a live replace of a selected
+  // row; the hub drops repeats, so this is safe to call freely.
+  function broadcastSelection() {
+    if (!hub || linkSource == null) return;
+    const names = Object.keys(link.broadcast);
+    if (!names.length) return;
+    const map = {};
+    const sel = link.broadcasting && !closed ? getSelectedRows() : [];
+    for (const n of names) {
+      if (!sel.length) { map[n] = null; continue; }
+      const col = link.broadcast[n];
+      const seen = new Set(), vals = [];
+      for (const row of sel) {
+        const v = cellText(row, col);
+        if (!seen.has(v)) { seen.add(v); vals.push(v); }
+      }
+      map[n] = vals;
+    }
+    hub.publish(linkSource, map);
+  }
+
+  const hasBroadcast = () => Object.keys(link.broadcast).length > 0;
+  const linkNamesFor = (dir, col) =>
+    Object.keys(link[dir]).filter((n) => (dir === "broadcast" ? link.broadcast[n] : link.listen[n].column) === col);
 
   function applyVisibility() {
     markViewDirty();
@@ -3622,6 +3848,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const fs = colFilters(col);
       btn.classList.toggle("active", fs.length > 0);
       btn.title = fs.map(describeFilter).join("; ");
+      btn.classList.toggle("mkui-filter-linked", fs.some((f) => f.link));
+      updateLinkMark(th, col);
     }
     updateColumnsBtn();
     renderChips();
@@ -3655,7 +3883,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // nothing is active.
   // Drop filters by map key (a column, or column + scope on a tree).
   function clearFilters(keys) {
-    for (const k of keys) filters.delete(k);
+    for (const k of keys) { filters.delete(k); dropLinkStash(k); }
     if (dropdownCol && !colFilters(dropdownCol).length) closeDropdown();
     updateHeaderState();
     applyVisibility();
@@ -3744,7 +3972,153 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       chipsEl.appendChild(makeGroup("mkui-chips-filter", "filter", "Clear all filters",
         () => clearFilters([...filters.keys()]), chips));
     }
+    const bNames = Object.keys(link.broadcast), lNames = Object.keys(link.listen);
+    if (bNames.length || lNames.length) {
+      const chips = [];
+      if (bNames.length) chips.push(makeLinkChip("broadcast", bNames));
+      if (lNames.length) chips.push(makeLinkChip("listen", lNames));
+      chipsEl.appendChild(makeGroup("mkui-chips-link", "link", "Remove all links",
+        () => setLink(null), chips));
+    }
     syncToolbar();
+  }
+
+  /* ── Link chips & header marks ────────────────────────────────────── */
+
+  // One chip per direction: click toggles it (off is drawn dimmed, still
+  // there to turn back on), × removes the direction's configuration —
+  // two clicks when it holds several names, since that is several links
+  // at once. The names ride in the chip (a count past three, all of them
+  // in the tooltip); adding or renaming one is the column's own business,
+  // in its header dropdown.
+  const LINK_REMOVE_ARM_MS = 4000;
+  const linkDirWord = (dir) => dir === "broadcast" ? "Broadcast" : "Listen";
+  const linkIcon = (dir) => icon(dir === "broadcast" ? "radio" : "ear");
+
+  function makeLinkChip(dir, names) {
+    const on = dir === "broadcast" ? link.broadcasting : link.listening;
+    const list = names.length > 3 ? `${names.length} names` : names.join(", ");
+    const detail = names.map((n) => dir === "broadcast"
+      ? `${n} ← ${label(link.broadcast[n])}`
+      : `${label(link.listen[n].column)} ← ${n}`).join("\n");
+    const title = `${linkDirWord(dir)}ing ${on ? "on" : "off"} — click to turn ${on ? "off" : "on"}\n${detail}`;
+    let armTimer = null;
+    const { chip, main } = makeChip(`mkui-chip-link mkui-chip-${dir}`, "", `${linkDirWord(dir)}: ${list}`, title,
+      () => setLink({ [dir + "ing"]: !on }, { merge: true }),
+      () => {
+        if (names.length > 1 && !chip.classList.contains("mkui-chip-arm")) {
+          chip.classList.add("mkui-chip-arm");
+          chip.title = `Click × again to remove ${names.length} links`;
+          armTimer = setTimeout(() => { chip.classList.remove("mkui-chip-arm"); chip.title = title; }, LINK_REMOVE_ARM_MS);
+          return;
+        }
+        if (armTimer) clearTimeout(armTimer);
+        const drop = {};
+        for (const n of names) drop[n] = null;
+        setLink({ [dir]: drop }, { merge: true });
+      });
+    chip.classList.toggle("mkui-chip-off", !on);
+    main.insertBefore(linkIcon(dir), main.firstChild);
+    return chip;
+  }
+
+  // A linked column's header carries the direction icons ahead of its
+  // label (`.mkui-th-linkmark`, present only while linked), dimmed while
+  // that direction is off.
+  function updateLinkMark(th, col) {
+    let mark = th.querySelector(".mkui-th-linkmark");
+    const b = linkNamesFor("broadcast", col), l = linkNamesFor("listen", col);
+    if (!b.length && !l.length) {
+      if (mark) mark.remove();
+      th.classList.remove("mkui-th-broadcast", "mkui-th-listen");
+      return;
+    }
+    if (!mark) {
+      mark = document.createElement("span");
+      mark.className = "mkui-th-linkmark";
+      const inner = th.querySelector(".mkui-th-inner");
+      inner.insertBefore(mark, th.querySelector(".mkui-th-label"));
+    }
+    mark.innerHTML = "";
+    const tips = [];
+    if (b.length) {
+      const ic = linkIcon("broadcast");
+      if (!link.broadcasting) ic.classList?.add("mkui-link-off");
+      mark.appendChild(ic);
+      tips.push(`Broadcasts as ${b.join(", ")}${link.broadcasting ? "" : " (off)"}`);
+    }
+    if (l.length) {
+      const ic = linkIcon("listen");
+      if (!link.listening) ic.classList?.add("mkui-link-off");
+      mark.appendChild(ic);
+      tips.push(`Listens for ${l.join(", ")}${link.listening ? "" : " (off)"}`);
+    }
+    mark.title = tips.join("\n");
+    th.classList.toggle("mkui-th-broadcast", b.length > 0);
+    th.classList.toggle("mkui-th-listen", l.length > 0);
+  }
+
+  // The header dropdown's link ops: "Broadcast as…" / "Listen for…", or
+  // the name the column already has in that direction. A click swaps the
+  // op for an inline name input (the column's name is the default, and
+  // the listen input offers every name currently broadcast); Enter or blur
+  // commits, Escape cancels, an emptied name removes the link.
+  function makeLinkOp(dir, col) {
+    const names = linkNamesFor(dir, col);
+    const name = names[0] ?? null;
+    const op = document.createElement("span");
+    op.className = `mkui-filter-action mkui-link-op mkui-link-op-${dir}`;
+    op.appendChild(linkIcon(dir));
+    const text = document.createElement("span");
+    text.className = "mkui-link-op-text";
+    text.textContent = name == null ? `${linkDirWord(dir)} ${dir === "broadcast" ? "as" : "for"}…`
+      : `${linkDirWord(dir)}ing ${dir === "broadcast" ? "as" : "for"} ${names.join(", ")}`;
+    op.appendChild(text);
+    op.title = name == null
+      ? (dir === "broadcast" ? "Send this column's selected values to listening tables under a name"
+                             : "Filter this column by values broadcast under a name")
+      : "Click to rename or remove";
+    op.addEventListener("click", () => {
+      if (op.querySelector(".mkui-link-input")) return;
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "mkui-link-input";
+      input.placeholder = "name";
+      input.value = name ?? col;
+      if (dir === "listen" && hub) {
+        const known = hub.names().filter((n) => n !== name);
+        if (known.length) {
+          const dl = document.createElement("datalist");
+          dl.id = `${subid}-link-names`;
+          for (const n of known) { const o = document.createElement("option"); o.value = n; dl.appendChild(o); }
+          op.appendChild(dl);
+          input.setAttribute("list", dl.id);
+        }
+      }
+      let done = false;
+      const finish = (commit) => {
+        if (done) return;
+        done = true;
+        if (!commit) { input.replaceWith(text); return; }
+        const value = input.value.trim();
+        const change = {};
+        for (const n of names) if (n !== value) change[n] = null; // renamed or removed
+        if (value) change[value] = dir === "broadcast" ? col : { column: col, ...(tree && dropdownScope ? { scope: dropdownScope } : {}) };
+        closeDropdown();
+        setLink({ [dir]: change }, { merge: true });
+      };
+      input.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") finish(true);
+        else if (e.key === "Escape") finish(false);
+      });
+      input.addEventListener("blur", () => finish(true));
+      input.addEventListener("pointerdown", (e) => e.stopPropagation());
+      text.replaceWith(input);
+      input.focus();
+      input.select?.();
+    });
+    return op;
   }
 
   /* ── Column picker ────────────────────────────────────────────────── */
@@ -4108,6 +4482,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       hideOp.addEventListener("click", () => hideColumn(col)); // closes the dropdown
     }
     colOps.appendChild(hideOp);
+    if (hub) colOps.append(makeLinkOp("broadcast", col), makeLinkOp("listen", col));
     dd.appendChild(colOps);
 
     // The scope row: tabs, one filter each. Switching reopens the dropdown
@@ -4231,6 +4606,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       // An exclusion of nothing is no filter; an inclusion always is —
       // "Clear, then tick every value" still means only those values.
       const key = fkey(col, scope);
+      dropLinkStash(key); // the user's filter now, whatever the link said
       if (side === "exclude" && listed.length === 0) filters.delete(key);
       else filters.set(key, { kind: "values", mode: side, values: new Set(listed), col, scope });
       updateHeaderState();
@@ -4343,6 +4719,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const lo = readBound(loInput, "lo"), hi = readBound(hiInput, "hi");
       for (const b of presetBtns) b.classList.toggle("active", b.dataset.preset === preset);
       const key = fkey(col, scope);
+      dropLinkStash(key);
       if (preset === null && lo === null && hi === null && !emptyCb.checked) filters.delete(key);
       else filters.set(key, {
         kind: "range", type: rType, lo, hi, preset, empty: emptyCb.checked,
@@ -4638,7 +5015,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (findRe && changed.length) scheduleFindRescan();
     // A live update to a row the buttons act on can flip an `enable.when`
     // verdict (a status column crossing a gate), so re-evaluate them.
-    if (hasButtons && rowInSelection(key)) updateButtonStates();
+    if ((hasButtons || hasBroadcast()) && rowInSelection(key)) {
+      if (hasButtons) updateButtonStates();
+      broadcastSelection(); // its broadcast values may have changed
+    }
     // A live update to the published row replaces the object it points at,
     // so followers see the new values instead of a snapshot.
     if (lastPublishedRow === prev) publishRow(row);
@@ -4967,7 +5347,20 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   syncPresetTimer();
 
   const paneEl = host.closest("mkui-pane");
+  // Links need an identity to publish under and to ignore themselves by:
+  // the pane's id, else this table's subscription id. Configured links
+  // subscribe now and catch up with retained broadcasts.
+  linkSource = paneEl?.dataset?.id || subid;
+  {
+    let parsed = null;
+    try { parsed = linkFromSpec(spec.link); }
+    catch (e) { console.warn(`[mkio-table] bad link: ${e.message}`); }
+    if (parsed) applyLinkConfig(parsed);
+  }
   if (paneEl) {
+    // Link hook: `workspace.setPaneLink` / `getPaneLink`, the `table.link`
+    // action, and saved layouts.
+    paneEl._link = { set: setLink, get: getLink };
     // Edit hook: the workspace routes Ctrl/Cmd+C, Ctrl/Cmd+A, Ctrl/Cmd+F,
     // Ctrl/Cmd+G (shift: previous), Escape, and the edit.* menu actions to
     // the focused frame's active pane. Escape clears the selection first,
@@ -5012,8 +5405,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       client.unsubscribe(subid);
       client.unsubscribe(pageSubId);
       // Nothing is selected in a closed table, so followers stop showing
-      // a row the user can no longer see.
+      // a row the user can no longer see; linked tables release likewise.
       publishRow(null);
+      if (hub) hub.retract(linkSource);
+      unsubscribeLinks();
     });
     paneEl.addEventListener("mkui-pane-open", () => {
       closed = false;
@@ -5027,6 +5422,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       loadVisibleSpec(spec.visible);
       loadSortSpec(spec.sort);
       loadFilterSpecs(spec.filters);
+      // Links keep their configuration (a layout sets its own after this);
+      // their filters come back from what the hub holds.
+      subscribeLinks();
+      refreshLinkFilters();
       resetColWidths();
       // A configured header re-renders for the configured column set (an
       // inferred one waits for data, as at first open).

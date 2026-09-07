@@ -72,6 +72,13 @@ class MkuiApp extends HTMLElement {
     this._app.registerAction("table.sort",      (app, a = {}) => ws.setPaneSort(a.pane ?? null, a.sort ?? null));
     // Visible columns: `args = { pane, visible }`; no `visible` shows all.
     this._app.registerAction("table.columns",   (app, a = {}) => ws.setPaneColumns(a.pane ?? null, a.visible ?? null));
+    // Table links: `args = { pane, link, merge }`, or the link keys flat —
+    // `{ pane, broadcast, listen, broadcasting, listening, merge }`; no
+    // link at all clears the pane's links.
+    this._app.registerAction("table.link",      (app, a = {}) => {
+      const { pane = null, merge, link, ...flat } = a;
+      return ws.setPaneLink(pane, link ?? (Object.keys(flat).length ? flat : null), { merge: merge === true });
+    });
     // Tree tables: `args = { pane, depth }` — a depth or "all"; no `depth`
     // collapses everything.
     this._app.registerAction("table.expand",    (app, a = {}) => ws.expandPane(a.pane ?? null, a.depth ?? 0));
@@ -185,6 +192,38 @@ class MkuiApp extends HTMLElement {
     } else {
       this._workspace.setApp(this._app);
     }
+    if (config.mkio?.url && config.mkio.control) {
+      if (hasAuth) this._controlAfterLogin = true; // an `auth` service: subscribe once logged in
+      else this._subscribeControl(config);
+    }
+  }
+
+  // The control channel: `config.mkio.control = "<service>"` (or `{
+  // service }`) names an mkui ControlService (mkui/control.py) on the
+  // server, whose pushes are actions — `{ action, args }` rows on a
+  // subpub subscription — fired here as if a menu item had. Python drives
+  // table links, filters, pane visibility and every other registered
+  // action through it. Subscribed once, by subid and without a topic (the
+  // client routes a topic-keyed subscription by the row's `_mkio_topic`,
+  // which an action row has no reason to carry); mkio's client re-sends
+  // subscriptions itself on reconnect.
+  async _subscribeControl(config) {
+    if (this._controlSubscribed) return;
+    this._controlSubscribed = true;
+    const ctl = config.mkio.control;
+    const service = typeof ctl === "string" ? ctl : ctl?.service;
+    if (!service) return;
+    const client = await ensureMkio(config.mkio.url);
+    client.subscribe(service, "subpub", {
+      subid: "mkui-control",
+      onSnapshot: () => {},
+      onUpdate: (op, row) => {
+        if (op !== "action" || !row || typeof row.action !== "string") return;
+        try { this._app.fireAction(row.action, row.args); }
+        catch (e) { console.warn(`[mkui] control action ${row.action} failed: ${e.message}`); }
+      },
+      onNack: (message) => console.warn(`[mkui] control channel '${service}' refused: ${message}`),
+    });
   }
 
   async _authenticate(config) {
@@ -197,6 +236,7 @@ class MkuiApp extends HTMLElement {
 
     const { showLogin } = await import("../auth.js");
     await showLogin(config, this._app, client);
+    if (this._controlAfterLogin) this._subscribeControl(config);
 
     const st = this._app.state;
     const apply = (map) => {

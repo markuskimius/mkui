@@ -569,3 +569,19 @@ test("tree carets are pointer targets, rotate when open, and leaves keep the box
   assert.doesNotMatch(rule(".mkui-tree-toggle"), /pointer-events\s*:\s*none/,
     "the caret must take the click the icon inside it passes through");
 });
+
+test("table links: paused chips read dimmed, linked filters take the link tint, header marks exist", () => {
+  // A direction that is off stays on the strip, dimmed and dashed, so it
+  // can be clicked back on; an armed × shows the accent border.
+  assert.equal(declaration(".mkui-chip-off", "color"), "var(--mkui-fg-mute)");
+  assert.equal(declaration(".mkui-chip-off", "border-style"), "dashed");
+  assert.equal(declaration(".mkui-chip-arm", "border-color"), "var(--mkui-accent)");
+  // A filter a link put there is told apart from the user's own.
+  assert.ok(rule(".mkui-filter-btn.mkui-filter-linked"), "linked header icon rule");
+  assert.ok(ruleContaining("(linked:"), "linked filter chip rule keys off describeFilter's suffix");
+  // Header marks sit inline ahead of the label, dimmed when that direction is off.
+  assert.equal(declaration(".mkui-th-linkmark", "display"), "inline-flex");
+  assert.ok(rule(".mkui-th-linkmark .mkui-icon.mkui-link-off"), "off-direction mark rule");
+  // The inline name input in the dropdown ops.
+  assert.equal(declaration(".mkui-link-input", "font"), "inherit");
+});

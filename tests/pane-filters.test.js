@@ -170,3 +170,14 @@ test("table.expand action routes to the workspace", async () => {
   const src = readFileSync(new URL("../mkui/static/src/components/app.js", import.meta.url), "utf8");
   assert.match(src, /registerAction\("table\.expand",\s*\(app, a = \{\}\) => ws\.expandPane\(a\.pane \?\? null, a\.depth \?\? 0\)\)/);
 });
+
+test("setPaneLink / getPaneLink reach the pane's `_link` hook the same way", () => {
+  const log = [];
+  const ws = makeWorkspace(log);
+  ws._paneEls.get("a")._link = hook(log, "a-link");
+  assert.equal(ws.setPaneLink("a", { broadcast: { k: "id" } }, { merge: true }), true);
+  assert.deepEqual(log, [["a-link", { broadcast: { k: "id" } }, { merge: true }]]);
+  assert.deepEqual(ws.getPaneLink("a"), { broadcast: { k: "id" } });
+  assert.equal(ws.setPaneLink("plain", {}), false, "a pane without the hook declines");
+  assert.equal(ws.getPaneLink("plain"), null);
+});

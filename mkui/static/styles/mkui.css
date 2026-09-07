@@ -1261,6 +1261,48 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-chip-x:hover { color: var(--mkui-fg); }
 .mkui-chip .mkui-icon { width: 11px; height: 11px; flex-shrink: 0; }
 
+/* ── Table links ───────────────────────────────────────────────────── */
+/* One chip per direction (Broadcast / Listen): the main click toggles it,
+   a direction that is off stays on the strip dimmed so it can be turned
+   back on; × removes it — armed first (accent border) when it holds
+   several names. */
+.mkui-chip-link .mkui-chip-main { gap: 4px; }
+.mkui-chip-off { color: var(--mkui-fg-mute); border-style: dashed; }
+.mkui-chip-off .mkui-chip-main .mkui-icon { opacity: 0.55; }
+.mkui-chip-arm { border-color: var(--mkui-accent); }
+/* A filter a link put there: the header icon and the chip take the link
+   tint, distinct from a filter the user set. */
+.mkui-filter-btn.mkui-filter-linked { color: var(--mkui-link, var(--mkui-accent)); opacity: 0.85; }
+.mkui-chip-filter[title*="(linked:"] { border-color: var(--mkui-link, var(--mkui-accent)); }
+/* Header mark: the direction icons ahead of a linked column's label,
+   dimmed while that direction is off. */
+.mkui-th-linkmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  margin-right: 3px;
+  color: var(--mkui-link, var(--mkui-accent));
+  vertical-align: baseline;
+}
+.mkui-th-linkmark .mkui-icon { width: 11px; height: 11px; }
+.mkui-th-linkmark .mkui-icon.mkui-link-off { opacity: 0.4; }
+/* Dropdown ops: "Broadcast as…" / "Listen for…" beneath "Hide column",
+   each an icon and a label that swaps for an inline name input. */
+.mkui-link-op { display: inline-flex; align-items: center; gap: 4px; }
+.mkui-link-op .mkui-icon { width: 12px; height: 12px; }
+.mkui-link-input {
+  font: inherit;
+  font-size: 11px;
+  color: var(--mkui-fg);
+  background: var(--mkui-bg);
+  border: 1px solid var(--mkui-focus);
+  border-radius: 2px;
+  padding: 0 4px;
+  margin: 0;
+  width: 12ch;
+  box-sizing: border-box;
+}
+
 /* ── Find strip ────────────────────────────────────────────────────── */
 /* Between the toolbar and the scroll area, only while open (Ctrl/Cmd+F,
    `edit.find`): one compact right-aligned row — input, the `.*` and `Aa`

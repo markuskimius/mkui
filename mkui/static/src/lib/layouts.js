@@ -99,6 +99,7 @@ export function sanitizeLayout(raw, known) {
       if ("filters" in st) out.filters = isObj(st.filters) ? st.filters : {};
       if ("sort" in st) out.sort = st.sort ?? null;
       if ("visible" in st) out.visible = st.visible ?? null;
+      if ("link" in st) out.link = isObj(st.link) ? st.link : null;
       panes[id] = out;
     }
   }

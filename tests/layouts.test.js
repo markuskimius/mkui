@@ -118,14 +118,15 @@ test("sanitizeLayout validates frames, drops empty ones, and keeps state for ope
     focused: "main",
     // A tree table's column may carry several scoped filters: an array
     // of filter objects passes through untouched.
-    panes: { a: { filters: { s: ["x"], q: [{ exclude: [1], scope: "roots" }, { from: 2, scope: "all" }] }, sort: "-s", visible: null }, d: { sort: "s" }, b: "junk", c: { extra: 1 } },
+    panes: { a: { filters: { s: ["x"], q: [{ exclude: [1], scope: "roots" }, { from: 2, scope: "all" }] }, sort: "-s", visible: null, link: { broadcast: { k: "s" }, listening: false } }, d: { sort: "s" }, b: "junk", c: { extra: 1, link: "junk" } },
   }, known);
   assert.deepEqual(clean.frames, [
     { id: "main", title: null, x: 0.1, y: 0.1, w: 0.5, h: 0.5, layout: tabs("a", "b") },
     { id: null, title: null, x: 0.2, y: 0.2, w: 0.4, h: 0.4, layout: "c" },
   ]);
   assert.equal(clean.focused, "main");
-  assert.deepEqual(clean.panes, { a: { filters: { s: ["x"], q: [{ exclude: [1], scope: "roots" }, { from: 2, scope: "all" }] }, sort: "-s", visible: null }, c: {} });
+  assert.deepEqual(clean.panes, { a: { filters: { s: ["x"], q: [{ exclude: [1], scope: "roots" }, { from: 2, scope: "all" }] }, sort: "-s", visible: null, link: { broadcast: { k: "s" }, listening: false } }, c: { link: null } },
+    "a link configuration passes through; a malformed one becomes null (clears)");
   assert.deepEqual(clean.dropped, ["zz"]);
   assert.equal(clean.version, LAYOUT_VERSION);
 });
@@ -311,6 +312,7 @@ test("getLayout snapshots docked frames, focus, and open panes' view state", () 
   ]);
   const a = ws._paneEls.get("a");
   a._filters = hook({ s: ["x"] }); a._sort = hook([{ col: "s", dir: "desc" }]); a._columns = hook(null);
+  a._link = hook({ broadcast: { k: "s" }, listen: {}, broadcasting: true, listening: true });
   ws._paneEls.get("c")._columns = hook(["x", "y"]);
   ws._paneEls.get("d")._filters = hook({ d: ["1"] });
   ws._focusedId = "side";
@@ -322,7 +324,7 @@ test("getLayout snapshots docked frames, focus, and open panes' view state", () 
   ]);
   assert.equal(l.focused, "side");
   assert.deepEqual(l.panes, {
-    a: { filters: { s: ["x"] }, sort: [{ col: "s", dir: "desc" }], visible: null },
+    a: { filters: { s: ["x"] }, sort: [{ col: "s", dir: "desc" }], visible: null, link: { broadcast: { k: "s" }, listen: {}, broadcasting: true, listening: true } },
     c: { visible: ["x", "y"] },
   }, "dialog panes and hookless panes carry no state");
   assert.equal(JSON.stringify(sanitizeLayout(l, ws._panes).frames), JSON.stringify(l.frames),
@@ -334,7 +336,7 @@ test("setLayout moves staying panes, closes leaving ones, opens arriving ones, t
     { id: "main", ...rect, layout: tabs("a", "b") },
     { id: "dlg", x: 0, y: 0, w: 0.1, h: 0.1, layout: tabs("d"), stayOnTop: true, noDock: true },
   ]);
-  const a = ws._paneEls.get("a"); a._filters = hook({ old: [1] }); a._sort = hook([]);
+  const a = ws._paneEls.get("a"); a._filters = hook({ old: [1] }); a._sort = hook([]); a._link = hook(null);
   const b = ws._paneEls.get("b");
   const oldMain = ws._frameEls.get("main");
   const clean = ws.setLayout({
@@ -343,11 +345,12 @@ test("setLayout moves staying panes, closes leaving ones, opens arriving ones, t
       { id: "dlg", x: 0.5, y: 0.5, w: 0.3, h: 0.3, layout: tabs("c", "zz") },
     ],
     focused: "dlg",
-    panes: { a: { filters: { s: ["y"] } }, c: { sort: "-x" } },
+    panes: { a: { filters: { s: ["y"] }, link: { listen: { k: "s" } } }, c: { sort: "-x" } },
   });
   assert.ok(oldMain.removed, "docked frames are rebuilt");
   assert.deepEqual(a.events, [], "a stayed open: no close/open");
   assert.deepEqual(a._filters.sets, [{ s: ["y"] }], "saved state applied on top");
+  assert.deepEqual(a._link.sets, [{ listen: { k: "s" } }], "the link configuration lands through its hook");
   assert.deepEqual(a._sort.sets, [], "state not in the layout is left alone");
   assert.deepEqual(b.events, ["mkui-pane-close"]);
   assert.equal(b.parentElement, ws._pool, "a closed pane is parked");

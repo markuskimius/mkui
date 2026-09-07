@@ -9,7 +9,7 @@ import "./widgets/mkio-table.js";
 
 export {
   VERSION, version,
-  App, State,
+  App, State, LinkHub,
   registerWidget, registerPaneType,
   registerExprFunction, registerExprLibrary, registerExprType, expr,
   getWidget, getPaneType,

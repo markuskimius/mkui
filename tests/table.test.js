@@ -209,7 +209,7 @@ globalThis.MkioClient = class {
 
 /* ── Import modules (after globals) ───────────────────────────────────── */
 
-const { getPaneType, registerExprFunction } = await import("../mkui/static/src/core.js");
+const { getPaneType, registerExprFunction, LinkHub } = await import("../mkui/static/src/core.js");
 await import("../mkui/static/src/widgets/mkio-table.js");
 
 const factory = getPaneType("mkio-table");
@@ -236,17 +236,21 @@ function makeState(init) {
   };
 }
 
-async function createTable(specOverrides = {}) {
+// `opts.hub` shares a link hub between tables (lib/links.js); `opts.id`
+// names the pane, the identity a table broadcasts under.
+async function createTable(specOverrides = {}, opts = {}) {
   rafQueue.length = 0;
   pendingTimers.clear();
   const host = mockEl("div");
   const paneEl = mockEl("mkui-pane");
+  if (opts.id) paneEl.dataset.id = opts.id;
   host.closest = (sel) => sel === "mkui-pane" ? paneEl : null;
   host._paneEl = paneEl;
   const state = makeState([["mkio.connected", true]]);
   const app = {
     config: { mkio: { url: "ws://localhost:8080/ws" } },
     state,
+    links: opts.hub ?? new LinkHub(state),
   };
   // rowColumn defaults off here so the long-standing assertions can keep
   // indexing header/row children directly; row-column behavior has its own
@@ -255,7 +259,7 @@ async function createTable(specOverrides = {}) {
   const prevLen = ioCallbacks.length;
   await factory(spec, app, host);
   const io = ioCallbacks.length > prevLen ? ioCallbacks[ioCallbacks.length - 1] : null;
-  return { host, spec, io, state };
+  return { host, spec, io, state, hub: app.links };
 }
 
 function lastSubscribe() {
@@ -5423,7 +5427,9 @@ function pickerOf(host) {
 function colOps(host, col) {
   const { dd } = openDropdown(host, col);
   const ops = dd._ch.find(c => c.className === "mkui-filter-actions mkui-filter-colops");
-  return { hide: ops._ch[0], extra: ops._ch.length - 1, ops, dd };
+  // The two link ops (Broadcast as… / Listen for…) are scoped to the column too.
+  const linkOps = ops._ch.filter(c => String(c.className).includes("mkui-link-op")).length;
+  return { hide: ops._ch[0], extra: ops._ch.length - 1 - linkOps, linkOps, ops, dd };
 }
 const noDropdown = (host) => host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).length === 0;
 
@@ -7035,4 +7041,353 @@ test("find: Enter while a keystroke is still debounced applies it first, then st
   openFind(host);
   assert.equal(findParts(findBarOf(host)).input.value, "gamma");
   assert.equal(findCountOf(host), "1 of 1");
+});
+
+/* ── Table links ─────────────────────────────────────────────────────── */
+// `link = { broadcast, listen, broadcasting, listening }`: a table publishes
+// the selected rows' values under names into the app's link hub; another
+// filters a column by what arrives under a name it listens for.
+
+function linkRows() {
+  return [
+    { _mkio_row: "1", id: "A", parent: "", qty: 1 },
+    { _mkio_row: "2", id: "B", parent: "A", qty: 2 },
+    { _mkio_row: "3", id: "C", parent: "A", qty: 3 },
+    { _mkio_row: "4", id: "D", parent: "B", qty: 4 },
+  ];
+}
+const LINK_COLS = ["id", "parent", "qty"];
+
+async function linkedPair(hub, a = {}, b = {}) {
+  const src = await createTable({ columns: LINK_COLS, rowColumn: true, link: { broadcast: { order: "id" } }, ...a }, { hub, id: "orders" });
+  triggerVisible(src.io);
+  src.sub = lastSubscribe();
+  src.sub.opts.onSnapshot(linkRows());
+  const dst = await createTable({ columns: LINK_COLS, rowColumn: true, link: { listen: { order: "parent" } }, ...b }, { hub, id: "execs" });
+  triggerVisible(dst.io);
+  dst.sub = lastSubscribe();
+  dst.sub.opts.onSnapshot(linkRows());
+  return { src, dst };
+}
+const ids = (host) => colCells(host, "id").map(td => td.textContent);
+function linkChips(host) {
+  const s = chipStrip(host);
+  const all = s.chips ? byClass(s.chips, "mkui-chip-group mkui-chips-link") : [];
+  const chip = (dir) => all.length ? byClass(all[0], `mkui-chip mkui-chip-link mkui-chip-${dir}`)[0] ?? null : null;
+  return {
+    group: all[0] ?? null,
+    text: (dir) => chip(dir) ? byClass(chip(dir), "mkui-chip-text")[0].textContent : null,
+    off: (dir) => chip(dir)?.classList.contains("mkui-chip-off") ?? null,
+    toggle: (dir) => chip(dir)._ch[0]._ev.click[0](),
+    remove: (dir) => chip(dir)._ch[1]._ev.click[0]({ stopPropagation() {} }),
+    armed: (dir) => chip(dir)?.classList.contains("mkui-chip-arm") ?? null,
+  };
+}
+const linkMark = (host, col) => getThs(host).find(t => t.dataset.col === col).querySelector(".mkui-th-linkmark");
+function linkOps(host, col) {
+  const { dd } = openDropdown(host, col);
+  const ops = byClass(dd, "mkui-filter-actions mkui-filter-colops")[0];
+  const op = (dir) => ops._ch.find(c => String(c.className).includes(`mkui-link-op-${dir}`));
+  return { dd, op, text: (dir) => byClass(op(dir), "mkui-link-op-text")[0]?.textContent ?? null };
+}
+
+test("links: a selection broadcasts its distinct column values under each name; nothing selected retracts", async () => {
+  const { host, state, hub } = await createTable({ columns: LINK_COLS, rowColumn: true, link: { broadcast: { order: "id", par: "parent" } } }, { id: "orders" });
+  triggerVisible(ioCallbacks.at(-1));
+  lastSubscribe().opts.onSnapshot(linkRows());
+  pointerDown(dataRows(host)[1], 0);
+  assert.deepEqual(hub.current("order"), { values: ["B"], source: "orders" });
+  assert.deepEqual(state.get("link.order"), ["B"], "values mirror into state at link.<name>");
+  pointerDown(dataRows(host)[2], 0, { shiftKey: true });
+  assert.deepEqual(hub.current("order").values, ["B", "C"], "several rows: every value, view order");
+  assert.deepEqual(hub.current("par").values, ["A"], "distinct values only");
+  host._paneEl._editActions.clearSelection();
+  assert.deepEqual(hub.current("order").values, ["C"], "Esc keeps the cursor (on C, the range's end), so its row still broadcasts");
+  lastSubscribe().opts.onSnapshot(linkRows()); // a full reset drops the cursor
+  assert.equal(hub.current("order"), null, "nothing selected retracts");
+  assert.equal(state.get("link.order"), null);
+});
+
+test("links: a cell selection broadcasts the rows it spans, like a row-unit button", async () => {
+  const hub = new LinkHub();
+  const { host } = await createTable({ columns: LINK_COLS, link: { broadcast: { order: "id" } } }, { hub, id: "orders" });
+  triggerVisible(ioCallbacks.at(-1));
+  lastSubscribe().opts.onSnapshot(linkRows());
+  pointerDown(dataRows(host)[3], 2); // a cell in the qty column of row D
+  assert.deepEqual(hub.current("order").values, ["D"]);
+});
+
+test("links: a listener filters its column by the broadcast, marks the filter linked, and releases on retract", async () => {
+  const hub = new LinkHub();
+  const { src, dst } = await linkedPair(hub);
+  assert.deepEqual(ids(dst.host), ["A", "B", "C", "D"]);
+  pointerDown(dataRows(src.host)[0], 0); // select A
+  assert.deepEqual(ids(dst.host), ["B", "C"], "rows whose parent is A");
+  let s = chipStrip(dst.host);
+  assert.deepEqual(s.filter, ["parent: 1 values (linked: order)"]);
+  const th = getThs(dst.host).find(t => t.dataset.col === "parent");
+  assert.ok(th.querySelector(".mkui-filter-btn").classList.contains("mkui-filter-linked"), "the header's icon says linked");
+  pointerDown(dataRows(src.host)[1], 0); // select B: replaced in place
+  assert.deepEqual(ids(dst.host), ["D"]);
+  assert.deepEqual(chipStrip(dst.host).filter, ["parent: 1 values (linked: order)"], "one filter, not two");
+  src.host._paneEl._editActions.selectAll();
+  assert.deepEqual(ids(dst.host), ["B", "C", "D"], "every parent value selected");
+  pointerDown(dataRows(src.host)[0], 0);
+  dst.hub.retract("orders");
+  assert.deepEqual(ids(dst.host), ["A", "B", "C", "D"], "retracted: the linked filter goes");
+  assert.deepEqual(chipStrip(dst.host).filter, []);
+});
+
+test("links: a linked filter displaces the column's own filter and restores it when the link clears", async () => {
+  const hub = new LinkHub();
+  const { src, dst } = await linkedPair(hub, {}, { filters: { parent: { exclude: ["B"] }, qty: { from: 2 } } });
+  assert.deepEqual(ids(dst.host), ["B", "C"], "config filters: parent ≠ B and qty ≥ 2");
+  pointerDown(dataRows(src.host)[1], 0); // B → parent = B
+  assert.deepEqual(ids(dst.host), ["D"], "the link's filter replaced the parent filter; qty's stays");
+  assert.deepEqual(dst.host._paneEl._filters.get(), { qty: { type: "number", from: 2, to: null, empty: false } },
+    "getFilters leaves the linked filter out (a layout saves the link instead)");
+  src.sub.opts.onSnapshot(linkRows()); // a fresh snapshot drops the source's cursor: nothing selected
+  assert.equal(hub.current("order"), null);
+  assert.deepEqual(ids(dst.host), ["B", "C"], "the config's parent filter is back");
+  assert.deepEqual(chipStrip(dst.host).filter, ["parent: All but 1 values", "qty: ≥ 2"]);
+});
+
+test("links: a user's own edit of the linked column takes it over; the next broadcast re-links", async () => {
+  const hub = new LinkHub();
+  const { src, dst } = await linkedPair(hub);
+  pointerDown(dataRows(src.host)[0], 0); // parent = A
+  assert.deepEqual(ids(dst.host), ["B", "C"]);
+  dst.host._paneEl._filters.set({ parent: ["B"] }, { merge: true }); // an explicit entry replaces the column's filters
+  assert.deepEqual(ids(dst.host), ["D"]);
+  assert.deepEqual(dst.host._paneEl._filters.get(), { parent: { include: ["B"] } }, "theirs now, so it is saved");
+  hub.retract("orders");
+  assert.deepEqual(ids(dst.host), ["D"], "a retract leaves a filter the user owns alone");
+  pointerDown(dataRows(src.host)[1], 0); // B
+  assert.deepEqual(ids(dst.host), ["D"]);
+  assert.deepEqual(chipStrip(dst.host).filter, ["parent: 1 values (linked: order)"], "re-linked");
+});
+
+test("links: setFilters in replace mode keeps linked filters; naming their column replaces them", async () => {
+  const hub = new LinkHub();
+  const { src, dst } = await linkedPair(hub);
+  pointerDown(dataRows(src.host)[0], 0);
+  dst.host._paneEl._filters.set({ qty: { from: 3 } });
+  assert.deepEqual(ids(dst.host), ["C"], "parent = A (linked) and qty ≥ 3");
+  dst.host._paneEl._filters.set({ parent: null });
+  assert.deepEqual(ids(dst.host), ["A", "B", "C", "D"], "an entry for the column clears the linked filter too");
+});
+
+test("links: a table never follows its own broadcast", async () => {
+  const hub = new LinkHub();
+  const { host } = await createTable({ columns: LINK_COLS, rowColumn: true, link: { broadcast: { k: "id" }, listen: { k: "parent" } } }, { hub, id: "self" });
+  triggerVisible(ioCallbacks.at(-1));
+  lastSubscribe().opts.onSnapshot(linkRows());
+  pointerDown(dataRows(host)[0], 0);
+  assert.deepEqual(hub.current("k").values, ["A"]);
+  assert.deepEqual(ids(host), ["A", "B", "C", "D"], "no self-filtering");
+});
+
+test("links: a table that listens and broadcasts passes a chain along", async () => {
+  const hub = new LinkHub();
+  const { src, dst } = await linkedPair(hub, {}, { link: { listen: { order: "parent" }, broadcast: { exec: "id" } } });
+  const third = await createTable({ columns: LINK_COLS, rowColumn: true, link: { listen: { exec: "parent" } } }, { hub, id: "fills" });
+  triggerVisible(third.io);
+  lastSubscribe().opts.onSnapshot(linkRows());
+  pointerDown(dataRows(src.host)[0], 0);   // orders: A → execs show B, C
+  assert.deepEqual(ids(dst.host), ["B", "C"]);
+  pointerDown(dataRows(dst.host)[0], 0);   // execs: select B → fills show D
+  assert.deepEqual(hub.current("exec").values, ["B"]);
+  assert.deepEqual(ids(third.host), ["D"]);
+  pointerDown(dataRows(src.host)[3], 0);   // orders: D → execs show nothing, its selection prunes, fills release
+  assert.deepEqual(ids(dst.host), []);
+  assert.equal(hub.current("exec"), null, "execs' selection went with its rows, so its broadcast retracted");
+  assert.deepEqual(ids(third.host), ["A", "B", "C", "D"]);
+});
+
+test("links: a listener opened after the selection catches up from the hub; reopening does too", async () => {
+  const hub = new LinkHub();
+  const src = await createTable({ columns: LINK_COLS, rowColumn: true, link: { broadcast: { order: "id" } } }, { hub, id: "orders" });
+  triggerVisible(src.io);
+  lastSubscribe().opts.onSnapshot(linkRows());
+  pointerDown(dataRows(src.host)[0], 0);
+  const dst = await createTable({ columns: LINK_COLS, link: { listen: { order: "parent" } } }, { hub, id: "execs" });
+  assert.deepEqual(chipStrip(dst.host).filter, ["parent: 1 values (linked: order)"], "linked before any data");
+  triggerVisible(dst.io);
+  lastSubscribe().opts.onSnapshot(linkRows());
+  assert.deepEqual(ids(dst.host), ["B", "C"]);
+  const paneEl = dst.host._paneEl;
+  for (const fn of paneEl._ev["mkui-pane-close"]) fn();
+  pointerDown(dataRows(src.host)[1], 0); // B while execs is closed
+  for (const fn of paneEl._ev["mkui-pane-open"]) fn();
+  assert.deepEqual(chipStrip(dst.host).filter, ["parent: 1 values (linked: order)"]);
+  triggerVisible(dst.io);
+  lastSubscribe().opts.onSnapshot(linkRows());
+  assert.deepEqual(ids(dst.host), ["D"], "reopened on the current broadcast");
+});
+
+test("links: closing the broadcasting pane retracts", async () => {
+  const hub = new LinkHub();
+  const { src, dst } = await linkedPair(hub);
+  pointerDown(dataRows(src.host)[0], 0);
+  assert.deepEqual(ids(dst.host), ["B", "C"]);
+  for (const fn of src.host._paneEl._ev["mkui-pane-close"]) fn();
+  assert.equal(hub.current("order"), null);
+  assert.deepEqual(ids(dst.host), ["A", "B", "C", "D"]);
+});
+
+test("links: a live replace of a selected row rebroadcasts its new value", async () => {
+  const hub = new LinkHub();
+  const { src, dst } = await linkedPair(hub);
+  pointerDown(dataRows(src.host)[0], 0);
+  src.sub.opts.onUpdate("update", { _mkio_row: "1", id: "B", parent: "", qty: 1 });
+  assert.deepEqual(hub.current("order").values, ["B"]);
+  assert.deepEqual(ids(dst.host), ["D"]);
+});
+
+test("links: broadcasting off retracts and on re-announces; listening off releases and on catches up", async () => {
+  const hub = new LinkHub();
+  const { src, dst } = await linkedPair(hub);
+  pointerDown(dataRows(src.host)[0], 0);
+  assert.deepEqual(ids(dst.host), ["B", "C"]);
+  src.host._paneEl._link.set({ broadcasting: false }, { merge: true });
+  assert.equal(hub.current("order"), null);
+  assert.deepEqual(ids(dst.host), ["A", "B", "C", "D"]);
+  assert.deepEqual(src.host._paneEl._link.get(), { broadcast: { order: "id" }, listen: {}, broadcasting: false, listening: true });
+  src.host._paneEl._link.set({ broadcasting: true }, { merge: true });
+  assert.deepEqual(hub.current("order").values, ["A"], "the current selection goes out again");
+  assert.deepEqual(ids(dst.host), ["B", "C"]);
+  dst.host._paneEl._link.set({ listening: false }, { merge: true });
+  assert.deepEqual(ids(dst.host), ["A", "B", "C", "D"], "released, configuration kept");
+  assert.deepEqual(dst.host._paneEl._link.get().listen, { order: "parent" });
+  dst.host._paneEl._link.set({ listening: true }, { merge: true });
+  assert.deepEqual(ids(dst.host), ["B", "C"], "caught up from the hub");
+});
+
+test("links: set replaces or merges; a null name entry drops it; a bad spec warns and changes nothing", async () => {
+  const hub = new LinkHub();
+  const { host } = await createTable({ columns: LINK_COLS, link: { broadcast: { order: "id" } } }, { hub, id: "t" });
+  const lk = host._paneEl._link;
+  lk.set({ listen: { x: { column: "parent" } } });
+  assert.deepEqual(lk.get(), { broadcast: {}, listen: { x: "parent" }, broadcasting: true, listening: true }, "replace drops the broadcast");
+  lk.set({ broadcast: { order: "id", par: "parent" } }, { merge: true });
+  lk.set({ broadcast: { par: null } }, { merge: true });
+  assert.deepEqual(lk.get().broadcast, { order: "id" });
+  const warn = console.warn; const warned = [];
+  console.warn = (m) => warned.push(m);
+  try {
+    lk.set({ listen: { x: 5 } }, { merge: true });
+    lk.set({ broadcasting: "yes" }, { merge: true });
+    lk.set([1]);
+  } finally { console.warn = warn; }
+  assert.deepEqual(lk.get(), { broadcast: { order: "id" }, listen: { x: "parent" }, broadcasting: true, listening: true });
+  assert.equal(warned.length, 3);
+  assert.match(warned[0], /bad link: listen\.x/);
+  assert.match(warned[1], /bad link: broadcasting/);
+  lk.set(null);
+  assert.deepEqual(lk.get(), { broadcast: {}, listen: {}, broadcasting: true, listening: true }, "null clears");
+  assert.equal(chipStrip(host).toolbar, null, "and the chips go");
+});
+
+test("links: a listen entry may carry a tree scope; a bad scope is refused", async () => {
+  const hub = new LinkHub();
+  const { host } = await createTable({ columns: LINK_COLS, tree: { child: "parent", parent: "id" }, link: { listen: { order: { column: "id", scope: "all" } } } }, { hub, id: "t" });
+  assert.deepEqual(host._paneEl._link.get().listen, { order: { column: "id", scope: "all" } });
+  triggerVisible(ioCallbacks.at(-1));
+  lastSubscribe().opts.onSnapshot(linkRows());
+  hub.publish("o", { order: ["D"] });
+  assert.deepEqual(liveRows(host).map(tr => treeText(tr._ch.find(td => td.dataset?.col === "id"))), ["A"],
+    "a branch filter keeps the way to the match; D itself sits collapsed under B");
+  const warn = console.warn; const warned = [];
+  console.warn = (m) => warned.push(m);
+  try { host._paneEl._link.set({ listen: { order: { column: "id", scope: "nope" } } }); } finally { console.warn = warn; }
+  assert.match(warned[0], /bad scope 'nope'/);
+});
+
+test("links: chips — one per direction, click toggles, × removes (armed first when several names)", async () => {
+  const hub = new LinkHub();
+  const { host } = await createTable({ columns: LINK_COLS, link: { broadcast: { order: "id", par: "parent" }, listen: { x: "qty" }, listening: false } }, { hub, id: "t" });
+  let c = linkChips(host);
+  assert.ok(c.group, "a link group");
+  assert.equal(c.text("broadcast"), "Broadcast: order, par");
+  assert.equal(c.text("listen"), "Listen: x");
+  assert.equal(c.off("broadcast"), false);
+  assert.equal(c.off("listen"), true, "a direction that is off is drawn dimmed");
+  assert.deepEqual(chipStrip(host).groupIcon("mkui-chips-link")._ch[0].className, "mkui-icon mkui-icon-link");
+  c.toggle("listen");
+  assert.equal(host._paneEl._link.get().listening, true);
+  c = linkChips(host);
+  assert.equal(c.off("listen"), false);
+  c.toggle("broadcast");
+  assert.equal(host._paneEl._link.get().broadcasting, false);
+  c = linkChips(host);
+  c.remove("listen");
+  assert.equal(host._paneEl._link.get().listen.x, undefined, "one name: removed at once");
+  c = linkChips(host);
+  c.remove("broadcast");
+  assert.equal(c.armed("broadcast"), true, "two names: the first click arms");
+  assert.deepEqual(host._paneEl._link.get().broadcast, { order: "id", par: "parent" });
+  c.remove("broadcast");
+  assert.deepEqual(host._paneEl._link.get().broadcast, {});
+  assert.equal(chipStrip(host).toolbar, null);
+});
+
+test("links: the group icon removes every link", async () => {
+  const hub = new LinkHub();
+  const { host } = await createTable({ columns: LINK_COLS, link: { broadcast: { order: "id" }, listen: { x: "qty" } } }, { hub, id: "t" });
+  chipStrip(host).groupIcon("mkui-chips-link")._ev.click[0]();
+  assert.deepEqual(host._paneEl._link.get(), { broadcast: {}, listen: {}, broadcasting: true, listening: true });
+});
+
+test("links: linked columns wear a header mark, dimmed while the direction is off", async () => {
+  const hub = new LinkHub();
+  const { host } = await createTable({ columns: LINK_COLS, link: { broadcast: { order: "id" }, listen: { x: "id" } } }, { hub, id: "t" });
+  const mark = linkMark(host, "id");
+  assert.ok(mark, "the linked column has a mark");
+  assert.deepEqual(mark._ch.map(i => i.className), ["mkui-icon mkui-icon-radio", "mkui-icon mkui-icon-ear"]);
+  assert.equal(mark.title, "Broadcasts as order\nListens for x");
+  const th = getThs(host).find(t => t.dataset.col === "id");
+  assert.ok(th.classList.contains("mkui-th-broadcast") && th.classList.contains("mkui-th-listen"));
+  assert.equal(th._ch[0]._ch[0], mark, "ahead of the label");
+  assert.equal(linkMark(host, "qty"), null, "unlinked columns have none");
+  host._paneEl._link.set({ listening: false }, { merge: true });
+  assert.equal(linkMark(host, "id").title, "Broadcasts as order\nListens for x (off)");
+  host._paneEl._link.set(null);
+  assert.equal(linkMark(host, "id"), null, "gone with the link");
+});
+
+test("links: the header dropdown's ops name a column's links and take a name inline", async () => {
+  const hub = new LinkHub();
+  hub.publish("elsewhere", { order: ["1"] });
+  const { host } = await createTable({ columns: LINK_COLS, link: { broadcast: { order: "id" } } }, { hub, id: "t" });
+  let ops = linkOps(host, "id");
+  assert.equal(ops.text("broadcast"), "Broadcasting as order");
+  assert.equal(ops.text("listen"), "Listen for…");
+  ops.op("listen")._ev.click[0]();
+  const input = ops.op("listen").querySelector(".mkui-link-input");
+  assert.ok(input, "the op became an input");
+  assert.equal(input.value, "id", "defaulting to the column's name");
+  assert.ok(ops.op("listen").querySelector("datalist"), "with the names currently broadcast on offer");
+  input.value = " order ";
+  input._ev.keydown[0]({ key: "Enter", stopPropagation() {} });
+  assert.deepEqual(host._paneEl._link.get().listen, { order: "id" });
+  // Rename the broadcast; an emptied name removes it.
+  ops = linkOps(host, "id");
+  assert.equal(ops.text("listen"), "Listening for order");
+  ops.op("broadcast")._ev.click[0]();
+  const bi = ops.op("broadcast").querySelector(".mkui-link-input");
+  assert.equal(bi.value, "order");
+  bi.value = "order_id";
+  bi._ev.blur[0]();
+  assert.deepEqual(host._paneEl._link.get().broadcast, { order_id: "id" }, "renamed: the old name is gone");
+  ops = linkOps(host, "id");
+  ops.op("broadcast")._ev.click[0]();
+  const bi2 = ops.op("broadcast").querySelector(".mkui-link-input");
+  bi2.value = "";
+  bi2._ev.keydown[0]({ key: "Enter", stopPropagation() {} });
+  assert.deepEqual(host._paneEl._link.get().broadcast, {});
+  ops = linkOps(host, "id");
+  ops.op("broadcast")._ev.click[0]();
+  ops.op("broadcast").querySelector(".mkui-link-input")._ev.keydown[0]({ key: "Escape", stopPropagation() {} });
+  assert.equal(ops.op("broadcast").querySelector(".mkui-link-input"), null, "Escape puts the label back");
+  assert.deepEqual(host._paneEl._link.get().broadcast, {});
 });
