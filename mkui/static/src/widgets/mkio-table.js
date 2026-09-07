@@ -1051,7 +1051,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // it goes — so `subtreeOk` (rebuilt with the view whenever such a filter
   // is active, else null) holds the post-order verdict per row.
   let subtreeOk = null;
-  const allScopeActive = () => { if (!tree) return false; for (const k of filters.keys()) if (k.endsWith("\0all")) return true; return false; };
+  const allScopeActive = () => { if (!tree) return false; for (const [k, f] of filters) if (!f.off && k.endsWith("\0all")) return true; return false; };
   const treeShown = (key) => matchesFilters(rows.get(key)) && (!subtreeOk || subtreeOk.get(key) === true);
 
   function buildSubtreeOk() {
@@ -1083,7 +1083,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // `rankOf` holds positions over every row in sort order (`flatRanks`),
   // kept by O(n) passes on live inserts and deletes.
   const rankOf = new Map();
-  const flatRanked = () => !tree && filters.size > 0;
+  const flatRanked = () => !tree && anyFilterOn();
   function flatRanks() {
     const all = sortKeys.length ? baseOrder.slice().sort((a, b) => compareRows(rows.get(a), rows.get(b))) : baseOrder;
     let i = 0;
@@ -1526,8 +1526,17 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // and a branch filter at once: the map is keyed by `fkey(col, scope)`
   // and every filter records its `col` (and `scope`). The dropdown's
   // Values/Range modes replace each other within one filter.
+  //
+  // `off: true` suspends a filter without unmaking it: the values, bounds,
+  // and scope stay, the chip and the header icon stay (drawn dimmed), and
+  // nothing is judged by it until it comes back on. Switching off is not
+  // clearing — that is what the chip's × and the dropdown's Clear are for
+  // — so every read of the map has to skip an off filter, and the state
+  // travels in the spec (`off = true`) so it round-trips through
+  // get/set, saved layouts, and config.
   const filters = new Map();
   const fkey = (col, scope) => tree ? col + "\0" + (scope ?? tree.filterScope) : col;
+  const anyFilterOn = () => { for (const f of filters.values()) if (!f.off) return true; return false; };
   // A column's filters in scope order (top, child, branch).
   function colFilters(col) {
     if (!tree) { const f = filters.get(col); return f ? [f] : []; }
@@ -2832,6 +2841,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function matchesFilters(row) {
     const root = tree ? isRootKey(row[idKey]) : true;
     for (const f of filters.values()) {
+      if (f.off) continue; // switched off: kept, described, not applied
       if (tree && f.scope) {
         // Scoped filters (tree tables): top and child filters judge only
         // their level; branch ones are judged by the subtree pass
@@ -2846,7 +2856,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   // The branch filters alone, on the row's own values.
   function passesAllScoped(row) {
-    for (const f of filters.values()) if (f.scope === "all" && !passesFilter(row, f.col, f)) return false;
+    for (const f of filters.values()) if (!f.off && f.scope === "all" && !passesFilter(row, f.col, f)) return false;
     return true;
   }
 
@@ -2903,7 +2913,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // periodically so rows age out even when no data arrives to trigger it.
   let presetTimer = null;
   function syncPresetTimer() {
-    const active = [...filters.values()].some((f) => f.kind === "range" && f.preset);
+    const active = [...filters.values()].some((f) => !f.off && f.kind === "range" && f.preset);
     if (!active) { if (presetTimer) { clearTimeout(presetTimer); presetTimer = null; } return; }
     if (presetTimer) return;
     const tick = () => {
@@ -2925,13 +2935,18 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return s;
   }
 
-  // The same summary the header tooltip and the toolbar chip show.
-  function describeFilter(f) {
+  // The same summary the header tooltip and the toolbar chip show. A chip
+  // draws its own off state (an unticked box, dimmed and dashed) and has a
+  // width to spend, so it asks for the summary without the `(off)` word;
+  // the tooltips, which are all the header button has, keep it.
+  function describeFilter(f, { state = true } = {}) {
     let s = f.kind === "range" ? describeRange(f)
       : f.mode === "exclude" ? `All but ${f.values.size} values` : `${f.values.size} values`;
     if (f.link) s += ` (linked: ${f.link})`;
-    if (!tree || !f.scope || f.scope === "roots") return s;
-    return `${s} (${f.scope === "children" ? "child" : "branch"})`;
+    if (tree && f.scope && f.scope !== "roots") s += ` (${f.scope === "children" ? "child" : "branch"})`;
+    // Last, so a reader who stops early still learns what the filter says.
+    if (state && f.off) s += " (off)";
+    return s;
   }
 
   /* ── Sort specs ───────────────────────────────────────────────────── */
@@ -3121,6 +3136,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   //   { preset = "today" | "1h" | "15m" }         relative time range
   //   { type = "number" | "time", ... }     fixes a range's frame when the
   //                                         bounds don't (`types` wins)
+  //   { off = true, ... }                   set up but switched off, ready
+  //                                         to turn on from the chip
   //   null / ""                              clears the column
   // A range's frame is inferred from the bounds — numbers make a number
   // range, strings a time range — because config is parsed before the data
@@ -3132,6 +3149,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const f = filterFromSpecBase(col, s);
     if (!f) return f;
     f.col = col;
+    // A bare value list has no room for flags; an object may switch the
+    // filter off, which config uses to ship one armed but not applied.
+    if (!Array.isArray(s) && s.off === true) f.off = true;
     if (!tree) return f;
     // Tree tables: `scope` says which rows the filter judges — roots,
     // children, or all (the table's `tree.filterScope` default).
@@ -3238,6 +3258,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       }
       out.empty = f.empty;
     }
+    if (f.off) out.off = true;
     if (tree) out.scope = f.scope ?? tree.filterScope;
     return out;
   }
@@ -3485,18 +3506,20 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function dropLinkStash(key) { linkStash.delete(key); }
 
   // The rows a broadcast speaks for: the selected rows and, in a tree,
-  // every descendant of each (collapsed or not — selecting a parent means
-  // its whole subtree; a filtered-out branch stays out), each row once.
+  // every descendant of each, each row once. Selecting a parent means its
+  // whole subtree — collapsed rows and filtered-out rows alike. A filter
+  // says what this table shows, not what the record is: the listener asked
+  // for the children of what was picked, and hiding one here would quietly
+  // drop it from the other table's view of the same record.
   function getBroadcastRows() {
     const sel = getSelectedRows();
     if (!tree || !sel.length) return sel;
-    if (viewDirty) rebuildView(); // treeShown reads the branch-filter verdicts
     const seen = new Set(), out = [];
     const add = (key) => {
       if (seen.has(key)) return;
       seen.add(key);
       out.push(rows.get(key));
-      for (const c of sortedKids(key)) if (treeShown(c)) add(c);
+      for (const c of sortedKids(key)) add(c);
     };
     for (const row of sel) add(row[idKey]);
     return out;
@@ -3940,6 +3963,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       btn.classList.toggle("active", fs.length > 0);
       btn.title = fs.map(describeFilter).join("; ");
       btn.classList.toggle("mkui-filter-linked", fs.some((f) => f.link));
+      // Every filter on the column switched off: still marked (the filter
+      // is there to turn back on), but dimmed, so a column whose chip has
+      // scrolled out of sight doesn't read as filtered.
+      btn.classList.toggle("mkui-filter-off", fs.length > 0 && fs.every((f) => f.off));
       updateLinkMark(th, col);
     }
     updateColumnsBtn();
@@ -3968,8 +3995,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // The toolbar's right side summarises the view so nothing has to be
   // scrolled into sight to be seen or undone: one chip per sort key in
   // priority order (click flips the direction, × drops the key) and one
-  // per filtered column (click opens that column's dropdown, × clears it).
-  // Each group leads with its icon, which clears the whole group. The
+  // per filtered column (its checkbox switches the filter off and back on,
+  // the body opens that column's dropdown, × clears it). Each group leads
+  // with its icon, which clears the whole group — alt-click on the filter
+  // group's icon switches them all off instead, the "let me see everything
+  // for a moment" the per-chip checkbox handles a column at a time. The
   // cluster is empty — and the toolbar gone, absent buttons — while
   // nothing is active.
   // Drop filters by map key (a column, or column + scope on a tree).
@@ -3981,11 +4011,31 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     syncPresetTimer();
   }
 
-  function makeChip(cls, col, text, title, onClick, onClear) {
+  // Switch filters off (kept, not applied) or back on, by the same keys.
+  // Nothing is rebuilt when no filter actually changed state.
+  function setFiltersOn(keys, on) {
+    let changed = false;
+    for (const k of keys) {
+      const f = filters.get(k);
+      if (!f || !f.off === on) continue;
+      if (on) delete f.off; else f.off = true;
+      changed = true;
+    }
+    if (!changed) return;
+    updateHeaderState();
+    applyVisibility();
+    syncPresetTimer();
+  }
+
+  // The group's alt-click: all off while any is on, else all back on.
+  const toggleAllFilters = () => setFiltersOn([...filters.keys()], !anyFilterOn());
+
+  function makeChip(cls, col, text, title, onClick, onClear, lead = null) {
     const chip = document.createElement("span");
     chip.className = "mkui-chip " + cls;
     chip.dataset.col = col;
     chip.title = title;
+    if (lead) chip.appendChild(lead);
     const main = document.createElement("button");
     main.className = "mkui-chip-main";
     main.type = "button";
@@ -4002,6 +4052,20 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     x.addEventListener("click", (e) => { e.stopPropagation(); onClear(); });
     chip.append(main, x);
     return { chip, main };
+  }
+
+  // A filter chip's on/off control: a checkbox, the same word for "in or
+  // out" the values list and the column picker already use, and its own
+  // hit target so the chip body still opens the dropdown.
+  function makeFilterCheck(key, f) {
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.className = "mkui-chip-check";
+    cb.checked = !f.off;
+    cb.title = f.off ? "Switched off — check to apply it again" : "Applied — uncheck to switch it off";
+    cb.addEventListener("click", (e) => e.stopPropagation());
+    cb.addEventListener("change", () => setFiltersOn([key], cb.checked));
+    return cb;
   }
 
   function makeGroup(cls, iconName, title, onClear, chips) {
@@ -4046,8 +4110,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (filters.size) {
       const chips = [...filters].map(([key, f]) => {
         const col = f.col;
-        const text = `${label(col)}: ${describeFilter(f)}`;
-        const { chip } = makeChip("mkui-chip-filter", col, text, text,
+        const text = `${label(col)}: ${describeFilter(f, { state: false })}`;
+        const title = `${label(col)}: ${describeFilter(f)}`;
+        const { chip } = makeChip("mkui-chip-filter", col, text, title,
           (e) => {
             if (dropdownCol === col && dropdownScope === (f.scope ?? null)) { closeDropdown(); return; }
             if (columns && !visibleColumns().includes(col)) showColumn(col); // hidden: bring it back first
@@ -4056,12 +4121,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
             scrollHeaderIntoView(th);
             openFilterDropdown(col, th, { advanced: !!e?.altKey, scope: f.scope });
           },
-          () => clearFilters([key]));
+          () => clearFilters([key]),
+          makeFilterCheck(key, f));
         if (f.scope) chip.dataset.scope = f.scope;
+        chip.classList.toggle("mkui-chip-off", !!f.off);
         return chip;
       });
-      chipsEl.appendChild(makeGroup("mkui-chips-filter", "filter", "Clear all filters",
-        () => clearFilters([...filters.keys()]), chips));
+      const anyOn = anyFilterOn();
+      chipsEl.appendChild(makeGroup("mkui-chips-filter", "filter",
+        `Clear all filters\nAlt-click to switch them all ${anyOn ? "off" : "on"}`,
+        (e) => e?.altKey ? toggleAllFilters() : clearFilters([...filters.keys()]), chips));
     }
     const bNames = Object.keys(link.broadcast), lNames = Object.keys(link.listen);
     if (linkChips && (bNames.length || lNames.length)) {
@@ -4568,6 +4637,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       : wantScope ?? (filters.has(fkey(col, tree.filterScope)) ? tree.filterScope : mine[0]?.scope ?? tree.filterScope);
     dropdownScope = scope;
     const cur = tree ? filters.get(fkey(col, scope)) : filters.get(col);
+    // Editing a switched-off filter leaves it switched off: every commit
+    // below builds a fresh object, so the flag rides in the closure.
+    let curOff = !!cur?.off;
     const type = filterType(col);
     // Numeric and time columns get a Values | Range mode switch; text
     // columns look exactly as before. A range filter on a column that has
@@ -4583,6 +4655,25 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     // Choosing the set (and groups) is the Columns button's job.
     const colOps = document.createElement("div");
     colOps.className = "mkui-filter-actions mkui-filter-colops";
+    // Switching this scope's filter off, where it is being edited — the
+    // same control the toolbar chip carries, for when the chip is not
+    // where you are looking. Only with a filter to switch.
+    if (cur) {
+      const appliedOp = document.createElement("label");
+      appliedOp.className = "mkui-filter-action mkui-filter-applied";
+      const appliedCb = document.createElement("input");
+      appliedCb.type = "checkbox";
+      appliedCb.checked = !curOff;
+      const appliedTxt = document.createElement("span");
+      appliedTxt.textContent = "Applied";
+      appliedOp.append(appliedCb, appliedTxt);
+      appliedOp.title = "Switch this filter off without clearing it";
+      appliedCb.addEventListener("change", () => {
+        curOff = !appliedCb.checked;
+        setFiltersOn([fkey(col, scope)], appliedCb.checked);
+      });
+      colOps.appendChild(appliedOp);
+    }
     const hideOp = document.createElement("span");
     hideOp.className = "mkui-filter-action";
     hideOp.textContent = "Hide column";
@@ -4728,7 +4819,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const key = fkey(col, scope);
       dropLinkStash(key); // the user's filter now, whatever the link said
       if (side === "exclude" && listed.length === 0) filters.delete(key);
-      else filters.set(key, { kind: "values", mode: side, values: new Set(listed), col, scope });
+      else {
+        const f = { kind: "values", mode: side, values: new Set(listed), col, scope };
+        if (curOff) f.off = true;
+        filters.set(key, f);
+      }
       updateHeaderState();
       applyVisibility();
       syncPresetTimer();
@@ -4841,11 +4936,15 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const key = fkey(col, scope);
       dropLinkStash(key);
       if (preset === null && lo === null && hi === null && !emptyCb.checked) filters.delete(key);
-      else filters.set(key, {
-        kind: "range", type: rType, lo, hi, preset, empty: emptyCb.checked,
-        loText: lo === null ? "" : String(loInput.value), hiText: hi === null ? "" : String(hiInput.value),
-        timeKind: kind, spec: timeSpec(col), localTz, col, scope,
-      });
+      else {
+        const f = {
+          kind: "range", type: rType, lo, hi, preset, empty: emptyCb.checked,
+          loText: lo === null ? "" : String(loInput.value), hiText: hi === null ? "" : String(hiInput.value),
+          timeKind: kind, spec: timeSpec(col), localTz, col, scope,
+        };
+        if (curOff) f.off = true;
+        filters.set(key, f);
+      }
       updateHeaderState();
       applyVisibility();
       syncPresetTimer();

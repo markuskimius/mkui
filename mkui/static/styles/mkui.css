@@ -600,7 +600,13 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 /* The priority digit is a knockout drawn in the background color — track
    the hover pill's background so it keeps reading as a hole in the caret. */
 .mkui-filter-btn:hover .mkui-sort-num { color: var(--mkui-bg-hover); }
+/* The header icon's three filter states, in the order they override each
+   other: filtered, filtered by a link, filtered but switched off. Off
+   comes last on purpose — a filter that is not being applied should not
+   read as one that is, whoever set it. */
 .mkui-filter-btn.active { color: var(--mkui-accent); }
+.mkui-filter-btn.mkui-filter-linked { color: var(--mkui-link, var(--mkui-accent)); opacity: 0.85; }
+.mkui-filter-btn.mkui-filter-off { color: var(--mkui-fg-mute); opacity: 1; }
 
 /* Sized to content: a column of long values widens the dropdown (to a cap)
    instead of wrapping them; past the cap the list scrolls sideways.
@@ -656,6 +662,11 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
    can't be hidden, nothing matches, already at the default — reads muted
    and takes no hover. */
 .mkui-filter-colops { flex-direction: column; gap: 3px; padding-top: 6px; white-space: nowrap; }
+/* "Applied": the filter's own on/off, shown where it is being edited. A
+   checkbox rather than a verb, so the state reads without inference. */
+.mkui-filter-applied { display: inline-flex; align-items: center; gap: 5px; }
+.mkui-filter-applied input[type="checkbox"] { margin: 0; accent-color: var(--mkui-accent); }
+.mkui-filter-applied:hover { text-decoration: none; }
 .mkui-filter-action-off { color: var(--mkui-fg-mute); cursor: default; }
 .mkui-filter-action-off:hover { text-decoration: none; }
 
@@ -1260,19 +1271,31 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-chip-x { padding-right: 5px; color: var(--mkui-fg-mute); }
 .mkui-chip-x:hover { color: var(--mkui-fg); }
 .mkui-chip .mkui-icon { width: 11px; height: 11px; flex-shrink: 0; }
+/* A filter chip's on/off box, ahead of the label and outside the body
+   button so the body still opens the dropdown. */
+.mkui-chip-check {
+  flex-shrink: 0;
+  width: 11px;
+  height: 11px;
+  margin: 0 0 0 5px;
+  accent-color: var(--mkui-accent);
+  cursor: pointer;
+}
+/* Switched off — a filter that is paused, a link direction that is not
+   sending: dimmed and dashed, still on the strip to be turned back on. */
+.mkui-chip-off { color: var(--mkui-fg-mute); border-style: dashed; }
+.mkui-chip-off .mkui-chip-main .mkui-icon { opacity: 0.55; }
 
 /* ── Table links ───────────────────────────────────────────────────── */
 /* One chip per direction (Broadcast / Listen): the main click toggles it,
    a direction that is off stays on the strip dimmed so it can be turned
-   back on; × removes it — armed first (accent border) when it holds
-   several names. */
+   back on (`.mkui-chip-off`, shared with a switched-off filter); ×
+   removes it — armed first (accent border) when it holds several names. */
 .mkui-chip-link .mkui-chip-main { gap: 4px; }
-.mkui-chip-off { color: var(--mkui-fg-mute); border-style: dashed; }
-.mkui-chip-off .mkui-chip-main .mkui-icon { opacity: 0.55; }
 .mkui-chip-arm { border-color: var(--mkui-accent); }
-/* A filter a link put there: the header icon and the chip take the link
-   tint, distinct from a filter the user set. */
-.mkui-filter-btn.mkui-filter-linked { color: var(--mkui-link, var(--mkui-accent)); opacity: 0.85; }
+/* A filter a link put there: the chip takes the link tint, distinct from a
+   filter the user set (the header icon's tint is up with .mkui-filter-btn,
+   where all three of its states are ordered together). */
 .mkui-chip-filter[title*="(linked:"] { border-color: var(--mkui-link, var(--mkui-accent)); }
 /* Header mark: the direction icons ahead of a linked column's label,
    dimmed while that direction is off. */

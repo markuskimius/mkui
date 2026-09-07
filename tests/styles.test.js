@@ -585,3 +585,25 @@ test("table links: paused chips read dimmed, linked filters take the link tint, 
   // The inline name input in the dropdown ops.
   assert.equal(declaration(".mkui-link-input", "font"), "inherit");
 });
+
+test("switched-off filters: the chip dims, the header icon dims last, the checkbox is its own target", () => {
+  // A switched-off filter borrows the link chips' off look: dimmed and
+  // dashed, still on the strip so it can be turned back on.
+  assert.equal(declaration(".mkui-chip-off", "color"), "var(--mkui-fg-mute)");
+  // The chip's on/off box sits outside .mkui-chip-main (whose click opens
+  // the dropdown), so it needs its own size and cursor.
+  assert.equal(declaration(".mkui-chip-check", "cursor"), "pointer");
+  assert.ok(/flex-shrink\s*:\s*0/.test(rule(".mkui-chip-check")), "the box never squeezes out of a narrow chip");
+  // The header icon's states must land in override order: a filter that is
+  // switched off reads muted whether the user or a link set it.
+  const at = (sel) => css.indexOf(sel + " {");
+  assert.ok(at(".mkui-filter-btn.active") < at(".mkui-filter-btn.mkui-filter-linked"),
+    "linked overrides plain active");
+  assert.ok(at(".mkui-filter-btn.mkui-filter-linked") < at(".mkui-filter-btn.mkui-filter-off"),
+    "off overrides both — equal specificity, so order decides");
+  assert.equal(declaration(".mkui-filter-btn.mkui-filter-off", "color"), "var(--mkui-fg-mute)");
+  // The dropdown's "Applied" toggle is a label around a checkbox, so it
+  // must not take the underline the sibling text actions do on hover.
+  assert.equal(declaration(".mkui-filter-applied", "display"), "inline-flex");
+  assert.equal(declaration(".mkui-filter-applied:hover", "text-decoration"), "none");
+});

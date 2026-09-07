@@ -5181,16 +5181,30 @@ function chipStrip(host) {
   const chips = toolbar?._ch.find(c => c.className === "mkui-table-chips") ?? null;
   const texts = (cls) => byClass(chips, cls).map(c => byClass(c, "mkui-chip-text")[0].textContent);
   const chipEl = (cls, col) => byClass(chips, cls).find(c => c.dataset.col === col);
+  const part = (cls, col, name) => chipEl(cls, col).querySelector(".mkui-chip-" + name);
   return {
     toolbar, chips,
     sort: chips ? texts("mkui-chip mkui-chip-sort") : [],
     filter: chips ? texts("mkui-chip mkui-chip-filter") : [],
+    // A chip's own off state is its box and its dimming; the word is in
+    // the tooltip, where the header button's summary also lives.
+    filterTitles: chips ? byClass(chips, "mkui-chip mkui-chip-filter").map(c => c.title) : [],
     sortDirs: chips ? byClass(chips, "mkui-chip mkui-chip-sort").map(c =>
       String(c._ch[0]._ch[1]?.className).includes("caret-up") ? "asc" : "desc") : [],
-    flip: (col) => chipEl("mkui-chip mkui-chip-sort", col)._ch[0]._ev.click[0](),
-    dropSort: (col) => chipEl("mkui-chip mkui-chip-sort", col)._ch[1]._ev.click[0]({ stopPropagation() {} }),
-    open: (col) => chipEl("mkui-chip mkui-chip-filter", col)._ch[0]._ev.click[0](),
-    dropFilter: (col) => chipEl("mkui-chip mkui-chip-filter", col)._ch[1]._ev.click[0]({ stopPropagation() {} }),
+    // Parts by class, not by index: a filter chip leads with its on/off box.
+    flip: (col) => part("mkui-chip mkui-chip-sort", col, "main")._ev.click[0](),
+    dropSort: (col) => part("mkui-chip mkui-chip-sort", col, "x")._ev.click[0]({ stopPropagation() {} }),
+    open: (col) => part("mkui-chip mkui-chip-filter", col, "main")._ev.click[0](),
+    dropFilter: (col) => part("mkui-chip mkui-chip-filter", col, "x")._ev.click[0]({ stopPropagation() {} }),
+    // The filter chip's checkbox: switch that filter off / back on.
+    check: (col) => part("mkui-chip mkui-chip-filter", col, "check"),
+    toggleFilter: (col, on) => {
+      const cb = part("mkui-chip mkui-chip-filter", col, "check");
+      cb.checked = on;
+      cb._ev.change[0]();
+    },
+    filterOff: () => byClass(chips, "mkui-chip mkui-chip-filter")
+      .map(c => c.classList.contains("mkui-chip-off")),
     groupIcon: (cls) => byClass(chips, "mkui-chip-group " + cls)[0]?._ch[0]._ch[0] ?? null,
   };
 }
@@ -5303,6 +5317,187 @@ test("chips: a filter chip on a column with no header yet does nothing", async (
   assert.deepEqual(s.filter, ["status: 1 values"], "configured filters show before data or header");
   s.open("status");
   assert.equal(host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).length, 0);
+});
+
+/* ── Switched-off filters ────────────────────────────────────────────── */
+// A filter can be suspended instead of cleared: the values, bounds, and
+// scope stay, the chip stays (dimmed, its checkbox unticked), and nothing
+// is judged by it until it comes back on.
+
+test("off filters: a chip's checkbox suspends a filter and puts it back, values intact", async () => {
+  const host = await filteredTable({ status: ["open", "new"], qty: { from: 100 } });
+  assert.deepEqual(shownNames(host), ["c"]);
+  chipStrip(host).toggleFilter("status", false);
+  let s = chipStrip(host);
+  assert.deepEqual(shownNames(host), ["b", "c"], "still filtered by qty ≥ 100");
+  assert.deepEqual(s.filter, ["status: 2 values", "qty: ≥ 100"], "the chip keeps its values");
+  assert.deepEqual(s.filterTitles, ["status: 2 values (off)", "qty: ≥ 100"], "the tooltip spells the state out");
+  assert.deepEqual(s.filterOff(), [true, false], "only that chip dims");
+  assert.equal(s.check("status").checked, false);
+  assert.equal(filterTitle(host, "status"), "2 values (off)");
+  const btn = getThs(host).find(t => t.dataset.col === "status").querySelector(".mkui-filter-btn");
+  assert.ok(btn.classList.contains("active"), "still marked: there is a filter to turn back on");
+  assert.ok(btn.classList.contains("mkui-filter-off"), "but drawn muted");
+  assert.deepEqual(host._paneEl._filters.get().status, { include: ["open", "new"], off: true },
+    "the spec carries the state, so it survives a layout");
+  chipStrip(host).toggleFilter("qty", false);
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"], "both off: nothing is filtered");
+  assert.deepEqual(chipStrip(host).filterOff(), [true, true]);
+  chipStrip(host).toggleFilter("status", true);
+  assert.deepEqual(shownNames(host), ["a", "c"], "back on with the values it had");
+  assert.deepEqual(host._paneEl._filters.get().status, { include: ["open", "new"] }, "and no flag left behind");
+});
+
+test("off filters: switching off is not clearing — × still drops the filter outright", async () => {
+  const host = await filteredTable({ status: ["open"] });
+  chipStrip(host).toggleFilter("status", false);
+  assert.deepEqual(chipStrip(host).filter, ["status: 1 values"], "still there");
+  assert.deepEqual(chipStrip(host).filterOff(), [true]);
+  chipStrip(host).dropFilter("status");
+  assert.deepEqual(chipStrip(host).filter, [], "× removes it for good");
+  assert.deepEqual(host._paneEl._filters.get(), {});
+  assert.equal(chipStrip(host).toolbar, null);
+});
+
+test("off filters: alt-clicking the group icon switches them all off, then all back on", async () => {
+  const host = await filteredTable({ status: ["open", "new"], qty: { from: 100 } });
+  const alt = () => chipStrip(host).groupIcon("mkui-chips-filter")._ev.click[0]({ altKey: true });
+  alt();
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"], "all off");
+  assert.deepEqual(chipStrip(host).filterOff(), [true, true]);
+  assert.match(chipStrip(host).groupIcon("mkui-chips-filter").title, /switch them all on/);
+  alt();
+  assert.deepEqual(shownNames(host), ["c"], "all back on");
+  assert.deepEqual(chipStrip(host).filterOff(), [false, false]);
+  // One off, one on: the group's next alt-click switches the rest off too.
+  chipStrip(host).toggleFilter("qty", false);
+  alt();
+  assert.deepEqual(chipStrip(host).filterOff(), [true, true]);
+  // A plain click still clears the group, whatever state its chips are in.
+  chipStrip(host).groupIcon("mkui-chips-filter")._ev.click[0]({});
+  assert.deepEqual(chipStrip(host).filter, []);
+});
+
+test("off filters: a flat table numbers by view position again while every filter is off", async () => {
+  const { host } = await createSelTable();
+  const api = host._paneEl._filters;
+  api.set({ value: { exclude: [2] } });
+  assert.deepEqual(rowNums(host), ["1", "2", "4"], "a filter is active: numbers are ranks over every row");
+  chipStrip(host).toggleFilter("value", false);
+  assert.deepEqual(rowNums(host), ["1", "2", "3", "4"], "nothing filtered: back to view positions");
+  chipStrip(host).toggleFilter("value", true);
+  assert.deepEqual(rowNums(host), ["1", "2", "4"]);
+});
+
+test("off filters: the dropdown's Applied box switches the open filter, and editing keeps it off", async () => {
+  const host = await filteredTable({ status: ["open", "new"] });
+  const applied = (dd) => byClass(dd, "mkui-filter-action mkui-filter-applied")[0];
+  let { dd } = openDropdown(host, "status");
+  let box = applied(dd)._ch[0];
+  assert.equal(box.checked, true, "an applied filter opens ticked");
+  box.checked = false;
+  box._ev.change[0]();
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"]);
+  assert.deepEqual(chipStrip(host).filterOff(), [true]);
+  // Editing the values of a switched-off filter leaves it switched off:
+  // you are setting up what will apply, not turning it on by accident.
+  const cbs = dd._ch.find(c => c.className === "mkui-filter-list")._ch.map(l => l._ch[0]);
+  const closed = cbs.find(c => c.dataset.val === "closed");
+  closed.checked = true;
+  closed._ev.change[0]();
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"], "still off");
+  assert.deepEqual(chipStrip(host).filter, ["status: 3 values"], "but it took the edit");
+  assert.deepEqual(chipStrip(host).filterOff(), [true], "and is still off");
+  chipStrip(host).toggleFilter("status", true);
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"], "on, and now every value passes");
+  // Reopened, the box reflects the chip.
+  dd = reopenDropdown(host, "status").dd;
+  assert.equal(applied(dd)._ch[0].checked, true);
+});
+
+test("off filters: no Applied box until the column has a filter to switch", async () => {
+  const host = await filteredTable({});
+  const { dd } = openDropdown(host, "status");
+  assert.equal(byClass(dd, "mkui-filter-action mkui-filter-applied").length, 0);
+  assert.equal(byClass(dd, "mkui-filter-action")[0].textContent, "Hide column", "the column ops are unchanged");
+});
+
+test("off filters: config can ship a filter set up but not applied", async () => {
+  const host = await filteredTable({ status: { include: ["open"], off: true }, qty: { from: 100, off: true } });
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"], "nothing filtered yet");
+  assert.deepEqual(chipStrip(host).filterTitles, ["status: 1 values (off)", "qty: ≥ 100 (off)"], "both offered on the strip");
+  assert.deepEqual(chipStrip(host).filterOff(), [true, true]);
+  chipStrip(host).toggleFilter("status", true);
+  assert.deepEqual(shownNames(host), ["a"], "one click arms it");
+});
+
+test("off filters: get/set round-trips the state, in replace and merge mode", async () => {
+  const host = await filteredTable({ status: ["open"], qty: { from: 100 } });
+  const api = host._paneEl._filters;
+  chipStrip(host).toggleFilter("status", false);
+  const spec = api.get();
+  assert.deepEqual(spec, { status: { include: ["open"], off: true }, qty: { type: "number", from: 100, to: null, empty: false } });
+  // A saved layout is exactly this: get(), later set(). Nothing may move.
+  const before = shownNames(host);
+  api.set(spec);
+  assert.deepEqual(api.get(), spec, "replace mode round-trips");
+  assert.deepEqual(shownNames(host), before);
+  assert.deepEqual(chipStrip(host).filterOff(), [true, false]);
+  api.set({ qty: { from: 100, off: true } }, { merge: true });
+  assert.deepEqual(chipStrip(host).filterOff(), [true, true], "merge keeps the other column's state and switches this one");
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"]);
+});
+
+test("off filters: a range keeps its bounds and its state through a dropdown edit", async () => {
+  const host = await filteredTable({ qty: { from: 100 } });
+  const applied = () => byClass(currentDropdown(host), "mkui-filter-action mkui-filter-applied")[0]._ch[0];
+  const { dd, hi } = openDropdown(host, "qty");
+  assert.equal(dd, currentDropdown(host));
+  const box = applied();
+  box.checked = false;
+  box._ev.change[0]();
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"]);
+  // Typing a bound rebuilds the filter object; the state must ride along.
+  typeBound(hi, "200");
+  assert.deepEqual(shownNames(host), ["a", "b", "c", "d"], "still off after the edit");
+  assert.deepEqual(host._paneEl._filters.get().qty, { type: "number", from: 100, to: 200, empty: false, off: true });
+  chipStrip(host).toggleFilter("qty", true);
+  assert.deepEqual(shownNames(host), ["b"], "on: 100 ≤ qty ≤ 200 — b (150), not c (250)");
+});
+
+test("off filters: turning one back on prunes the rows it hides from the selection", async () => {
+  const { host } = await createSelTable();
+  host._paneEl._select.set(["0", "1", "2"]);
+  assert.deepEqual(host._paneEl._select.get().keys, ["0", "1", "2"]);
+  host._paneEl._filters.set({ value: { include: [0], off: true } });
+  assert.deepEqual(host._paneEl._select.get().keys, ["0", "1", "2"], "off filters hide nothing, so nothing is pruned");
+  chipStrip(host).toggleFilter("value", true);
+  assert.deepEqual(host._paneEl._select.get().keys, ["0"], "on: the rows it hides leave the selection");
+});
+
+test("off filters: a tree column's header dims only once every scope is off", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
+  const api = host._paneEl._filters;
+  api.set({ qty: [{ exclude: ["1"], scope: "roots" }, { exclude: ["9"], scope: "children" }] });
+  const btn = () => getThs(host).find(t => t.dataset.col === "qty").querySelector(".mkui-filter-btn");
+  assert.equal(btn().classList.contains("mkui-filter-off"), false);
+  chipStrip(host).toggleFilter("qty", false); // the first chip: the roots filter
+  assert.deepEqual(chipStrip(host).filterOff(), [true, false]);
+  assert.equal(btn().classList.contains("mkui-filter-off"), false, "one scope still applies");
+  assert.match(btn().title, /All but 1 values \(off\); All but 1 values \(child\)/);
+  api.set({ qty: [{ exclude: ["1"], scope: "roots", off: true }, { exclude: ["9"], scope: "children", off: true }] });
+  assert.deepEqual(chipStrip(host).filterOff(), [true, true]);
+  assert.ok(btn().classList.contains("mkui-filter-off"), "both off: the column reads as not filtering");
+  assert.ok(btn().classList.contains("active"), "but still marked — there is something to turn on");
+});
+
+test("off filters: a range preset stops ticking while it is off", async () => {
+  const host = await filteredTable({ ts: { preset: "today" } });
+  assert.equal(pendingTimers.size, 1, "an active preset keeps a re-apply timer");
+  chipStrip(host).toggleFilter("ts", false);
+  assert.equal(pendingTimers.size, 0, "switched off: nothing to re-apply");
+  chipStrip(host).toggleFilter("ts", true);
+  assert.equal(pendingTimers.size, 1, "back on, back on the clock");
 });
 
 /* ── Configured and programmatic sort ────────────────────────────────── */
@@ -6157,6 +6352,19 @@ test("tree: a plain filter dropdown filters the top level; alt-click shows the s
   chipStrip(host).open("qty");
   dd = currentDropdown(host);
   assert.ok(scopeRow(dd).btn("children").classList.contains("active"), "a chip opens its own scope's tab");
+});
+
+test("tree: switching a branch filter off stops it driving the subtree pass", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
+  const api = host._paneEl._filters;
+  api.set({ qty: { include: ["5"], scope: "all" } });
+  const withBranch = treeNames(host);
+  assert.ok(withBranch.length < 6, "the branch filter prunes");
+  chipStrip(host).toggleFilter("qty", false);
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"], "off: every row is back");
+  assert.deepEqual(api.get().qty, { include: ["5"], off: true, scope: "all" }, "scope and values kept");
+  chipStrip(host).toggleFilter("qty", true);
+  assert.deepEqual(treeNames(host), withBranch, "and it prunes again");
 });
 
 test("tree: a branch filter keeps the way to a match and drops rows with none below", async () => {
@@ -7244,7 +7452,7 @@ test("links: a live replace of a selected row rebroadcasts its new value", async
   assert.deepEqual(ids(dst.host), ["D"]);
 });
 
-test("links: a selected tree row broadcasts its whole subtree, collapsed or not, each value once; live children join", async () => {
+test("links: a selected tree row broadcasts its whole subtree, collapsed or filtered out, each value once; live children join", async () => {
   const hub = new LinkHub();
   const { host } = await createTable({ columns: TREE_COLS, tree: { child: "parent", parent: "id" }, link: { broadcast: { node: "id" } } }, { hub, id: "nodes" });
   triggerVisible(ioCallbacks.at(-1));
@@ -7261,10 +7469,60 @@ test("links: a selected tree row broadcasts its whole subtree, collapsed or not,
   assert.deepEqual(hub.current("node").values, ["A", "A1", "A2", "A21", "A3x"], "a replaced descendant rebroadcasts");
   sub.opts.onUpdate("delete", { _mkio_row: "8" });
   assert.deepEqual(hub.current("node").values, ["A", "A1", "A2", "A21"], "a deleted descendant leaves");
+  // A filter says what this table shows, not what the record is: a child
+  // the filter hides is still a child of the selected row, so it goes out.
   host._paneEl._filters.set({ name: { exclude: ["a2"], scope: "children" } });
-  assert.deepEqual(hub.current("node").values, ["A", "A1"], "a filtered-out branch stays out");
+  assert.deepEqual(treeNames(host), ["a", "a1", "b", "x1"], "a2 and its child are off screen");
+  assert.deepEqual(hub.current("node").values, ["A", "A1", "A2", "A21"], "and still broadcast, with the branch below them");
+  // A child that arrives already hidden never enters the view, so only
+  // `inBroadcast` (which walks parents, not the view) can notice it.
+  sub.opts.onUpdate("insert", { _mkio_row: "9", name: "a2", id: "A4", parent: "A", qty: 0 });
+  assert.deepEqual(treeNames(host), ["a", "a1", "b", "x1"], "filtered out on arrival");
+  assert.deepEqual(hub.current("node").values, ["A", "A1", "A2", "A21", "A4"], "and joins the broadcast all the same");
+  sub.opts.onUpdate("delete", { _mkio_row: "9" });
+  assert.deepEqual(hub.current("node").values, ["A", "A1", "A2", "A21"], "leaving drops it again");
+  host._paneEl._filters.set({ name: { exclude: ["a1", "a2"], scope: "all" } });
+  assert.deepEqual(hub.current("node").values, ["A", "A1", "A2", "A21"], "a branch filter hides no more of the subtree than any other");
+  host._paneEl._filters.set({});
   pointerDown(treeRow(host, "b"), 0);
   assert.deepEqual(hub.current("node").values, ["B", "B1"], "a leaf-only subtree, collapsed");
+});
+
+test("links: a listener sees the children the broadcaster's own filters hide", async () => {
+  // End to end: what the source table shows is its business, but the
+  // subtree it speaks for is the record's, so a filter on the source must
+  // not quietly narrow what the listener is told about.
+  const hub = new LinkHub();
+  const { src, dst } = await linkedPair(hub, { tree: { child: "parent", parent: "id" } });
+  pointerDown(dataRows(src.host)[0], 0); // A, the only root; B, C, D are collapsed under it
+  assert.deepEqual(hub.current("order").values, ["A", "B", "D", "C"], "pre-order: A, B, B's child D, then C");
+  assert.deepEqual(ids(dst.host), ["B", "C", "D"], "every child of the subtree reaches the listener");
+  src.host._paneEl._filters.set({ qty: { include: [1], scope: "children" } });
+  // The id column carries the tree caret, so read the row count, not text.
+  assert.equal(liveRows(src.host).length, 1, "only A is on screen — B, C and D are filtered out");
+  assert.deepEqual(hub.current("order").values, ["A", "B", "D", "C"], "and still spoken for");
+  assert.deepEqual(ids(dst.host), ["B", "C", "D"], "so the listener is unmoved");
+  // A filter switched off is no filter at all, on either side of the link.
+  chipStrip(src.host).toggleFilter("qty", false);
+  assert.equal(liveRows(src.host).length, 1, "still collapsed, just no longer filtered");
+  assert.deepEqual(ids(dst.host), ["B", "C", "D"]);
+});
+
+test("links: a linked filter can be switched off, and stays out of the filter spec either way", async () => {
+  const hub = new LinkHub();
+  const { src, dst } = await linkedPair(hub);
+  pointerDown(dataRows(src.host)[0], 0);
+  assert.deepEqual(ids(dst.host), ["B", "C"], "A's children");
+  assert.deepEqual(chipStrip(dst.host).filterTitles, ["parent: 1 values (linked: order)"]);
+  chipStrip(dst.host).toggleFilter("parent", false);
+  assert.deepEqual(ids(dst.host), ["A", "B", "C", "D"], "off: the link's filter applies nothing");
+  assert.deepEqual(chipStrip(dst.host).filterOff(), [true]);
+  assert.deepEqual(dst.host._paneEl._filters.get(), {}, "a link's filter is never in the filter spec");
+  // The link is untouched: a new broadcast still lands in the same filter.
+  pointerDown(dataRows(src.host)[1], 0);
+  assert.deepEqual(chipStrip(dst.host).filterTitles, ["parent: 1 values (linked: order)"]);
+  chipStrip(dst.host).toggleFilter("parent", true);
+  assert.deepEqual(ids(dst.host), ["D"], "back on, filtering by the newer selection (B)");
 });
 
 test("links: broadcasting off retracts and on re-announces; listening off releases and on catches up", async () => {
