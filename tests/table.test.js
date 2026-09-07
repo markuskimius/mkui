@@ -7244,6 +7244,29 @@ test("links: a live replace of a selected row rebroadcasts its new value", async
   assert.deepEqual(ids(dst.host), ["D"]);
 });
 
+test("links: a selected tree row broadcasts its whole subtree, collapsed or not, each value once; live children join", async () => {
+  const hub = new LinkHub();
+  const { host } = await createTable({ columns: TREE_COLS, tree: { child: "parent", parent: "id" }, link: { broadcast: { node: "id" } } }, { hub, id: "nodes" });
+  triggerVisible(ioCallbacks.at(-1));
+  const sub = lastSubscribe();
+  sub.opts.onSnapshot(treeRows());
+  pointerDown(treeRow(host, "a"), 0); // roots only show: a's subtree is collapsed
+  assert.deepEqual(hub.current("node").values, ["A", "A1", "A2", "A21"], "the row, then its descendants in tree order");
+  clickToggle(host, "a");
+  pointerDown(treeRow(host, "a2"), 0, { ctrlKey: true }); // a2 is already covered by a
+  assert.deepEqual(hub.current("node").values, ["A", "A1", "A2", "A21"], "a selected descendant adds nothing twice");
+  sub.opts.onUpdate("insert", { _mkio_row: "8", name: "a3", id: "A3", parent: "A", qty: 0 });
+  assert.deepEqual(hub.current("node").values, ["A", "A1", "A2", "A21", "A3"], "a new child under the selection joins");
+  sub.opts.onUpdate("update", { _mkio_row: "8", name: "a3", id: "A3x", parent: "A", qty: 0 });
+  assert.deepEqual(hub.current("node").values, ["A", "A1", "A2", "A21", "A3x"], "a replaced descendant rebroadcasts");
+  sub.opts.onUpdate("delete", { _mkio_row: "8" });
+  assert.deepEqual(hub.current("node").values, ["A", "A1", "A2", "A21"], "a deleted descendant leaves");
+  host._paneEl._filters.set({ name: { exclude: ["a2"], scope: "children" } });
+  assert.deepEqual(hub.current("node").values, ["A", "A1"], "a filtered-out branch stays out");
+  pointerDown(treeRow(host, "b"), 0);
+  assert.deepEqual(hub.current("node").values, ["B", "B1"], "a leaf-only subtree, collapsed");
+});
+
 test("links: broadcasting off retracts and on re-announces; listening off releases and on catches up", async () => {
   const hub = new LinkHub();
   const { src, dst } = await linkedPair(hub);

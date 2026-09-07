@@ -3428,15 +3428,43 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // stash for it is void — nothing should come back when the link clears.
   function dropLinkStash(key) { linkStash.delete(key); }
 
+  // The rows a broadcast speaks for: the selected rows and, in a tree,
+  // every descendant of each (collapsed or not — selecting a parent means
+  // its whole subtree; a filtered-out branch stays out), each row once.
+  function getBroadcastRows() {
+    const sel = getSelectedRows();
+    if (!tree || !sel.length) return sel;
+    if (viewDirty) rebuildView(); // treeShown reads the branch-filter verdicts
+    const seen = new Set(), out = [];
+    const add = (key) => {
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(rows.get(key));
+      for (const c of sortedKids(key)) if (treeShown(c)) add(c);
+    };
+    for (const row of sel) add(row[idKey]);
+    return out;
+  }
+
+  // Whether a live change to `key` can move the broadcast: the row is in
+  // the selection, or sits under a selected row in a tree.
+  function inBroadcast(key) {
+    if (rowInSelection(key)) return true;
+    if (!tree) return false;
+    for (let pk = parentOf.get(key); pk != null; pk = parentOf.get(pk))
+      if (rowInSelection(pk)) return true;
+    return false;
+  }
+
   // Publish the selection under every broadcast name. Runs on every
-  // selection change (publishSelection) and a live replace of a selected
-  // row; the hub drops repeats, so this is safe to call freely.
+  // selection change (publishSelection) and a live change under the
+  // selection; the hub drops repeats, so this is safe to call freely.
   function broadcastSelection() {
     if (!hub || linkSource == null) return;
     const names = Object.keys(link.broadcast);
     if (!names.length) return;
     const map = {};
-    const sel = link.broadcasting && !closed ? getSelectedRows() : [];
+    const sel = link.broadcasting && !closed ? getBroadcastRows() : [];
     for (const n of names) {
       if (!sel.length) { map[n] = null; continue; }
       const col = link.broadcast[n];
@@ -4935,6 +4963,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     render();
     const tr = rowEls.get(row[idKey]);
     if (tr) flash(tr, "mkui-flash-in");
+    // A new child under a selected row joins its broadcast.
+    if (tree && hasBroadcast() && inBroadcast(row[idKey])) broadcastSelection();
   }
 
   function applyDelete(row) {
@@ -5051,10 +5081,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (findRe && changed.length) scheduleFindRescan();
     // A live update to a row the buttons act on can flip an `enable.when`
     // verdict (a status column crossing a gate), so re-evaluate them.
-    if ((hasButtons || hasBroadcast()) && rowInSelection(key)) {
-      if (hasButtons) updateButtonStates();
-      broadcastSelection(); // its broadcast values may have changed
-    }
+    if (hasButtons && rowInSelection(key)) updateButtonStates();
+    if (hasBroadcast() && inBroadcast(key)) broadcastSelection(); // its broadcast values may have changed
     // A live update to the published row replaces the object it points at,
     // so followers see the new values instead of a snapshot.
     if (lastPublishedRow === prev) publishRow(row);

@@ -446,8 +446,12 @@ link.chips = false              # no toolbar chips: pause from the advanced drop
 - **What is sent.** The rows the selection implies — selected rows, else
   the rows containing selected cells, else the focused cell's row — yield
   the distinct values of each broadcast column, in view order. Several
-  rows send several values; nothing selected retracts the name. A live
-  update to a selected row re-sends. Every value also lands in app state
+  rows send several values; nothing selected retracts the name. In a
+  **tree**, a selected row speaks for its whole subtree: every descendant's
+  value goes too, collapsed or not (a branch a filter hides stays out),
+  each value once. A live update to a selected row — or, in a tree, a row
+  arriving, changing, or leaving under one — re-sends. Every value also
+  lands in app state
   at `link.<name>` (a list, or `null`), where a statusbar widget or an
   `enable.when` can read it.
 - **What a listener does.** A broadcast becomes an include filter on the
