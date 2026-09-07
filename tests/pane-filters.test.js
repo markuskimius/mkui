@@ -171,6 +171,45 @@ test("table.expand action routes to the workspace", async () => {
   assert.match(src, /registerAction\("table\.expand",\s*\(app, a = \{\}\) => ws\.expandPane\(a\.pane \?\? null, a\.depth \?\? 0\)\)/);
 });
 
+/* ── Selection routing ────────────────────────────────────────────────── */
+// selectPane reaches a table's `_select` hook and returns its result;
+// `table.select` wraps it.
+
+test("selectPane reaches the named pane's select hook and returns its result; no pane declines", () => {
+  const log = [];
+  const ws = makeWorkspace(log);
+  for (const [id, el] of ws._paneEls) if (el._filters) el._select = {
+    set: (keys, opts) => { log.push(["sel:" + id, keys, opts]); return { ok: true, selected: keys, missing: [], hidden: [] }; },
+    get: () => ({ keys: ["k"], focus: "k" }),
+  };
+  assert.deepEqual(ws.selectPane("a", ["1", "2"], { focus: false }), { ok: true, selected: ["1", "2"], missing: [], hidden: [] });
+  assert.deepEqual(log, [["sel:a", ["1", "2"], { focus: false }]]);
+  assert.equal(ws.selectPane("plain", ["1"]), false, "a pane without the hook declines");
+  assert.equal(ws.selectPane("nope", ["1"]), false);
+  assert.ok(ws.selectPane(null, []).ok, "no id targets the focused pane");
+  assert.deepEqual(log.at(-1), ["sel:b", [], {}]);
+  assert.deepEqual(ws.getPaneSelection("a"), { keys: ["k"], focus: "k" });
+  assert.equal(ws.getPaneSelection("plain"), null);
+});
+
+test("selectPane builds a never-shown pane, and declines while its table has no hook yet", () => {
+  const log = [];
+  const ws = makeWorkspace(log);
+  for (const [, el] of ws._paneEls) if (el._filters) el._select = { set: () => ({ ok: true }), get: () => null };
+  // "parked" is in the config but was never shown: _ensurePaneEl builds it,
+  // and an async table factory has not installed `_select` yet.
+  assert.equal(ws.selectPane("parked", ["1"]), false);
+  assert.ok(ws._paneEls.has("parked"), "the pane was still built, as the other setters do");
+  ws._paneEls.get("parked")._select = { set: (keys) => ({ ok: true, selected: keys, missing: [], hidden: [] }), get: () => null };
+  assert.deepEqual(ws.selectPane("parked", ["1"]).selected, ["1"], "it takes them once the hook exists");
+});
+
+test("table.select action routes to the workspace with the focus flag", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../mkui/static/src/components/app.js", import.meta.url), "utf8");
+  assert.match(src, /registerAction\("table\.select",\s*\(app, a = \{\}\) => ws\.selectPane\(a\.pane \?\? null, a\.keys \?\? \[\], \{ focus: a\.focus !== false \}\)\)/);
+});
+
 test("setPaneLink / getPaneLink reach the pane's `_link` hook the same way", () => {
   const log = [];
   const ws = makeWorkspace(log);

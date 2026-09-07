@@ -1781,6 +1781,62 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     refreshSelectionStyles();
   }
 
+  // Programmatic selection (`workspace.selectPane`, `table.select`): select
+  // rows by identity as one click would — one selection change, so state
+  // followers and linked tables see the new row directly, never a null in
+  // between. In a tree, collapsed ancestors of a key open so it is in
+  // view; filters are never touched: a key they hide stays `hidden`, one
+  // that is not loaded is `missing` (paged streams, a snapshot yet to
+  // arrive, a hidden orphan). Nothing changes unless some key resolves.
+  // An empty list is a full clear, cursor included. `focus` (default on)
+  // puts the cursor on the first key and scrolls to it.
+  function selectRows(keys, { focus = true } = {}) {
+    const want = (keys == null ? [] : Array.isArray(keys) ? keys : [keys])
+      .filter((k) => k != null).map(String);
+    const result = { ok: true, selected: [], missing: [], hidden: [] };
+    if (!want.length) { clearSelection(); return result; }
+    if (closed) { result.missing = want; result.ok = false; return result; }
+    if (viewDirty) rebuildView();
+    const toOpen = new Set();
+    for (const key of want) {
+      if (!rows.has(key)) { result.missing.push(key); continue; }
+      if (tree) {
+        // Every row on the chain must pass its filters, and the chain
+        // must reach a root (a hidden orphan never does).
+        let k = key, shown = true;
+        while (k != null && shown) { shown = treeShown(k); k = parentOf.get(k) ?? null; }
+        if (!shown || parentOf.get(key) === undefined) { result.hidden.push(key); continue; }
+        for (let pk = parentOf.get(key); pk != null; pk = parentOf.get(pk) ?? null)
+          if (!expanded.has(pk)) toOpen.add(pk);
+      } else if (!matchesFilters(rows.get(key))) { result.hidden.push(key); continue; }
+      result.selected.push(key);
+    }
+    result.ok = !result.missing.length && !result.hidden.length;
+    if (!result.selected.length) return result;
+    if (toOpen.size) {
+      for (const k of toOpen) expanded.add(k);
+      setExpandedApplied();
+    }
+    clearCellSelection();
+    selectedKeys.clear();
+    for (const key of result.selected) selectedKeys.add(key);
+    selectedAnchor = result.selected[0];
+    if (focus) {
+      const cols = columns ? visibleColumns() : [];
+      const key = result.selected[0];
+      focusCell = { key, col: cols[0] ?? null, idx: view.indexOf(key) };
+    }
+    refreshSelectionStyles();
+    if (focus) scrollFocusIntoView();
+    return result;
+  }
+
+  // The selection as row identities: the rows the selection implies (what
+  // buttons and broadcasts see), plus the cursor's row.
+  function getSelection() {
+    return { keys: getSelectedRows().map((r) => r[idKey]), focus: focusCell?.key ?? null };
+  }
+
   /* ── Selection interaction (pointer) ──────────────────────────────── */
 
   // Row-number clicks: plain selects, ctrl/cmd toggles, shift range-selects
@@ -5455,6 +5511,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         expanded: () => [...expanded].filter(hasKids),
       };
     }
+    // Selection hook: `workspace.selectPane` and `table.select` select rows
+    // by identity (see selectRows); `get` reports the selection back.
+    paneEl._select = { set: selectRows, get: getSelection };
     paneEl.addEventListener("mkui-pane-close", () => {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       if (presetTimer) { clearTimeout(presetTimer); presetTimer = null; }

@@ -82,6 +82,11 @@ class MkuiApp extends HTMLElement {
     // Tree tables: `args = { pane, depth }` — a depth or "all"; no `depth`
     // collapses everything.
     this._app.registerAction("table.expand",    (app, a = {}) => ws.expandPane(a.pane ?? null, a.depth ?? 0));
+    // Select rows by identity: `args = { pane, keys, focus }` — `keys` the
+    // row ids (`_mkio_row` for a query table: the primary key value), an
+    // empty list clears; `focus = false` selects without moving the cursor.
+    // Returns the table's `{ ok, selected, missing, hidden }`, or false.
+    this._app.registerAction("table.select",    (app, a = {}) => ws.selectPane(a.pane ?? null, a.keys ?? [], { focus: a.focus !== false }));
 
     const hasAuth = !!config.auth;
     const st = this._app.state;

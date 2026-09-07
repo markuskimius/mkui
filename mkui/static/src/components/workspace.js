@@ -153,8 +153,8 @@ class MkuiWorkspace extends HTMLElement {
     return fn ? fn() !== false : false;
   }
 
-  // A pane's view hook (`_filters`, `_sort`, `_columns`, or `_link`,
-  // exposed by mkio-table). By
+  // A pane's view hook (`_filters`, `_sort`, `_columns`, `_link`, `_tree`,
+  // or `_select`, exposed by mkio-table). By
   // id, a pane that was never shown is built first when `build` is set,
   // so a setter can run ahead of opening it; with no id, the focused
   // frame's active pane is the target.
@@ -233,6 +233,25 @@ class MkuiWorkspace extends HTMLElement {
     if (!hook) return false;
     hook.expand(depth);
     return true;
+  }
+
+  // Select rows by identity (`_mkio_row` / `_mkio_ref` / `_mkio_topic`),
+  // as a click would: the selection publishes and broadcasts, collapsed
+  // tree ancestors open, filters stay. `opts.focus` (default true) moves
+  // the cursor to the first key and scrolls to it. Returns false without
+  // a pane, else `{ ok, selected, missing, hidden }` — `missing` keys are
+  // not loaded, `hidden` ones a filter keeps out; `ok` when every key
+  // resolved. An empty list clears the selection.
+  selectPane(paneId, keys, opts = {}) {
+    const hook = this._paneHook(paneId, "_select", true);
+    if (!hook) return false;
+    return hook.set(keys, opts);
+  }
+
+  // `{ keys, focus }` — the rows the selection implies and the cursor's
+  // row — or null without a selection hook.
+  getPaneSelection(paneId) {
+    return this._paneHook(paneId, "_select", false)?.get() ?? null;
   }
 
   setApp(app) {

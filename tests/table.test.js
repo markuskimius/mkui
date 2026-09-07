@@ -7465,3 +7465,147 @@ test("links: the header dropdown's ops appear on alt/option-click only, name a c
   assert.equal(ops.op("broadcast").querySelector(".mkui-link-input"), null, "Escape puts the label back");
   assert.deepEqual(host._paneEl._link.get().broadcast, {});
 });
+
+/* ── table.select: programmatic selection by row identity ─────────────── */
+// `paneEl._select.set(keys, { focus })` selects rows as a click would;
+// `get()` reports the selection back. See selectRows in mkio-table.js.
+
+const selectedNames = (host) => dataRows(host).filter(tr => tr.classList.contains("mkui-selected"))
+  .map(tr => treeText(tr._ch.find(td => td.dataset?.col === "name")));
+
+test("select action: keys select their rows, the first takes the cursor, state sees one write", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  pointerDown(dataRows(host)[0], 0);
+  const before = state.writes("current");
+  const r = host._paneEl._select.set(["2", "3"]);
+  assert.deepEqual(r, { ok: true, selected: ["2", "3"], missing: [], hidden: [] });
+  assert.deepEqual(selectedNames(host), ["row-2", "row-3"]);
+  assert.equal(state.get("current").name, "row-2");
+  assert.equal(state.writes("current"), before + 1, "no null published in between");
+  assert.deepEqual(host._paneEl._select.get(), { keys: ["2", "3"], focus: "2" });
+  const focused = dataRows(host).find(tr => tr._ch.some(td => td.classList.contains("mkui-cell-focus")));
+  assert.equal(focused._ch.find(td => td.dataset?.col === "name").textContent, "row-2");
+});
+
+test("select action: focus off keeps the cursor; a number key matches its string identity", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  pointerDown(dataRows(host)[0], 0);
+  const r = host._paneEl._select.set([3], { focus: false });
+  assert.deepEqual(r.selected, ["3"]);
+  assert.deepEqual(selectedNames(host), ["row-3"]);
+  assert.equal(host._paneEl._select.get().focus, "0", "cursor stayed on row-0");
+  assert.equal(state.get("current").name, "row-0", "the cursor's row is still the published one");
+});
+
+test("select action: an empty list clears everything, cursor included", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  host._paneEl._select.set(["1"]);
+  assert.equal(state.get("current").name, "row-1");
+  const r = host._paneEl._select.set([]);
+  assert.deepEqual(r, { ok: true, selected: [], missing: [], hidden: [] });
+  assert.deepEqual(selectedNames(host), []);
+  assert.equal(state.get("current"), null);
+  assert.deepEqual(host._paneEl._select.get(), { keys: [], focus: null });
+});
+
+test("select action: unknown and filtered keys are reported; nothing changes unless a key resolves", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  host._paneEl._select.set(["1"]);
+  host._paneEl._filters.set({ name: ["row-0", "row-1", "row-2"] });
+  assert.deepEqual(host._paneEl._select.set(["9"]), { ok: false, selected: [], missing: ["9"], hidden: [] });
+  assert.deepEqual(host._paneEl._select.set(["3"]), { ok: false, selected: [], missing: [], hidden: ["3"] });
+  assert.deepEqual(selectedNames(host), ["row-1"], "the selection stayed");
+  assert.equal(state.get("current").name, "row-1");
+  assert.deepEqual(host._paneEl._filters.get(), { name: { include: ["row-0", "row-1", "row-2"] } }, "filters untouched");
+  const r = host._paneEl._select.set(["3", "2", "9"]);
+  assert.deepEqual(r, { ok: false, selected: ["2"], missing: ["9"], hidden: ["3"] });
+  assert.deepEqual(selectedNames(host), ["row-2"], "the keys that resolve are selected");
+});
+
+test("select action: a collapsed tree row's ancestors open; a hidden orphan or a filtered branch stays hidden", async () => {
+  const host = await treeTable({ select: { state: "current" } });
+  assert.deepEqual(treeNames(host), ["a", "b", "x1"]);
+  const r = host._paneEl._select.set(["4"]);          // a21, under a > a2
+  assert.deepEqual(r, { ok: true, selected: ["4"], missing: [], hidden: [] });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "x1"], "only the chain opened, b stays closed");
+  assert.deepEqual(host._paneEl._tree.expanded().sort(), ["1", "3"]);
+  assert.deepEqual(selectedNames(host), ["a21"]);
+  assert.equal(host._paneEl._select.get().focus, "4");
+  host._paneEl._filters.set({ name: ["b", "x1"] });     // roots filter hides a's whole branch
+  assert.deepEqual(host._paneEl._select.set(["4"]), { ok: false, selected: [], missing: [], hidden: ["4"] });
+  const hidden = await treeTable({ tree: { child: "parent", parent: "id", orphans: "hide" } });
+  assert.deepEqual(hidden._paneEl._select.set(["7"]), { ok: false, selected: [], missing: [], hidden: ["7"] });
+});
+
+test("select action: the selection broadcasts through table links like a click", async () => {
+  const { host, hub } = await createTable({ columns: LINK_COLS, rowColumn: true, link: { broadcast: { order: "id" } } }, { id: "orders" });
+  triggerVisible(ioCallbacks.at(-1));
+  lastSubscribe().opts.onSnapshot(linkRows());
+  host._paneEl._select.set(["2", "3"]);
+  assert.deepEqual(hub.current("order"), { values: ["B", "C"], source: "orders" });
+  host._paneEl._select.set([]);
+  assert.equal(hub.current("order"), null);
+});
+
+test("select action: keys resolve against a view the same tick's filter change dirtied", async () => {
+  const { host, state } = await createSelTable({ select: { state: "current" } });
+  // No await between the two calls: the filter marks the view dirty and the
+  // selection must rebuild it before deciding what a key resolves to.
+  host._paneEl._filters.set({ name: { exclude: ["row-3"] } });
+  const r = host._paneEl._select.set(["2", "3"]);
+  assert.deepEqual(r, { ok: false, selected: ["2"], missing: [], hidden: ["3"] });
+  assert.deepEqual(selectedNames(host), ["row-2"]);
+  assert.equal(state.get("current").name, "row-2");
+});
+
+test("select action: a single key needs no array, and it replaces a cell selection", async () => {
+  const { host } = await createSelTable({ select: { state: "current" } });
+  pointerDown(dataRows(host)[0], 1);                       // cell mode: focus a cell
+  assert.ok(dataRows(host)[0]._ch.some(td => td.classList.contains("mkui-cell-focus")));
+  const r = host._paneEl._select.set("2");
+  assert.deepEqual(r.selected, ["2"]);
+  assert.deepEqual(selectedNames(host), ["row-2"]);
+  const marked = dataRows(host).filter(tr => tr._ch.some(td => td.classList.contains("mkui-cell-sel")));
+  assert.deepEqual(marked, [], "the cell rectangle is gone");
+});
+
+test("select action: a selection-gated toolbar button arms without a click", async () => {
+  const { host } = await createSelTable({
+    buttons: [{ label: "Act", enable: { minSelected: 1 },
+                action: { type: "transaction", service: "svc", data: { n: "${row.name}" } } }],
+  });
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
+  const btn = toolbar._ch[0];
+  assert.equal(btn.disabled, true);
+  host._paneEl._select.set(["1"]);
+  assert.equal(btn.disabled, false, "the programmatic selection armed the button");
+  host._paneEl._select.set([]);
+  assert.equal(btn.disabled, true, "clearing disarms it");
+});
+
+test("select action: a closed pane takes nothing and reports the keys missing", async () => {
+  const { host } = await createSelTable({ select: { state: "current" } });
+  for (const fn of host._paneEl._ev["mkui-pane-close"] ?? []) fn();
+  assert.deepEqual(host._paneEl._select.set(["1"]), { ok: false, selected: [], missing: ["1"], hidden: [] });
+  assert.deepEqual(selectedNames(host), []);
+});
+
+test("select action: several tree keys open every ancestor chain they need", async () => {
+  const host = await treeTable();
+  const r = host._paneEl._select.set(["4", "6"]);   // a21 (under a > a2) and b1 (under b)
+  assert.deepEqual(r.selected, ["4", "6"]);
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"]);
+  assert.deepEqual(selectedNames(host), ["a21", "b1"]);
+  assert.deepEqual(host._paneEl._tree.expanded().sort(), ["1", "3", "5"]);
+});
+
+test("select action: a tree selection broadcasts the subtree, as a click on the parent does", async () => {
+  const { host, hub } = await createTable({
+    columns: LINK_COLS, rowColumn: true, tree: { child: "parent", parent: "id" },
+    link: { broadcast: { order: "id" } },
+  }, { id: "orders" });
+  triggerVisible(ioCallbacks.at(-1));
+  lastSubscribe().opts.onSnapshot(linkRows());
+  host._paneEl._select.set(["2"]);                  // B, whose child D stays collapsed
+  assert.deepEqual(hub.current("order").values, ["B", "D"], "collapsed descendants broadcast too");
+});
