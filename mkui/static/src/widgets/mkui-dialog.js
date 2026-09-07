@@ -19,14 +19,20 @@ export function openDialog(spec, context, app, extra = {}) {
     const paneId = `_dialog-${++dialogSeq}`;
     let resolved = false;
 
+    // `fieldState` is keyed by name: only named fields have a value the
+    // form can read or submit. The DOM-side maps are keyed by `keyOf(f)` —
+    // the name, or a synthetic key for a nameless field (a read-only line,
+    // say), so its value, compute, and showWhen still apply.
     const fieldState = {};   // name → current value (what submit sends)
-    const fieldEls = {};     // name → wrapper div
-    const fieldInputs = {};  // name → input / select / textarea
-    const fieldParts = {};   // name → { label, ro } extra DOM refs
-    const resolvedAttrs = {}; // name → { required, disabled, readonly, min, max, step, pattern }
-    const optionsKey = {};   // name → key of the option list last built
-    const dirty = new Set(); // fields the user has typed into (compute stays off them)
+    const fieldEls = {};     // key → wrapper div
+    const fieldInputs = {};  // key → input / select / textarea
+    const fieldParts = {};   // key → { label, ro } extra DOM refs
+    const resolvedAttrs = {}; // key → { required, disabled, readonly, min, max, step, pattern }
+    const optionsKey = {};   // key → key of the option list last built
+    const dirty = new Set(); // keys the user has typed into (compute stays off them)
     const allFields = [];
+    const anonKey = new Map(); // nameless field → its synthetic key
+    const keyOf = (f) => f.name || anonKey.get(f);
     const rowOf = new Map(); // field → the { row } item holding it
     const containers = [];   // [{ item, el }] for group headers and rows
     let computeWarned = false;
@@ -36,6 +42,7 @@ export function openDialog(spec, context, app, extra = {}) {
       for (const item of items) {
         if (item.group != null) continue;
         if (item.row) { flattenFields(item.row, item); continue; }
+        if (!item.name) anonKey.set(item, `#${allFields.length}`);
         allFields.push(item);
         if (row) rowOf.set(item, row);
       }
@@ -84,17 +91,18 @@ export function openDialog(spec, context, app, extra = {}) {
       return row ? shown(row.showWhen) : true;
     }
 
-    // Write a value into a field's state and DOM; true when the state changed.
+    // Write a value into a field's DOM and (when named) its state; true
+    // when the state changed.
     function setFieldValue(field, v) {
       const name = field.name;
-      if (!name) return false;
-      const input = fieldInputs[name];
+      const key = keyOf(field);
+      const input = fieldInputs[key];
       let next;
       if (field.type === "hidden") {
         next = v;
       } else if (field.type === "readonly") {
         next = v;
-        const ro = fieldParts[name]?.ro;
+        const ro = fieldParts[key]?.ro;
         if (ro) ro.textContent = v == null ? "" : String(v);
       } else if (field.type === "checkbox") {
         next = !!v;
@@ -109,6 +117,7 @@ export function openDialog(spec, context, app, extra = {}) {
         next = v == null ? "" : String(v);
         if (input) input.value = next;
       }
+      if (!name) return false;
       const changed = !Object.is(fieldState[name], next);
       fieldState[name] = next;
       return changed;
@@ -132,11 +141,9 @@ export function openDialog(spec, context, app, extra = {}) {
       }
 
       const onEdit = (input, read) => () => {
-        if (field.name) {
-          fieldState[field.name] = read(input);
-          dirty.add(field.name);
-          onFieldChange(field.name);
-        }
+        dirty.add(keyOf(field));
+        if (field.name) fieldState[field.name] = read(input);
+        onFieldChange(field.name ?? null);
       };
 
       let input;
@@ -168,11 +175,10 @@ export function openDialog(spec, context, app, extra = {}) {
         wrapper.appendChild(input);
       }
 
-      if (field.name) {
-        fieldEls[field.name] = wrapper;
-        fieldParts[field.name] = parts;
-        if (input) fieldInputs[field.name] = input;
-      }
+      const key = keyOf(field);
+      fieldEls[key] = wrapper;
+      fieldParts[key] = parts;
+      if (input) fieldInputs[key] = input;
       if (field.type === "select") syncOptions(field);
       setFieldValue(field, defaultValue(field));
       if (field.type === "select") fetchOptionsFrom(input, field, extra);
@@ -350,7 +356,7 @@ export function openDialog(spec, context, app, extra = {}) {
       for (let pass = 0; ; pass++) {
         let changed = false;
         for (const f of allFields) {
-          if (f.compute == null || !f.name || dirty.has(f.name)) continue;
+          if (f.compute == null || dirty.has(keyOf(f))) continue;
           if (setFieldValue(f, evalValue(f.compute))) changed = true;
         }
         for (const f of allFields) if (syncOptions(f)) changed = true;
@@ -372,8 +378,7 @@ export function openDialog(spec, context, app, extra = {}) {
         }
       }
       for (const f of allFields) {
-        if (!f.name) continue;
-        const el = fieldEls[f.name];
+        const el = fieldEls[keyOf(f)];
         if (!el) continue;
         el.style.display = shown(f.showWhen) ? "" : "none";
         syncAttrs(f, el);
@@ -391,13 +396,13 @@ export function openDialog(spec, context, app, extra = {}) {
     // the list; the select is rebuilt only when the list differs from the
     // one it holds. True when the rebuild moved the field's value.
     function syncOptions(f) {
-      if (f.type !== "select" || !f.name || f.optionsFrom || f.optionsFromColumn) return false;
-      const sel = fieldInputs[f.name];
+      if (f.type !== "select" || f.optionsFrom || f.optionsFromColumn) return false;
+      const sel = fieldInputs[keyOf(f)];
       if (!sel) return false;
       const opts = currentOptions(f);
       const key = JSON.stringify(opts.map((o) => [o.value, o.label]));
-      if (optionsKey[f.name] === key) return false;
-      optionsKey[f.name] = key;
+      if (optionsKey[keyOf(f)] === key) return false;
+      optionsKey[keyOf(f)] = key;
       const prev = sel.value;
       sel.innerHTML = "";
       for (const o of opts) {
@@ -408,6 +413,7 @@ export function openDialog(spec, context, app, extra = {}) {
       }
       const keep = [...sel.options].some((o) => o.value === prev);
       sel.value = keep ? prev : (sel.options[0]?.value ?? "");
+      if (!f.name) return false;
       const changed = fieldState[f.name] !== sel.value;
       fieldState[f.name] = sel.value;
       return changed;
@@ -428,13 +434,13 @@ export function openDialog(spec, context, app, extra = {}) {
         step: resolveExpr(f.step, scope),
         pattern: resolveExpr(f.pattern, scope),
       };
-      resolvedAttrs[f.name] = a;
-      const parts = fieldParts[f.name] ?? {};
+      resolvedAttrs[keyOf(f)] = a;
+      const parts = fieldParts[keyOf(f)] ?? {};
       if (parts.label) {
         const t = resolveExpr(f.label, scope);
         if (parts.label.textContent !== t) parts.label.textContent = t;
       }
-      const input = fieldInputs[f.name];
+      const input = fieldInputs[keyOf(f)];
       if (!input) return;
       const holdsLoad = input._mkuiLoading === true;
       const plain = f.type !== "select" && f.type !== "checkbox";
@@ -453,10 +459,10 @@ export function openDialog(spec, context, app, extra = {}) {
 
     function refreshDependentOptions(changedField) {
       for (const f of allFields) {
-        if (!f.optionsFrom || !f.name) continue;
+        if (!f.optionsFrom) continue;
         const paramStr = JSON.stringify(f.optionsFrom.params ?? {});
         if (!paramStr.includes("${field." + changedField + "}")) continue;
-        fetchOptionsFrom(fieldInputs[f.name], f, extra);
+        fetchOptionsFrom(fieldInputs[keyOf(f)], f, extra);
       }
     }
 
@@ -476,9 +482,9 @@ export function openDialog(spec, context, app, extra = {}) {
     function resetForm() {
       dirty.clear();
       for (const f of allFields) {
-        if (!f.name || f.type === "readonly" || f.type === "hidden") continue;
+        if (f.type === "readonly" || f.type === "hidden") continue;
         setFieldValue(f, defaultValue(f));
-        const el = fieldEls[f.name];
+        const el = fieldEls[keyOf(f)];
         if (el) {
           el.classList.remove("mkui-dialog-invalid");
           const err = el.querySelector(".mkui-dialog-error");
@@ -651,7 +657,7 @@ export function openDialog(spec, context, app, extra = {}) {
         console.error("[mkui-dialog] optionsFrom error:", e);
       } finally {
         selectEl._mkuiLoading = false;
-        selectEl.disabled = resolvedAttrs[field.name]?.disabled ?? false;
+        selectEl.disabled = resolvedAttrs[keyOf(field)]?.disabled ?? false;
       }
       applyDynamic();
     }

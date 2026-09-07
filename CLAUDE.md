@@ -7,24 +7,24 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 ## Architecture
 
 - **Workspace** (`<mkui-workspace>`) holds z-ordered floating **frames**
-- **Frames** (`<mkui-frame>`) are top-level chrome with 8-way resize handles; each owns an internal normalized layout tree. There is no dedicated titlebar — every top-edge tab bar doubles as a drag region, and the right-most one carries the window controls
-- **Panes** (`<mkui-pane>`) are leaf content hosts inside frames; always wrapped in a TabGroup
-- Pane elements are pooled at the workspace level with stable identity; `appendChild` moves them between frames
-- Frame positions are fractions of the workspace; split ratios sum to 1, so proportional resize is automatic. Frame rects are *painted* in whole pixels (`applyFrameRect` rounds edges, not width/height, so snapped frames stay flush, no hairline).
+- **Frames** (`<mkui-frame>`) are top-level chrome with 8-way resize handles; each owns an internal normalized layout tree. No dedicated titlebar — every top-edge tab bar doubles as a drag region, the right-most one carrying the window controls
+- **Panes** (`<mkui-pane>`) are leaf content hosts inside frames, always wrapped in a TabGroup
+- Pane elements are pooled at workspace level with stable identity; `appendChild` moves them between frames
+- Frame positions are fractions of the workspace; split ratios sum to 1, so proportional resize is automatic. Frame rects are *painted* in whole pixels (`applyFrameRect` rounds edges, not width/height, so snapped frames stay flush).
 - Every frame move/resize passes through `clampToDock`
-- Keyboard focus model: the top frame gets `[data-focused]` (`_applyZOrder`); each frame tracks an `_activeTabGroup` updated on interaction with a tab or a pane. Hotkeys act on that group.
-- Tab drag: pointer events (mouse + touch) on tabs (`touch-action: none`). Within a bar: ghost label + accent drop indicator, reorder on release; outside: tears the pane out into a new frame. On noDock frames (dialogs, login) the tab is titlebar text: mousedown moves the frame, click activates the tab; CSS must keep these tabs pointer-interactive (never `pointer-events: none`).
+- Focus model: the top frame gets `[data-focused]` (`_applyZOrder`); each frame tracks an `_activeTabGroup` updated on interaction with a tab or pane. Hotkeys act on that group.
+- Tab drag: pointer events (mouse + touch) on tabs (`touch-action: none`). Within a bar: ghost label + accent drop indicator, reorder on release; outside: tears the pane into a new frame. On noDock frames (dialogs, login) the tab is titlebar text: mousedown moves the frame, click activates the tab; CSS must keep these tabs pointer-interactive (never `pointer-events: none`).
 - Tab overflow: tabs shrink to `min-width: 3em`; past that `.mkui-tabs` clips, `.mkui-tab-scroll` arrows appear and the bar gets `.mkui-tabbar-overflow` (`updateArrows` in `_renderTabBar`, which also scrolls the active tab into view).
-- Tab rename: ctrl/cmd+click on a tab (or `contextmenu` with `ctrlKey` on macOS) swaps the label for an inline input (`.mkui-tab-rename`); Enter/blur commits via `workspace.renamePane(id, title)`, Escape cancels.
+- Tab rename: ctrl/cmd+click a tab (or `contextmenu` with `ctrlKey` on macOS) swaps the label for an inline input (`.mkui-tab-rename`); Enter/blur commits via `workspace.renamePane(id, title)`, Escape cancels.
 - Tab strip look: flush tabs with rounded top corners and `::after` bottom flares colored by `--mkui-tab-bg`. The bar's bottom line is a `.mkui-tabbar::after` overlay (never a border) that the selected tab covers (`z-index: 1`). Selected tabs outside the focused group flatten to idle. (`tests/styles.test.js`)
-- Theming: `dark` and `light` come from `mkui.css` via `[theme=...]`. Custom themes go in `config.app.themes[name]` as `{ "--mkui-*": value }` overrides; `MkuiApp.setTheme(name)` applies them inline.
+- Theming: `dark`/`light` come from `mkui.css` via `[theme=...]`. Custom themes go in `config.app.themes[name]` as `{ "--mkui-*": value }` overrides; `MkuiApp.setTheme(name)` applies them inline.
 
 ## Key files
 
 Paths are under `mkui/static/src/` unless they start with `mkui/`.
 
-- `mkui/__init__.py` — Python package; exposes `static_dir` and `__version__`
-- `mkui/__main__.py` — CLI (`mkui init`, `mkui serve`)
+- `mkui/__init__.py` — Python package; `static_dir`, `__version__`
+- `mkui/__main__.py` — CLI (`init`, `serve`)
 - `layout/tree.js` — normalized tree math (normalize, find, insert, remove, layout); `layout/drag.js` — clamp, snap, drop-zone, frac↔rect helpers; both DOM-free
 - `components/workspace.js` — frame lifecycle, z-order, arrangement, inter-frame drag routing, snap
 - `components/frame.js` — frame chrome, internal tree rendering, splitter drag; defines `<mkui-pane>`
@@ -50,15 +50,14 @@ Paths are under `mkui/static/src/` unless they start with `mkui/`.
 
 - `mkui init [dir]` — scaffold a project (server.toml, config/client.toml, static/index.html)
 - `mkui serve [dir] [-p PORT]` — serve a project via mkio
-- `node --test tests/*.test.js` — run JS unit tests (node:test; `version.test.js` pins the four version strings)
+- `node --test tests/*.test.js` — JS unit tests (node:test; `version.test.js` pins the four version strings)
 - `python -m pytest tests/test_cli.py` — CLI tests
 - `python -m build && twine upload dist/*`
-- `cd mkui/static && python3 -m http.server 8000` — serve the examples
-- Examples in `mkui/static/examples/` (`standalone-json`, `library-js`, `mkio-table`)
+- `cd mkui/static && python3 -m http.server 8000` — serve the examples in `mkui/static/examples/` (`standalone-json`, `library-js`, `mkio-table`)
 
 ## Config format
 
-Runtime input is JSON. `mkui serve` uses mkio's `[config]` routing: `/config/client.json` is served from `config/client.toml` (parsed with `tomllib`), so the browser needs no TOML parser. TOML configs use `""` where JSON would use `null`.
+Runtime input is JSON. `mkui serve` uses mkio's `[config]` routing: `/config/client.json` is served from `config/client.toml` (via `tomllib`), so the browser needs no TOML parser. TOML configs use `""` where JSON would use `null`.
 
 Top-level keys: `app`, `state`, `auth` (optional), `menubar`, `statusbar`, `panes` (id→spec), `frames` (ordered array with position + layout tree), `mkio` (optional).
 
@@ -142,7 +141,7 @@ Numeric alignment: all-numeric columns right-align with per-cell right padding (
 
 Selection: two exclusive modes plus an always-present **focused cell** (`.mkui-cell-focus`), the *implicit* selection copy, row-unit buttons, and broadcasts fall back to. Row mode: the sticky-left **row-number column** (`rowColumn: false` disables; view position, or per-level positions in a tree; outside stats/reorder/resize) selects rows — click / ctrl-toggle / shift-range / drag-range, header corner selects all. Cell mode: click places the focus (its row gets `.mkui-row-hl`), drag extends a rect, ctrl/cmd-click adds rects or toggles cells off, shift extends from the anchor. Rects are anchor/focus `(key, col)` pairs plus a `keys` snapshot of the rows spanned when last user-modified (`snapRectKeys`): membership is that record set × the column range, so sorts/filters move the same records and live inserts inside don't join; `rectBounds` resolves keys to view-index runs, cached. Keyboard: arrows/Home/End/PageUp/PageDown move, shift extends, Space selects the focused row (ctrl toggles), Escape clears selection, keeps the cursor. Filter changes prune `selectedKeys`; copy and actions see view rows only.
 
-Clipboard: `copySelection` builds a grid (row mode: selected rows × visible columns plus a `labels` header; cell mode: bounding grid, blanks outside the rects; fallback: the focused cell) written as TSV and HTML via `ClipboardItem` (`lib/copy.js`; over 100k rows skip HTML); `status.message` says "Copied N rows/cells".
+Clipboard: `copySelection` builds a grid (row mode: selected rows × visible columns plus a `labels` header; cell mode: bounding grid, blanks outside the rects; fallback: the focused cell) written as TSV and HTML via `ClipboardItem` (`lib/copy.js`; over 100k rows skip HTML); `status.message` reports "Copied N rows/cells".
 
 Buttons: `enable.when = "<expr>"` gates a button on the selection (scope `rows`, `row` (first or NULL), `cells`, `selection` `{ count, rowCount, cellCount, unit }`, `connected`, `state`) plus the flags `connected`, `minSelected`, `maxSelected`. `unit`: `"rows"` (default), `"row"`, `"cells"`, `"cell"` — singular units default min/max to 1. Row units receive the rows the selection implies (explicit rows, else rows containing selected cells, else the focused cell's row); cell units get `cells: [{ row, column, value }]` plus `cell`, a request per cell. Gates re-evaluate on selection, filter, and connection changes and on a live replace/delete of a selected row. `style = <styler>` (compiled lazily in `updateButtonStates`) sees the button scope plus `enabled`; backgrounds ride `--mkui-btn-bg` + `mkui-btn-styled`.
 
@@ -208,13 +207,13 @@ Snapshot clearing: for query and subpub, `applySnapshot` clears rows, DOM, selec
 
 ## Dialogs
 
-`openDialog(spec, context, app, extra)` creates a modal dialog as a floating frame (`stayOnTop`, `noDock`); resolves with the form data on submit, `null` on cancel/close.
+`openDialog(spec, context, app, extra)`: a modal floating frame (`stayOnTop`, `noDock`); resolves with the form data on submit, `null` on cancel/close.
 
-Field types: `hidden`, `readonly`, `select`, `checkbox`, `textarea`, `number`, text (default). `spec.fields` items are `{ group }` headers, `{ row: [...] }` rows (`field.width` = flex proportion), or fields; a body that would scroll grows the frame (≤ 90% of the workspace). `optionsFrom` (service-backed; re-fetched when a `${field.X}` param moves), `optionsFromColumn` (table values). With `spec.submit.service` the dialog sends via `client.send()` (timeout 5s; `submitPerRow` = a request per selected row), errors inline; else it resolves at once. Names starting `_` are never submitted.
+Types: `hidden`, `readonly`, `select`, `checkbox`, `textarea`, `number`, text (default). `spec.fields` items: `{ group }` headers, `{ row: [...] }` rows (`field.width` = flex proportion), or fields; a body that would scroll grows the frame (≤ 90% of the workspace). `optionsFrom` (service-backed; re-fetched when a `${field.X}` param moves), `optionsFromColumn` (table values). `spec.submit.service` sends via `client.send()` (5s timeout; `submitPerRow` = a request per selected row), errors inline; else it resolves at once. Names starting `_` are never submitted. Fields need no `name`: `fieldState` is keyed by name, DOM maps by `keyOf(f)` (name, else synthetic), so value/`compute`/`showWhen` work on nameless lines.
 
-Dynamic form: every edit runs `applyDynamic` (`onFieldChange`) over `formScope()`: the fields by name (number fields as numbers, blank → NULL), `form`, the opening context. Flags `showWhen` (fields, `{ row }`, `{ group }`, select options), `required`, `disabled`, `readonly` are a boolean or an expression; `label`, `placeholder`, `group`, `title`, `footer.note`, `invalidMessage`, `min`/`max`/`step`/`pattern` are templates; `options` may be an expression yielding the list. `value` is the one-time default; `compute` (an expression, or a `${` template) re-evaluates on every change — always on `hidden`/`readonly`, on an editable field only until the user types in it (`dirty`, cleared by `resetForm`). Computes and option rebuilds loop to a fixed point (declaration order; `MAX_COMPUTE_PASSES`, then one warning); then visibility, attributes (`resolvedAttrs`, read by `validate`), title (`ws.renamePane`), note (rewritten only when its text changes, so submit feedback stays). `tests/dialog.test.js`.
+Dynamic form: every edit runs `applyDynamic` (`onFieldChange`) over `formScope()`: fields by name (number fields as numbers, blank → NULL), `form`, the opening context. Flags `showWhen` (fields, `{ row }`, `{ group }`, select options), `required`, `disabled`, `readonly` take a boolean or expression; `label`, `placeholder`, `group`, `title`, `footer.note`, `invalidMessage`, `min`/`max`/`step`/`pattern` are templates; `options` may be an expression yielding the list. `value` is the one-time default; `compute` (an expression or `${` template) re-evaluates on every change — always on `hidden`/`readonly`, on an editable field only until the user types in it (`dirty`, cleared by `resetForm`). Computes and option rebuilds loop to a fixed point (declaration order; `MAX_COMPUTE_PASSES`, then one warning); then visibility, attributes (`resolvedAttrs`, read by `validate`), title (`ws.renamePane`), note (rewritten only when its text changes so submit feedback stays). `tests/dialog.test.js`.
 
-Pin button: an `icon("pin")` toggle before maximize/close; pinned, a *confirmed* submission resets the form instead of closing. Injected via `frameEl._extraControls`.
+Pin button: an `icon("pin")` toggle before maximize/close (`frameEl._extraControls`); pinned, a *confirmed* submission resets the form instead of closing.
 
 ## Conventions
 

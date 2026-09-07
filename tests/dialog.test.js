@@ -429,6 +429,64 @@ test("compute chains settle regardless of declaration order", () => {
   assert.equal(d.f("c").ro.textContent, "12");
 });
 
+// A nameless field has no form state, but its value, compute, and showWhen
+// still apply — a read-only confirmation line needs no name (0.2.21 blanked
+// it: the value writer bailed on the missing name).
+test("a nameless readonly field shows its value, computes, and hides", async () => {
+  const d = openForm({ fields: [
+    { name: "n", type: "number", value: "2" },
+    { type: "readonly", value: "Delete ${row.id}?" },
+    { type: "readonly", compute: "Rows: ${n}" },
+    { type: "readonly", value: "Careful", showWhen: "n > 5" },
+  ] }, { row: { id: 7 } });
+  const ros = [];
+  const walk = (el) => { for (const c of el._ch) { if (c.className === "mkui-dialog-field") ros.push(c); walk(c); } };
+  walk(d.host);
+  const text = (i) => ros[i]._ch.find((x) => x.className === "mkui-dialog-readonly").textContent;
+  assert.equal(text(1), "Delete 7?");
+  assert.equal(text(2), "Rows: 2");
+  assert.equal(ros[3].style.display, "none");
+  d.type("n", "9");
+  assert.equal(text(2), "Rows: 9");
+  assert.equal(ros[3].style.display, "");
+  assert.equal(text(3), "Careful");
+  const data = await d.submit();
+  assert.deepEqual(data, { n: "9" });
+});
+
+test("nameless fields in rows follow the row's showWhen; an edited one keeps its text", async () => {
+  const d = openForm({ fields: [
+    { name: "mode", type: "select", options: ["add", "del"], value: "add" },
+    { row: [
+      { name: "qty", type: "number", value: "3" },
+      { type: "readonly", compute: "x${qty}" },
+    ], showWhen: "mode == 'add'" },
+    { type: "readonly", value: "Remove it?", showWhen: "mode == 'del'" },
+    { type: "text", compute: "${mode}-note" },
+  ] });
+  const fields = [];
+  const walk = (el) => { for (const c of el._ch) { if (c.className === "mkui-dialog-field") fields.push(c); walk(c); } };
+  walk(d.host);
+  const ro = (i) => fields[i]._ch.find((x) => x.className === "mkui-dialog-readonly");
+  const note = fields[4]._ch.find((x) => x.tagName === "INPUT");
+  assert.equal(ro(2).textContent, "x3");
+  assert.equal(d.rows[0].style.display, "");
+  assert.equal(fields[3].style.display, "none");
+  assert.equal(note.value, "add-note");
+  d.type("qty", "8");
+  assert.equal(ro(2).textContent, "x8");
+  // A nameless editable field is still dirty-tracked: typing stops its compute.
+  note.value = "mine"; note.fire("input");
+  d.pick("mode", "del");
+  assert.equal(d.rows[0].style.display, "none");
+  assert.equal(fields[3].style.display, "");
+  assert.equal(ro(3).textContent, "Remove it?");
+  assert.equal(note.value, "mine");
+  // Nameless fields never reach the payload, and never break validation.
+  const data = await d.submit();
+  assert.deepEqual(data, { mode: "del" });
+});
+
 test("a compute cycle warns once and stops", () => {
   const warns = [];
   const orig = console.warn;
