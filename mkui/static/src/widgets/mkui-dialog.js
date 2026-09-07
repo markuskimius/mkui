@@ -3,6 +3,10 @@ import { icon } from "../lib/icons.js";
 
 let dialogSeq = 0;
 
+// Computed fields may feed each other; the dynamic pass repeats until no
+// field value changes, giving up (and warning) after this many rounds.
+export const MAX_COMPUTE_PASSES = 8;
+
 export function openDialog(spec, context, app, extra = {}) {
   return new Promise((resolve) => {
     const ws = app._element?.workspace ?? app._element?._workspace;
@@ -15,101 +19,163 @@ export function openDialog(spec, context, app, extra = {}) {
     const paneId = `_dialog-${++dialogSeq}`;
     let resolved = false;
 
-    const fieldState = {};
-    const fieldEls = {};
-    const fieldInputs = {};
+    const fieldState = {};   // name → current value (what submit sends)
+    const fieldEls = {};     // name → wrapper div
+    const fieldInputs = {};  // name → input / select / textarea
+    const fieldParts = {};   // name → { label, ro } extra DOM refs
+    const resolvedAttrs = {}; // name → { required, disabled, readonly, min, max, step, pattern }
+    const optionsKey = {};   // name → key of the option list last built
+    const dirty = new Set(); // fields the user has typed into (compute stays off them)
     const allFields = [];
+    const rowOf = new Map(); // field → the { row } item holding it
+    const containers = [];   // [{ item, el }] for group headers and rows
+    let computeWarned = false;
+    let built = false;       // the dynamic pass waits for the whole form
 
-    function flattenFields(items) {
+    function flattenFields(items, row = null) {
       for (const item of items) {
         if (item.group != null) continue;
-        if (item.row) { flattenFields(item.row); continue; }
+        if (item.row) { flattenFields(item.row, item); continue; }
         allFields.push(item);
+        if (row) rowOf.set(item, row);
       }
     }
     flattenFields(spec.fields ?? []);
 
+    // Scope for every expression the form evaluates after it opens: the
+    // fields at the root (shadowing the dialog context), plus `form`, the
+    // context (row, rows, selection, state, ...).
+    // Number fields hold strings in `fieldState` (what submit sends); the
+    // scope sees them as numbers, an empty one as NULL, so `qty * price`
+    // works and `(qty ?? 0) > 0` guards the blank.
+    function formScope() {
+      const vals = { ...fieldState };
+      for (const f of allFields) {
+        if (f.type !== "number" || !f.name) continue;
+        const v = vals[f.name];
+        if (v === "" || v == null) { vals[f.name] = null; continue; }
+        const n = Number(v);
+        if (Number.isFinite(n)) vals[f.name] = n;
+      }
+      return { ...context, ...vals, form: vals };
+    }
+    // A flag key (`showWhen`, `required`, `disabled`, `readonly`) is a
+    // literal boolean or an expression string.
+    function truthy(cond) {
+      if (cond == null) return false;
+      if (typeof cond !== "string") return !!cond;
+      return expr.truthy(evalExpr(cond, formScope()));
+    }
+    const shown = (cond) => cond == null ? true : truthy(cond);
+    // `value` is the one-time default; `compute` re-evaluates on every change.
+    // Either is a bare expression, or a `${...}` template when it holds one.
+    function evalValue(src) {
+      if (typeof src !== "string") return src ?? "";
+      if (src.includes("${")) return resolveExpr(src, formScope());
+      const v = evalExpr(src, formScope());
+      return v == null ? "" : v;
+    }
+    function defaultValue(field) {
+      return field.value == null ? "" : resolveExpr(field.value, formScope());
+    }
+    function isShown(field) {
+      if (!shown(field.showWhen)) return false;
+      const row = rowOf.get(field);
+      return row ? shown(row.showWhen) : true;
+    }
+
+    // Write a value into a field's state and DOM; true when the state changed.
+    function setFieldValue(field, v) {
+      const name = field.name;
+      if (!name) return false;
+      const input = fieldInputs[name];
+      let next;
+      if (field.type === "hidden") {
+        next = v;
+      } else if (field.type === "readonly") {
+        next = v;
+        const ro = fieldParts[name]?.ro;
+        if (ro) ro.textContent = v == null ? "" : String(v);
+      } else if (field.type === "checkbox") {
+        next = !!v;
+        if (input) input.checked = next;
+      } else if (field.type === "select") {
+        if (input) {
+          const want = v == null || v === "" ? "" : String(v);
+          input.value = want !== "" ? want : (input.options?.[0]?.value ?? "");
+          next = input.value;
+        } else next = v == null ? "" : String(v);
+      } else {
+        next = v == null ? "" : String(v);
+        if (input) input.value = next;
+      }
+      const changed = !Object.is(fieldState[name], next);
+      fieldState[name] = next;
+      return changed;
+    }
+
     function renderFieldItem(field) {
       if (field.type === "hidden") {
-        const val = resolveExpr(field.value ?? "", context);
-        fieldState[field.name] = val;
+        setFieldValue(field, defaultValue(field));
         return null;
       }
 
       const wrapper = document.createElement("div");
       wrapper.className = "mkui-dialog-field";
+      const parts = {};
 
-      if (field.label) {
+      if (field.label != null) {
         const lbl = document.createElement("label");
-        lbl.textContent = field.label;
+        lbl.textContent = resolveExpr(field.label, formScope());
         wrapper.appendChild(lbl);
+        parts.label = lbl;
       }
 
-      const rv = resolveExpr(field.value ?? "", context);
+      const onEdit = (input, read) => () => {
+        if (field.name) {
+          fieldState[field.name] = read(input);
+          dirty.add(field.name);
+          onFieldChange(field.name);
+        }
+      };
 
       let input;
       if (field.type === "readonly") {
         const ro = document.createElement("div");
         ro.className = "mkui-dialog-readonly";
-        ro.textContent = rv;
         wrapper.appendChild(ro);
-        if (field.name) fieldState[field.name] = rv;
+        parts.ro = ro;
       } else if (field.type === "select") {
         input = document.createElement("select");
-        populateSelect(input, field, context, extra);
-        if (rv !== "") input.value = String(rv);
-        if (field.name) fieldState[field.name] = input.value;
-        input.addEventListener("change", () => {
-          if (field.name) fieldState[field.name] = input.value;
-          onFieldChange(field.name);
-        });
+        populateSelect(input, field, extra);
+        input.addEventListener("change", onEdit(input, (i) => i.value));
         wrapper.appendChild(input);
-        fetchOptionsFrom(input, field, extra);
       } else if (field.type === "checkbox") {
         input = document.createElement("input");
         input.type = "checkbox";
-        input.checked = !!rv;
         input.style.width = "auto";
-        if (field.name) fieldState[field.name] = input.checked;
-        input.addEventListener("change", () => {
-          if (field.name) fieldState[field.name] = input.checked;
-          onFieldChange(field.name);
-        });
+        input.addEventListener("change", onEdit(input, (i) => i.checked));
         wrapper.appendChild(input);
       } else if (field.type === "textarea") {
         input = document.createElement("textarea");
         if (field.rows) input.rows = field.rows;
-        if (field.placeholder) input.placeholder = field.placeholder;
-        input.value = rv == null ? "" : String(rv);
-        if (field.name) fieldState[field.name] = input.value;
-        input.addEventListener("input", () => {
-          if (field.name) fieldState[field.name] = input.value;
-        });
+        input.addEventListener("input", onEdit(input, (i) => i.value));
         wrapper.appendChild(input);
       } else {
         input = document.createElement("input");
         input.type = field.type === "number" ? "number" : "text";
-        if (field.placeholder) input.placeholder = field.placeholder;
-        if (field.min != null) input.min = field.min;
-        if (field.max != null) input.max = field.max;
-        if (field.step != null) input.step = field.step;
-        input.value = rv == null ? "" : String(rv);
-        if (field.name) fieldState[field.name] = input.value;
-        input.addEventListener("input", () => {
-          if (field.name) fieldState[field.name] = input.value;
-          onFieldChange(field.name);
-        });
+        input.addEventListener("input", onEdit(input, (i) => i.value));
         wrapper.appendChild(input);
-      }
-
-      if (field.disabled) {
-        if (input) input.disabled = true;
       }
 
       if (field.name) {
         fieldEls[field.name] = wrapper;
+        fieldParts[field.name] = parts;
         if (input) fieldInputs[field.name] = input;
       }
+      if (field.type === "select") syncOptions(field);
+      setFieldValue(field, defaultValue(field));
+      if (field.type === "select") fetchOptionsFrom(input, field, extra);
 
       return wrapper;
     }
@@ -118,6 +184,7 @@ export function openDialog(spec, context, app, extra = {}) {
       title: resolveExpr(spec.title ?? "Dialog", context),
       type: "_dialog",
     });
+    let currentTitle = resolveExpr(spec.title ?? "Dialog", context);
 
     const widthPx = spec.width ?? 400;
     const wsRect = ws.getBoundingClientRect();
@@ -170,8 +237,9 @@ export function openDialog(spec, context, app, extra = {}) {
       if (item.group != null) {
         const hdr = document.createElement("div");
         hdr.className = "mkui-dialog-group";
-        hdr.textContent = item.group;
+        hdr.textContent = resolveExpr(item.group, formScope());
         body.appendChild(hdr);
+        containers.push({ item, el: hdr });
         continue;
       }
 
@@ -186,6 +254,7 @@ export function openDialog(spec, context, app, extra = {}) {
           }
         }
         body.appendChild(rowDiv);
+        containers.push({ item, el: rowDiv });
         continue;
       }
 
@@ -200,10 +269,18 @@ export function openDialog(spec, context, app, extra = {}) {
 
     const status = document.createElement("span");
     status.className = "mkui-dialog-status";
-    if (spec.footer?.note) {
-      status.textContent = resolveExpr(spec.footer.note, context);
-    }
     footer.appendChild(status);
+    // The note shares the span with submit feedback ("Sending...", errors,
+    // "OK"); it is rewritten only when its own text changes.
+    let lastNote;
+    function syncNote() {
+      if (!spec.footer?.note) return;
+      const t = resolveExpr(spec.footer.note, formScope());
+      if (t === lastNote) return;
+      lastNote = t;
+      status.textContent = t;
+      status.className = "mkui-dialog-status";
+    }
 
     const cancelBtn = document.createElement("button");
     cancelBtn.className = "mkui-btn";
@@ -238,7 +315,8 @@ export function openDialog(spec, context, app, extra = {}) {
       }
     });
 
-    applyShowWhen();
+    built = true;
+    onFieldChange(null);
 
     // The initial height is a guess; if the body has to scroll, grow the
     // frame so the whole form and footer are visible, capped at 90% of the
@@ -255,48 +333,121 @@ export function openDialog(spec, context, app, extra = {}) {
       }
     }
 
+    // `name` is the edited field (null at open). Service-backed options
+    // re-fetch for it and for every field a compute moved along the way.
     function onFieldChange(name) {
-      applyShowWhen();
-      refreshDependentOptions(name);
+      const before = { ...fieldState };
+      applyDynamic();
+      const moved = new Set(name == null ? [] : [name]);
+      for (const k of Object.keys(fieldState)) if (!Object.is(before[k], fieldState[k])) moved.add(k);
+      for (const k of moved) refreshDependentOptions(k);
     }
 
-    // `showWhen = "<expr>"` — scope: the form's fields at the root (shadowing
-    // the dialog context), plus `form`, the context (row, rows, selection,
-    // state, ...). A literal boolean works too.
-    function formScope() {
-      return { ...context, ...fieldState, form: fieldState };
-    }
-    function shown(cond) {
-      if (typeof cond === "boolean") return cond;
-      return expr.truthy(evalExpr(String(cond), formScope()));
-    }
+    // The dynamic pass: computed values and option lists to a fixed point,
+    // then visibility, labels, attributes, title, and footer note.
+    function applyDynamic() {
+      if (resolved || !built) return;
+      for (let pass = 0; ; pass++) {
+        let changed = false;
+        for (const f of allFields) {
+          if (f.compute == null || !f.name || dirty.has(f.name)) continue;
+          if (setFieldValue(f, evalValue(f.compute))) changed = true;
+        }
+        for (const f of allFields) if (syncOptions(f)) changed = true;
+        if (!changed) break;
+        if (pass >= MAX_COMPUTE_PASSES) {
+          if (!computeWarned) {
+            computeWarned = true;
+            console.warn("[mkui-dialog] computed fields did not settle (a compute cycle?)");
+          }
+          break;
+        }
+      }
 
-    function applyShowWhen() {
+      for (const { item, el } of containers) {
+        el.style.display = shown(item.showWhen) ? "" : "none";
+        if (item.group != null) {
+          const t = resolveExpr(item.group, formScope());
+          if (el.textContent !== t) el.textContent = t;
+        }
+      }
       for (const f of allFields) {
-        if (f.showWhen == null || !f.name) continue;
+        if (!f.name) continue;
         const el = fieldEls[f.name];
         if (!el) continue;
         el.style.display = shown(f.showWhen) ? "" : "none";
+        syncAttrs(f, el);
       }
 
-      for (const f of allFields) {
-        if (f.type !== "select" || !f.name) continue;
-        const sel = fieldInputs[f.name];
-        if (!sel) continue;
-        const opts = normalizeOptions(f.options);
-        if (!opts.some((o) => o.showWhen)) continue;
-        const prev = sel.value;
-        sel.innerHTML = "";
-        for (const o of opts) {
-          if (o.showWhen != null && !shown(o.showWhen)) continue;
-          const opt = document.createElement("option");
-          opt.value = o.value;
-          opt.textContent = o.label;
-          sel.appendChild(opt);
-        }
-        if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
-        else { sel.value = sel.options[0]?.value ?? ""; }
-        if (f.name) fieldState[f.name] = sel.value;
+      const title = resolveExpr(spec.title ?? "Dialog", formScope());
+      if (title !== currentTitle) {
+        currentTitle = title;
+        ws.renamePane?.(paneId, title);
+      }
+      syncNote();
+    }
+
+    // Static `options` with per-option `showWhen`, or an expression yielding
+    // the list; the select is rebuilt only when the list differs from the
+    // one it holds. True when the rebuild moved the field's value.
+    function syncOptions(f) {
+      if (f.type !== "select" || !f.name || f.optionsFrom || f.optionsFromColumn) return false;
+      const sel = fieldInputs[f.name];
+      if (!sel) return false;
+      const opts = currentOptions(f);
+      const key = JSON.stringify(opts.map((o) => [o.value, o.label]));
+      if (optionsKey[f.name] === key) return false;
+      optionsKey[f.name] = key;
+      const prev = sel.value;
+      sel.innerHTML = "";
+      for (const o of opts) {
+        const opt = document.createElement("option");
+        opt.value = o.value;
+        opt.textContent = o.label;
+        sel.appendChild(opt);
+      }
+      const keep = [...sel.options].some((o) => o.value === prev);
+      sel.value = keep ? prev : (sel.options[0]?.value ?? "");
+      const changed = fieldState[f.name] !== sel.value;
+      fieldState[f.name] = sel.value;
+      return changed;
+    }
+    function currentOptions(f) {
+      const raw = typeof f.options === "string" ? evalExpr(f.options, formScope()) : f.options;
+      return normalizeOptions(raw).filter((o) => shown(o.showWhen));
+    }
+
+    function syncAttrs(f, el) {
+      const scope = formScope();
+      const a = {
+        required: truthy(f.required),
+        disabled: truthy(f.disabled),
+        readonly: truthy(f.readonly),
+        min: resolveExpr(f.min, scope),
+        max: resolveExpr(f.max, scope),
+        step: resolveExpr(f.step, scope),
+        pattern: resolveExpr(f.pattern, scope),
+      };
+      resolvedAttrs[f.name] = a;
+      const parts = fieldParts[f.name] ?? {};
+      if (parts.label) {
+        const t = resolveExpr(f.label, scope);
+        if (parts.label.textContent !== t) parts.label.textContent = t;
+      }
+      const input = fieldInputs[f.name];
+      if (!input) return;
+      const holdsLoad = input._mkuiLoading === true;
+      const plain = f.type !== "select" && f.type !== "checkbox";
+      if (!holdsLoad) input.disabled = a.disabled || (!plain && a.readonly);
+      if (plain) input.readOnly = a.readonly;
+      if (f.placeholder != null) {
+        const p = resolveExpr(f.placeholder, scope);
+        if (input.placeholder !== p) input.placeholder = p;
+      }
+      for (const k of ["min", "max", "step"]) {
+        const v = a[k];
+        if (v == null || v === "") input.removeAttribute?.(k);
+        else if (String(input[k]) !== String(v)) input[k] = v;
       }
     }
 
@@ -323,20 +474,10 @@ export function openDialog(spec, context, app, extra = {}) {
     }
 
     function resetForm() {
+      dirty.clear();
       for (const f of allFields) {
         if (!f.name || f.type === "readonly" || f.type === "hidden") continue;
-        const rv = resolveExpr(f.value ?? "", context);
-        const input = fieldInputs[f.name];
-        if (f.type === "checkbox") {
-          if (input) input.checked = !!rv;
-          fieldState[f.name] = !!rv;
-        } else if (f.type === "select") {
-          if (input) input.value = rv !== "" ? String(rv) : (input.options[0]?.value ?? "");
-          fieldState[f.name] = input?.value ?? "";
-        } else {
-          if (input) input.value = rv == null ? "" : String(rv);
-          fieldState[f.name] = input?.value ?? "";
-        }
+        setFieldValue(f, defaultValue(f));
         const el = fieldEls[f.name];
         if (el) {
           el.classList.remove("mkui-dialog-invalid");
@@ -344,21 +485,26 @@ export function openDialog(spec, context, app, extra = {}) {
           if (err) err.remove();
         }
       }
-      applyShowWhen();
+      applyDynamic();
       const firstInput = host.querySelector("input:not([type=hidden]):not([type=checkbox]), select, textarea");
       firstInput?.focus();
+    }
+
+    function collectData() {
+      const data = {};
+      for (const f of allFields) {
+        if (!f.name || f.name.startsWith("_")) continue;
+        if (f.type === "readonly") continue;
+        if (!isShown(f)) continue;
+        data[f.name] = fieldState[f.name] ?? "";
+      }
+      return data;
     }
 
     async function submit() {
       if (resolved) return;
       if (!validate()) return;
-      const data = {};
-      for (const f of allFields) {
-        if (!f.name || f.name.startsWith("_")) continue;
-        if (f.type === "readonly") continue;
-        if (f.showWhen != null && !shown(f.showWhen)) continue;
-        data[f.name] = fieldState[f.name] ?? "";
-      }
+      const data = collectData();
 
       const client = extra.client;
       const svc = spec.submit?.service;
@@ -428,27 +574,29 @@ export function openDialog(spec, context, app, extra = {}) {
         if (!f.name) continue;
         const el = fieldEls[f.name];
         if (!el) continue;
-        if (el.style.display === "none") continue;
+        if (!isShown(f)) continue;
 
         el.classList.remove("mkui-dialog-invalid");
         const existing = el.querySelector(".mkui-dialog-error");
         if (existing) existing.remove();
 
         const val = fieldState[f.name];
+        const a = resolvedAttrs[f.name] ?? {};
+        const message = () => f.invalidMessage != null ? resolveExpr(f.invalidMessage, formScope()) : null;
         let err = null;
 
-        if (f.required && (val === "" || val == null)) {
-          err = f.invalidMessage ?? "Required";
-        } else if (f.pattern && val) {
+        if (a.required && (val === "" || val == null || val === false)) {
+          err = message() ?? "Required";
+        } else if (a.pattern && val) {
           try {
-            if (!new RegExp(f.pattern).test(String(val))) {
-              err = f.invalidMessage ?? "Invalid format";
+            if (!new RegExp(a.pattern).test(String(val))) {
+              err = message() ?? "Invalid format";
             }
           } catch (_) {}
         } else if (f.type === "number" && val !== "" && val != null) {
           const n = Number(val);
-          if (f.min != null && n < f.min) err = f.invalidMessage ?? `Min: ${f.min}`;
-          if (f.max != null && n > f.max) err = f.invalidMessage ?? `Max: ${f.max}`;
+          if (a.min != null && a.min !== "" && n < Number(a.min)) err = message() ?? `Min: ${a.min}`;
+          if (a.max != null && a.max !== "" && n > Number(a.max)) err = message() ?? `Max: ${a.max}`;
         }
 
         if (err) {
@@ -477,10 +625,12 @@ export function openDialog(spec, context, app, extra = {}) {
         opt.textContent = "—";
         selectEl.appendChild(opt);
         if (field.name) fieldState[field.name] = "";
+        applyDynamic();
         return;
       }
 
       selectEl.disabled = true;
+      selectEl._mkuiLoading = true;
       try {
         const resp = await client.request(field.optionsFrom.service, params);
         const rows = Array.isArray(resp) ? resp : resp?.rows ?? [];
@@ -500,21 +650,23 @@ export function openDialog(spec, context, app, extra = {}) {
       } catch (e) {
         console.error("[mkui-dialog] optionsFrom error:", e);
       } finally {
-        selectEl.disabled = false;
+        selectEl._mkuiLoading = false;
+        selectEl.disabled = resolvedAttrs[field.name]?.disabled ?? false;
       }
+      applyDynamic();
     }
   });
 }
 
-function normalizeOptions(options) {
+export function normalizeOptions(options) {
   if (!Array.isArray(options)) return [];
   return options.map((o) => {
-    if (typeof o === "string") return { value: o, label: o };
+    if (o == null || typeof o !== "object") return { value: String(o ?? ""), label: String(o ?? "") };
     return { value: o.value ?? "", label: o.label ?? o.value ?? "", showWhen: o.showWhen };
   });
 }
 
-function populateSelect(sel, field, context, extra) {
+function populateSelect(sel, field, extra) {
   if (field.optionsFromColumn && extra.tableRows) {
     const col = field.optionsFromColumn;
     const vals = new Set();
@@ -537,12 +689,5 @@ function populateSelect(sel, field, context, extra) {
   }
 
   if (field.optionsFrom) return;
-
-  const opts = normalizeOptions(field.options);
-  for (const o of opts) {
-    const opt = document.createElement("option");
-    opt.value = o.value;
-    opt.textContent = o.label;
-    sel.appendChild(opt);
-  }
+  // Static / expression options are built by the dynamic pass (syncOptions).
 }

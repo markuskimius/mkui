@@ -176,10 +176,14 @@ enable = { connected = true }
 [panes.all-orders.buttons.action]
 type = "dialog"
 
+# The dialog is live: the title, the read-only notional, and the footer
+# note re-evaluate as the form is edited. `compute` gives a field its value
+# from the others (on an editable field only until the user types in it).
 [panes.all-orders.buttons.action.dialog]
-title = "New Order"
+title = "New ${side} Order"
 modal = true
 width = 420
+footer = { note = "${IF(_filled, NUM(qty * price, digits: 2, group: TRUE) + ' notional', 'Enter quantity and price')}" }
 
 [[panes.all-orders.buttons.action.dialog.fields]]
 row = [
@@ -190,8 +194,22 @@ row = [
 [[panes.all-orders.buttons.action.dialog.fields]]
 row = [
   { name = "qty", label = "Quantity", type = "number", width = 0.5, min = 1, required = true },
-  { name = "price", label = "Price", type = "number", width = 0.5, step = 0.01, min = 0, required = true },
+  { name = "price", label = "${side} price", type = "number", width = 0.5, step = 0.01, min = 0, required = true },
 ]
+
+# A `_`-prefixed field is never submitted: a scratch value for the others.
+# Empty number fields read as NULL, so `??` guards the blanks.
+[[panes.all-orders.buttons.action.dialog.fields]]
+name = "_filled"
+type = "hidden"
+compute = "(qty ?? 0) > 0 && (price ?? 0) > 0"
+
+[[panes.all-orders.buttons.action.dialog.fields]]
+name = "notional"
+label = "Notional"
+type = "readonly"
+compute = "${IF(_filled, NUM(qty * price, digits: 2, group: TRUE), '')}"
+showWhen = "_filled"
 
 [panes.all-orders.buttons.action.dialog.submit]
 label = "Place Order"

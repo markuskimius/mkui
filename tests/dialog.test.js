@@ -224,26 +224,58 @@ let geom = {};
 function domEl(tag) {
   const el = {
     tagName: tag?.toUpperCase() ?? "",
-    className: "", textContent: "", title: "", type: "", value: "",
-    placeholder: "", checked: false, disabled: false,
+    className: "", textContent: "", title: "", type: "",
+    placeholder: "", checked: false, disabled: false, readOnly: false,
+    min: "", max: "", step: "",
     style: {},
-    _ch: [], _ev: {},
+    _ch: [], _ev: {}, _attrs: {},
     classList: {
       _s: new Set(),
       add(...cs) { for (const c of cs) this._s.add(c); },
       remove(...cs) { for (const c of cs) this._s.delete(c); },
-      toggle() {}, contains() { return false; },
+      toggle(c, f) { f !== undefined ? (f ? this._s.add(c) : this._s.delete(c)) : (this._s.has(c) ? this._s.delete(c) : this._s.add(c)); },
+      contains(c) { return this._s.has(c); },
     },
-    append(...ns) { el._ch.push(...ns); },
-    appendChild(n) { el._ch.push(n); return n; },
-    setAttribute() {},
+    append(...ns) { for (const n of ns) el.appendChild(n); },
+    appendChild(n) { n._parent = el; el._ch.push(n); return n; },
+    remove() { const p = el._parent; if (p) p._ch.splice(p._ch.indexOf(el), 1); },
+    setAttribute(k, v) { el._attrs[k] = v; },
+    removeAttribute(k) { delete el._attrs[k]; el[k] = ""; },
     addEventListener(e, fn) { (el._ev[e] ??= []).push(fn); },
     removeEventListener() {},
-    querySelector() { return null; },
+    fire(e, ev = {}) { for (const fn of el._ev[e] ?? []) fn(ev); },
+    querySelector(sel) {
+      if (!sel.startsWith(".")) return null;
+      const cls = sel.slice(1);
+      const walk = (n) => {
+        for (const c of n._ch) {
+          if (c.className?.split(" ").includes(cls)) return c;
+          const r = walk(c);
+          if (r) return r;
+        }
+        return null;
+      };
+      return walk(el);
+    },
     focus() {},
+    get options() { return el._ch.filter((c) => c.tagName === "OPTION"); },
     get scrollHeight() { return geom[el.className]?.scrollHeight ?? 0; },
     get clientHeight() { return geom[el.className]?.clientHeight ?? 0; },
   };
+  // A select's value snaps to "" when no option carries it, as in a browser.
+  let _value = "";
+  Object.defineProperty(el, "value", {
+    get() { return _value; },
+    set(v) {
+      v = String(v ?? "");
+      _value = el.tagName === "SELECT" && !el.options.some((o) => o.value === v) ? "" : v;
+    },
+  });
+  let _ih = "";
+  Object.defineProperty(el, "innerHTML", {
+    get() { return _ih; },
+    set(v) { _ih = v; if (v === "") el._ch.length = 0; },
+  });
   return el;
 }
 
@@ -258,8 +290,11 @@ function makeWorkspace({ width = 1000, height = 800 } = {}) {
     _frameEls: new Map(),
     _paneEls: new Map(),
     layoutCalls: 0,
+    renames: [],
     registerPane() {},
     unregisterPane() {},
+    renamePane(id, title) { this.renames.push(title); },
+    closeFrame() {},
     addFrame(spec) {
       const id = `frame-${this._frames.length + 1}`;
       this._frames.push({ id, ...spec });
@@ -318,4 +353,349 @@ test("zero-height workspace rect skips auto-grow without crashing", () => {
   const frame = openTestDialog(ws, { scrollHeight: 500, clientHeight: 300 });
   assert.equal(frame.h, 0.6, "initial fraction untouched");
   assert.equal(ws.layoutCalls, 0);
+});
+
+/* ── Dynamic forms (end-to-end with the mock DOM + workspace) ────────── */
+// Every field property that may hold an expression is re-evaluated on each
+// edit by the dialog's dynamic pass: `compute` values, `options`, `showWhen`
+// on fields/rows/groups, labels, placeholders, `required`/`disabled`/
+// `readonly` flags, `min`/`max`/`step`/`pattern`, the title, and the note.
+
+function openForm(spec, context = {}, extra = {}) {
+  geom = {};
+  const ws = makeWorkspace();
+  const app = { _element: { workspace: ws } };
+  const promise = openDialog(spec, context, app, extra);
+  const host = ws._paneEls.values().next().value.contentEl;
+  const body = host._ch[0]._ch[0];
+  const footer = host._ch[0]._ch[1];
+  const fields = {};
+  const groups = [];
+  const rows = [];
+  const walk = (n) => {
+    for (const c of n._ch) {
+      if (c.className === "mkui-dialog-group") groups.push(c);
+      if (c.className === "mkui-dialog-row") rows.push(c);
+      if (c.className === "mkui-dialog-field") {
+        const label = c._ch.find((x) => x.tagName === "LABEL");
+        const input = c._ch.find((x) => ["INPUT", "SELECT", "TEXTAREA"].includes(x.tagName));
+        const ro = c._ch.find((x) => x.className === "mkui-dialog-readonly");
+        fields[c._mkuiName ?? Object.keys(fields).length] = { el: c, label, input, ro };
+      }
+      walk(c);
+    }
+  };
+  walk(body);
+  // Fields are found in declaration order; name them from the spec.
+  const names = [];
+  const flat = (items) => { for (const i of items) { if (i.group != null) continue; if (i.row) flat(i.row); else if (i.type !== "hidden") names.push(i.name); } };
+  flat(spec.fields);
+  const byName = {};
+  Object.values(fields).forEach((f, i) => { byName[names[i]] = f; });
+  const submitBtn = footer._ch[2];
+  return {
+    promise, ws, host, groups, rows, footer,
+    f: (n) => byName[n],
+    type(n, v) { const i = byName[n].input; i.value = v; i.fire("input"); },
+    pick(n, v) { const i = byName[n].input; i.value = v; i.fire("change"); },
+    check(n, v) { const i = byName[n].input; i.checked = v; i.fire("change"); },
+    submit() { submitBtn.fire("click"); return promise; },
+    errors: () => Object.entries(byName).filter(([, f]) => f.el.querySelector(".mkui-dialog-error")).map(([n]) => n),
+  };
+}
+
+test("compute keeps a hidden total current and submits it as a number", async () => {
+  const d = openForm({ fields: [
+    { name: "qty", type: "number", value: "2" },
+    { name: "price", type: "number", value: "10" },
+    { name: "total", type: "hidden", compute: "qty * price" },
+    { name: "shown", type: "readonly", compute: "Total: ${total}" },
+  ] });
+  assert.equal(d.f("shown").ro.textContent, "Total: 20");
+  d.type("qty", "5");
+  assert.equal(d.f("shown").ro.textContent, "Total: 50");
+  const data = await d.submit();
+  assert.deepEqual(data, { qty: "5", price: "10", total: 50 });
+});
+
+test("compute chains settle regardless of declaration order", () => {
+  const d = openForm({ fields: [
+    { name: "c", type: "readonly", compute: "b + 1" },
+    { name: "b", type: "hidden", compute: "a + 1" },
+    { name: "a", type: "number", value: "1" },
+  ] });
+  assert.equal(d.f("c").ro.textContent, "3");
+  d.type("a", "10");
+  assert.equal(d.f("c").ro.textContent, "12");
+});
+
+test("a compute cycle warns once and stops", () => {
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (m) => warns.push(String(m));
+  try {
+    const d = openForm({ fields: [
+      { name: "a", type: "hidden", compute: "b + 'x'" },
+      { name: "b", type: "hidden", compute: "a + 'x'" },
+      { name: "x", value: "" },
+    ] });
+    d.type("x", "1");
+    d.type("x", "2");
+  } finally { console.warn = orig; }
+  const cyc = warns.filter((w) => w.includes("did not settle"));
+  assert.equal(cyc.length, 1);
+});
+
+test("compute on an editable field yields to the user's edit until reset", async () => {
+  const d = openForm({ fields: [
+    { name: "symbol", value: "AAPL" },
+    { name: "note", compute: "'Order for ' + symbol" },
+  ] });
+  assert.equal(d.f("note").input.value, "Order for AAPL");
+  d.type("symbol", "MSFT");
+  assert.equal(d.f("note").input.value, "Order for MSFT", "follows while untouched");
+  d.type("note", "custom");
+  d.type("symbol", "GOOG");
+  assert.equal(d.f("note").input.value, "custom", "the user's text wins");
+  const data = await d.submit();
+  assert.equal(data.note, "custom");
+});
+
+test("required, min, max, and pattern evaluate against the form", async () => {
+  const d = openForm({ fields: [
+    { name: "kind", type: "select", options: ["stock", "other"] },
+    { name: "detail", required: "kind == 'other'" },
+    { name: "qty", type: "number", value: "5", max: "${IF(kind == 'stock', 10, 100)}" },
+    { name: "code", pattern: "${IF(kind == 'stock', '^[A-Z]+$', '.*')}", value: "abc" },
+  ] });
+  assert.equal(d.f("qty").input.max, 10);
+  d.submit();
+  assert.deepEqual(d.errors(), ["code"], "stock: code must be upper-case, detail optional");
+  d.pick("kind", "other");
+  assert.equal(d.f("qty").input.max, 100);
+  d.submit();
+  assert.deepEqual(d.errors(), ["detail"], "other: detail required, any code passes");
+  d.type("detail", "x");
+  d.type("qty", "500");
+  d.submit();
+  assert.deepEqual(d.errors(), ["qty"]);
+  d.type("qty", "50");
+  const data = await d.submit();
+  assert.equal(data.qty, "50");
+});
+
+test("labels, placeholders, disabled and readonly follow the form", () => {
+  const d = openForm({ fields: [
+    { name: "mode", type: "select", options: ["buy", "sell"] },
+    { name: "px", label: "${TITLE(mode)} price", placeholder: "${mode} limit",
+      readonly: "mode == 'sell'" },
+    { name: "flag", type: "checkbox", disabled: "mode == 'sell'" },
+  ] });
+  assert.equal(d.f("px").label.textContent, "Buy price");
+  assert.equal(d.f("px").input.placeholder, "buy limit");
+  assert.equal(d.f("px").input.readOnly, false);
+  assert.equal(d.f("flag").input.disabled, false);
+  d.pick("mode", "sell");
+  assert.equal(d.f("px").label.textContent, "Sell price");
+  assert.equal(d.f("px").input.placeholder, "sell limit");
+  assert.equal(d.f("px").input.readOnly, true);
+  assert.equal(d.f("flag").input.disabled, true);
+});
+
+test("an options expression rebuilds the list, keeping the value when it survives", () => {
+  const d = openForm({ fields: [
+    { name: "region", type: "select", options: ["US", "UK"] },
+    { name: "venue", type: "select",
+      options: "IF(region == 'US', ['NYSE', 'NASDAQ', 'LSE'], [{value: 'LSE', label: 'London'}])" },
+  ] });
+  const venue = d.f("venue").input;
+  assert.deepEqual(venue.options.map((o) => o.value), ["NYSE", "NASDAQ", "LSE"]);
+  d.pick("venue", "LSE");
+  d.pick("region", "UK");
+  assert.deepEqual(venue.options.map((o) => [o.value, o.textContent]), [["LSE", "London"]]);
+  assert.equal(venue.value, "LSE", "survives the rebuild");
+  d.pick("venue", "LSE");
+  d.pick("region", "US");
+  d.pick("venue", "NASDAQ");
+  d.pick("region", "UK");
+  assert.equal(venue.value, "LSE", "falls back to the first option");
+});
+
+test("static options keep a configured default", () => {
+  const d = openForm({ fields: [
+    { name: "side", type: "select", options: ["buy", "sell"], value: "sell" },
+  ] });
+  assert.equal(d.f("side").input.value, "sell");
+});
+
+test("rows and groups hide with showWhen; hidden rows leave the data", async () => {
+  const d = openForm({ fields: [
+    { name: "ship", type: "checkbox", value: "${TRUE}" },
+    { group: "Shipping to ${city}", showWhen: "ship" },
+    { row: [{ name: "city", value: "Oslo" }, { name: "zip", value: "0150" }], showWhen: "ship" },
+  ] });
+  assert.equal(d.groups[0].textContent, "Shipping to Oslo");
+  assert.equal(d.groups[0].style.display, "");
+  assert.equal(d.rows[0].style.display, "");
+  d.type("city", "Bergen");
+  assert.equal(d.groups[0].textContent, "Shipping to Bergen");
+  d.check("ship", false);
+  assert.equal(d.groups[0].style.display, "none");
+  assert.equal(d.rows[0].style.display, "none");
+  const data = await d.submit();
+  assert.deepEqual(data, { ship: false });
+});
+
+test("title and footer note re-resolve, and the note leaves submit feedback alone", () => {
+  const d = openForm({
+    title: "Order ${symbol}",
+    footer: { note: "${qty} shares" },
+    fields: [{ name: "symbol", value: "AAPL" }, { name: "qty", type: "number", value: "1" }],
+  });
+  assert.equal(d.ws.renames.at(-1), "Order AAPL", "the empty-form title is replaced once fields exist");
+  assert.equal(d.footer._ch[0].textContent, "1 shares");
+  d.type("symbol", "MSFT");
+  assert.equal(d.ws.renames.at(-1), "Order MSFT");
+  const n = d.ws.renames.length;
+  d.type("qty", "3");
+  assert.equal(d.ws.renames.length, n, "no rename when the title is unchanged");
+  assert.equal(d.footer._ch[0].textContent, "3 shares");
+  d.footer._ch[0].textContent = "OK";
+  d.type("symbol", "X");
+  assert.equal(d.footer._ch[0].textContent, "OK", "an unchanged note does not overwrite feedback");
+});
+
+test("a compute that moves a field re-fetches the options depending on it", async () => {
+  const requests = [];
+  const client = { request: async (svc, params) => { requests.push(params); return [{ id: "a", name: "A" }]; } };
+  const d = openForm({ fields: [
+    { name: "region", type: "select", options: ["US", "UK"] },
+    { name: "market", type: "hidden", compute: "region + '-eq'" },
+    { name: "venue", type: "select", optionsFrom: { service: "venues", params: { market: "${field.market}" }, value: "id", label: "name" } },
+  ] }, {}, { client });
+  await Promise.resolve();
+  assert.deepEqual(requests, [{ market: "US-eq" }]);
+  d.pick("region", "UK");
+  await Promise.resolve();
+  assert.deepEqual(requests.at(-1), { market: "UK-eq" });
+});
+
+test("a required checkbox must be checked", () => {
+  const d = openForm({ fields: [{ name: "agree", type: "checkbox", required: true }] });
+  d.submit();
+  assert.deepEqual(d.errors(), ["agree"]);
+  d.check("agree", true);
+  d.submit();
+  assert.deepEqual(d.errors(), []);
+});
+
+test("empty number fields read as NULL in the form scope", () => {
+  const d = openForm({ fields: [
+    { name: "qty", type: "number" },
+    { name: "ok", type: "readonly", compute: "IF((qty ?? 0) > 0, 'yes', 'no')" },
+    { name: "isnull", type: "readonly", compute: "qty == NULL" },
+  ] });
+  assert.equal(d.f("ok").ro.textContent, "no");
+  assert.equal(d.f("isnull").ro.textContent, "true");
+  d.type("qty", "3");
+  assert.equal(d.f("ok").ro.textContent, "yes");
+  assert.equal(d.f("isnull").ro.textContent, "false");
+});
+
+test("a pinned submit resets the form and a compute takes the field back", async () => {
+  let sent = [];
+  const client = { send: async (svc, data) => { sent.push(data); return { type: "ok" }; } };
+  const d = openForm({
+    submit: { service: "orders" },
+    fields: [{ name: "symbol", value: "AAPL" }, { name: "note", compute: "'Order for ' + symbol" }],
+  }, {}, { client });
+  // Pin via the frame control the dialog injects.
+  const pin = d.ws._frameEls.get("frame-1")._extraControls()[0];
+  pin._ev.click[0]({ stopPropagation() {} });
+  d.type("note", "custom");
+  d.type("symbol", "MSFT");
+  assert.equal(d.f("note").input.value, "custom");
+  d.submit();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(sent, [{ symbol: "MSFT", note: "custom" }]);
+  assert.equal(d.f("symbol").input.value, "AAPL", "defaults restored");
+  assert.equal(d.f("note").input.value, "Order for AAPL", "compute applies again after reset");
+  d.type("symbol", "GOOG");
+  assert.equal(d.f("note").input.value, "Order for GOOG", "and follows again");
+});
+
+test("readonly on a select or checkbox disables it; a dynamic min validates", () => {
+  const d = openForm({ fields: [
+    { name: "lock", type: "checkbox" },
+    { name: "side", type: "select", options: ["buy", "sell"], readonly: "lock" },
+    { name: "agree", type: "checkbox", readonly: "lock" },
+    { name: "qty", type: "number", value: "5", min: "${IF(lock, 10, 1)}" },
+  ] });
+  assert.equal(d.f("side").input.disabled, false);
+  d.check("lock", true);
+  assert.equal(d.f("side").input.disabled, true);
+  assert.equal(d.f("agree").input.disabled, true);
+  assert.equal(d.f("qty").input.min, 10);
+  d.submit();
+  assert.deepEqual(d.errors(), ["qty"]);
+  assert.equal(d.f("qty").el.querySelector(".mkui-dialog-error").textContent, "Min: 10");
+  d.check("lock", false);
+  d.submit();
+  assert.deepEqual(d.errors(), []);
+});
+
+test("per-option showWhen still filters a static list", () => {
+  const d = openForm({ fields: [
+    { name: "pro", type: "checkbox" },
+    { name: "type", type: "select", options: ["market", { value: "iceberg", label: "Iceberg", showWhen: "pro" }] },
+  ] });
+  assert.deepEqual(d.f("type").input.options.map((o) => o.value), ["market"]);
+  d.check("pro", true);
+  assert.deepEqual(d.f("type").input.options.map((o) => o.value), ["market", "iceberg"]);
+  d.pick("type", "iceberg");
+  d.check("pro", false);
+  assert.equal(d.f("type").input.value, "market", "a vanished option falls back to the first");
+});
+
+test("invalidMessage is a template over the form", () => {
+  const d = openForm({ fields: [
+    { name: "kind", value: "stock" },
+    { name: "code", required: true, invalidMessage: "A ${kind} needs a code" },
+  ] });
+  d.submit();
+  assert.equal(d.f("code").el.querySelector(".mkui-dialog-error").textContent, "A stock needs a code");
+});
+
+test("a field declared disabled stays disabled through an options load", async () => {
+  let resolveReq;
+  const client = { request: () => new Promise((r) => { resolveReq = r; }) };
+  const d = openForm({ fields: [
+    { name: "venue", type: "select", disabled: true, optionsFrom: { service: "v", params: {}, value: "id", label: "name" } },
+    { name: "note", type: "select", optionsFrom: { service: "v", params: {}, value: "id", label: "name" } },
+  ] }, {}, { client });
+  assert.equal(d.f("note").input.disabled, true, "disabled while loading");
+  resolveReq([{ id: "a", name: "A" }]);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(d.f("note").input.disabled, false, "enabled once loaded");
+  assert.equal(d.f("venue").input.disabled, true, "configured disabled survives the load");
+  assert.deepEqual(d.f("note").input.options.map((o) => o.value), ["", "a"]);
+});
+
+test("a compute or option expression that errors degrades to empty and warns once", () => {
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (m) => warns.push(String(m));
+  try {
+    const d = openForm({ fields: [
+      { name: "a", type: "number", value: "1" },
+      { name: "b", type: "readonly", compute: "a +" },
+      { name: "c", type: "select", options: "NOPE(" },
+    ] });
+    assert.equal(d.f("b").ro.textContent, "");
+    assert.deepEqual(d.f("c").input.options, []);
+    d.type("a", "2");
+    d.type("a", "3");
+  } finally { console.warn = orig; }
+  assert.equal(warns.filter((w) => w.includes('"a +"')).length, 1);
+  assert.equal(warns.filter((w) => w.includes('"NOPE("')).length, 1);
 });
