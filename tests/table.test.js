@@ -7331,6 +7331,53 @@ test("links: chips — one per direction, click toggles, × removes (armed first
   assert.equal(chipStrip(host).toolbar, null);
 });
 
+test("links: chips = false keeps the chips off the toolbar; the advanced dropdown pauses and resumes instead", async () => {
+  const hub = new LinkHub();
+  const { host } = await createTable({ columns: LINK_COLS, link: { broadcast: { order: "id" }, listen: { x: "qty" }, listening: false, chips: false } }, { hub, id: "t" });
+  assert.equal(linkChips(host).group, null, "no link chips");
+  assert.equal(chipStrip(host).toolbar, null, "so no toolbar either");
+  assert.ok(linkMark(host, "id"), "the header mark still shows the link");
+  assert.deepEqual(host._paneEl._link.get(), { broadcast: { order: "id" }, listen: { x: "qty" }, broadcasting: true, listening: false }, "chips is not link state");
+  // The plain dropdown has no toggles; the advanced one has them for the
+  // directions this column is linked in.
+  let ops = linkOps(host, "id", { alt: false });
+  const toggles = (o, dir) => byClass(o.dd, `mkui-filter-action mkui-link-toggle mkui-link-toggle-${dir}`);
+  assert.equal(toggles(ops, "broadcast").length, 0);
+  clickFilterBtn(getThs(host).find(t => t.dataset.col === "id"));
+  ops = linkOps(host, "id");
+  assert.equal(ops.text("broadcast"), "Broadcasting as order", "the ops are still there");
+  assert.equal(toggles(ops, "broadcast")[0]?.textContent, "Pause broadcasting");
+  assert.equal(toggles(ops, "listen").length, 0, "id doesn't listen");
+  toggles(ops, "broadcast")[0]._ev.click[0]();
+  assert.equal(host._paneEl._link.get().broadcasting, false);
+  assert.equal(host.querySelector(".mkui-filter-dropdown"), null, "the dropdown closed");
+  ops = linkOps(host, "qty");
+  assert.equal(toggles(ops, "broadcast").length, 0, "qty doesn't broadcast");
+  assert.equal(toggles(ops, "listen")[0]?.textContent, "Resume listening");
+  toggles(ops, "listen")[0]._ev.click[0]();
+  assert.equal(host._paneEl._link.get().listening, true);
+  ops = linkOps(host, "qty");
+  assert.equal(toggles(ops, "listen")[0]?.textContent, "Pause listening");
+  assert.equal(linkChips(host).group, null, "still no chips after the toggles");
+  // With chips on (the default) the dropdown has no toggles: one path.
+  const plain = await createTable({ columns: LINK_COLS, link: { broadcast: { order: "id" } } }, { hub, id: "u" });
+  ops = linkOps(plain.host, "id");
+  assert.equal(ops.text("broadcast"), "Broadcasting as order");
+  assert.equal(toggles(ops, "broadcast").length, 0);
+  // Only `false` hides them: `""` (TOML's null) and `true` keep the chips.
+  for (const chips of ["", true]) {
+    const t = await createTable({ columns: LINK_COLS, link: { broadcast: { order: "id" }, chips } }, { hub, id: "v" + chips });
+    assert.ok(linkChips(t.host).group, `chips = ${JSON.stringify(chips)} keeps the chips`);
+  }
+  // It is config, not link state: setLink can't hide the chips, and a
+  // replace (as a layout restore or table.link does) can't bring them back.
+  plain.host._paneEl._link.set({ chips: false }, { merge: true });
+  assert.ok(linkChips(plain.host).group, "a merged chips: false changes nothing");
+  host._paneEl._link.set({ broadcast: { order: "id" }, chips: true });
+  assert.equal(linkChips(host).group, null, "a replace with chips: true leaves them hidden");
+  assert.deepEqual(host._paneEl._link.get(), { broadcast: { order: "id" }, listen: {}, broadcasting: true, listening: true }, "and never reports it");
+});
+
 test("links: the group icon removes every link", async () => {
   const hub = new LinkHub();
   const { host } = await createTable({ columns: LINK_COLS, link: { broadcast: { order: "id" }, listen: { x: "qty" } } }, { hub, id: "t" });

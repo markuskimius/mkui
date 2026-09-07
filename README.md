@@ -440,6 +440,7 @@ link.listen = { order_id = "parent_order_id" }
 link.listen = { order_id = "order_id" }
 link.broadcast = { exec_id = "id" }
 link.broadcasting = false       # configured, but paused until turned on
+link.chips = false              # no toolbar chips: pause from the advanced dropdown
 ```
 
 - **What is sent.** The rows the selection implies — selected rows, else
@@ -474,7 +475,13 @@ link.broadcasting = false       # configured, but paused until turned on
   was: click for an inline name (the column's name by default, and the
   listen input offers every name currently broadcast), Enter or blur
   commits, an emptied name removes the link, Escape cancels. Linked
-  columns wear the direction icons ahead of their label.
+  columns wear the direction icons ahead of their label. `link.chips =
+  false` keeps the chips off the toolbar altogether — for a table whose
+  links are part of the setup rather than something to fiddle with — and
+  the advanced row then also carries *Pause broadcasting* / *Resume
+  listening* for the directions the column is linked in (the header
+  mark still shows the links and whether they are paused). It is
+  presentation config: `getPaneLink` and layouts never carry it.
 - **Programmatic.** `workspace.setPaneLink(id, link, { merge })` /
   `getPaneLink(id)` and the `table.link` action take the same shape;
   under `merge` only the keys given change, a `null` name entry dropping

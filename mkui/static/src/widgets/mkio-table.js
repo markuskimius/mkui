@@ -3255,8 +3255,15 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // filter is theirs until the next broadcast re-links it. A table never
   // follows its own broadcasts, and listening off releases every linked
   // filter while the configuration stays.
+  //
+  // `chips = false` keeps the link controls off the toolbar: no chips, so
+  // pausing a direction or removing a link is done from the header
+  // dropdown's advanced row (alt/option-click), which then carries the
+  // pause / resume toggles too. Presentation config, read once here:
+  // setLink ignores it, getLink and layouts never carry it.
   const hub = app.links ?? null;
   let linkSource = null; // the pane's id, set once the pane element is known
+  const linkChips = spec.link?.chips !== false;
   const link = { broadcast: {}, listen: {}, broadcasting: true, listening: true };
   const linkStash = new Map(); // filter key -> the filter a linked one displaced
   const linkSubs = new Map();  // name -> hub unsubscribe
@@ -3973,7 +3980,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         () => clearFilters([...filters.keys()]), chips));
     }
     const bNames = Object.keys(link.broadcast), lNames = Object.keys(link.listen);
-    if (bNames.length || lNames.length) {
+    if (linkChips && (bNames.length || lNames.length)) {
       const chips = [];
       if (bNames.length) chips.push(makeLinkChip("broadcast", bNames));
       if (lNames.length) chips.push(makeLinkChip("listen", lNames));
@@ -4056,6 +4063,26 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     mark.title = tips.join("\n");
     th.classList.toggle("mkui-th-broadcast", b.length > 0);
     th.classList.toggle("mkui-th-listen", l.length > 0);
+  }
+
+  // With the chips off the toolbar, the advanced row is where a direction
+  // is paused or resumed: one toggle per direction the column is linked
+  // in, "Pause broadcasting" / "Resume listening". The flag is the
+  // table's — every link in that direction pauses with it — which the
+  // tooltip says.
+  function makeLinkToggle(dir) {
+    const on = dir === "broadcast" ? link.broadcasting : link.listening;
+    const t = document.createElement("span");
+    t.className = `mkui-filter-action mkui-link-toggle mkui-link-toggle-${dir}`;
+    t.textContent = `${on ? "Pause" : "Resume"} ${dir}ing`;
+    t.title = on
+      ? (dir === "broadcast" ? "Stop sending this table's selection; listeners release" : "Release the linked filters; the links stay configured")
+      : (dir === "broadcast" ? "Send the current selection again" : "Follow broadcasts again");
+    t.addEventListener("click", () => {
+      closeDropdown();
+      setLink({ [dir + "ing"]: !on }, { merge: true });
+    });
+    return t;
   }
 
   // The header dropdown's link ops (alt/option-click): "Broadcast as…" /
@@ -4484,8 +4511,14 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     colOps.appendChild(hideOp);
     // Link ops are advanced: alt/option-click the button (or a chip) to
     // see them, like the tree scope row. An existing link stays visible
-    // on the toolbar chips and the header mark either way.
-    if (hub && advanced) colOps.append(makeLinkOp("broadcast", col), makeLinkOp("listen", col));
+    // on the toolbar chips and the header mark either way; without the
+    // chips, the pause / resume toggles sit here for the column's links.
+    if (hub && advanced) {
+      colOps.append(makeLinkOp("broadcast", col), makeLinkOp("listen", col));
+      if (!linkChips)
+        for (const dir of ["broadcast", "listen"])
+          if (linkNamesFor(dir, col).length) colOps.appendChild(makeLinkToggle(dir));
+    }
     dd.appendChild(colOps);
 
     // The scope row: tabs, one filter each. Switching reopens the dropdown
