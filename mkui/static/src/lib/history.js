@@ -93,7 +93,7 @@ export function pkFromSchema(row) {
 /* ── The `history` pane-spec block ─────────────────────────────────────── */
 
 const SPEC_KEYS = new Set([
-  "table", "key", "versions", "state", "feed", "undo", "redo",
+  "table", "key", "versions", "state", "feed", "asOf", "undo", "redo",
   "columns", "fields", "confirm",
 ]);
 
@@ -109,6 +109,7 @@ const strList = (v) => (typeof v === "string" ? (v ? [v] : []) : Array.isArray(v
  *   versions = "order_versions"                # reqrep: one record's chain
  *   state    = "order_state"                   # reqrep: { current, top }
  *   feed     = "order_history"                 # query/stream: the audit tape
+ *   asOf     = "order_as_of"                   # reqrep: the table at a moment
  *   undo     = { service = "orders", op = "undo" }
  *   redo     = "orders"                        # op defaults to the direction
  *   columns  = ["qty", "price", "status"]      # what to diff; default: the pane's
@@ -129,7 +130,7 @@ export function parseHistorySpec(spec, opts = {}) {
 
   const out = {
     table: null, key: null, versions: null, state: null, feed: null,
-    undo: null, redo: null, columns: null, fields: {}, confirm: true,
+    asOf: null, undo: null, redo: null, columns: null, fields: {}, confirm: true,
   };
 
   for (const k of Object.keys(spec)) if (!SPEC_KEYS.has(k)) warn(`bad history: unknown key '${k}'`);
@@ -143,6 +144,18 @@ export function parseHistorySpec(spec, opts = {}) {
   out.versions = service("versions");
   out.state = service("state");
   out.feed = service("feed");
+
+  // `asOf = "order_as_of"`, or `{ service, param = "as_of" }` when the
+  // service names its cutoff something else.
+  if (spec.asOf != null && spec.asOf !== "" && spec.asOf !== false) {
+    const v = spec.asOf;
+    if (typeof v === "string") out.asOf = { service: v, param: "as_of" };
+    else if (typeof v === "object" && !Array.isArray(v) && typeof v.service === "string" && v.service) {
+      const param = v.param == null || v.param === "" ? "as_of" : v.param;
+      if (typeof param !== "string") warn("bad history.asOf: param must be a name");
+      else out.asOf = { service: v.service, param };
+    } else warn("bad history.asOf: expected a service name or { service, param }");
+  }
 
   if (spec.table != null && spec.table !== "") {
     if (typeof spec.table === "string") out.table = spec.table;

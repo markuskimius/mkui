@@ -1,0 +1,137 @@
+# Record history: a versioned table, its audit tape, and the panes that
+# read them. Everything here is config — no application JavaScript.
+
+[app]
+title = "Record history"
+theme = "dark"
+
+[state.status]
+message = "Connecting..."
+
+# ─── Menubar ──────────────────────────────────────────────────────────
+
+[[menubar]]
+label = "Record"
+items = [
+  # Opens the history pane for whatever the Orders table has selected —
+  # one pane per table, re-pointed rather than re-opened.
+  { label = "History…", action = "table.history", args = { pane = "orders" } },
+  # `keys` selects the record first, so a menu item can name the one it
+  # means: a deep link to a record's history.
+  { label = "History of order 1", action = "table.history", args = { pane = "orders", keys = ["1"] } },
+  { sep = true },
+  # The same steps the toolbar's Undo and Redo take, on the focused pane.
+  { label = "Undo record", action = "edit.undo" },
+  { label = "Redo record", action = "edit.redo" },
+]
+
+[[menubar]]
+label = "View"
+items = [
+  { label = "Tape: inserts only", action = "table.filter", args = { pane = "tape", filters = { _mkio_op = ["insert"] } } },
+  { label = "Tape: order 2 only", action = "table.filter", args = { pane = "tape", filters = { id = [2] } } },
+  { label = "Tape: everything", action = "table.filter", args = { pane = "tape", filters = {} } },
+  { sep = true },
+  { label = "Orders: show every record", action = "table.link", args = { pane = "orders", listening = false, merge = true } },
+  { label = "Orders: follow the tape again", action = "table.link", args = { pane = "orders", listening = true, merge = true } },
+]
+
+[[menubar]]
+label = "Edit"
+items = [
+  { label = "Copy", action = "edit.copy", shortcut = "mod+C" },
+  { label = "Select All", action = "edit.selectAll", shortcut = "mod+A" },
+  { label = "Find…", action = "edit.find", shortcut = "mod+F" },
+]
+
+# ─── The live table ───────────────────────────────────────────────────
+
+[panes.orders]
+title = "Orders"
+type = "mkio-table"
+service = "all_orders"
+protocol = "query"
+# `_mkio_version` is mkio's own column — the cursor into the record's
+# chain. Naming it here is what shows it; it is hidden otherwise.
+columns = ["id", "_mkio_version", "side", "symbol", "qty", "price", "status"]
+labels = { id = "ID" }
+# The audit tape publishes the id of the change you click; this table
+# narrows to that record. The chip on the toolbar shows the link and
+# takes it off again.
+link = { listen = { order_id = "id" } }
+
+# Presentation only: what a cell shows, never what it sorts or filters by.
+[panes.orders.display]
+status = "${BADGE(value, CASE(value == 'filled', 'green', value == 'cancelled', 'red', 'gray'))}"
+side   = "${COLOR(value, IF(value == 'Buy', '#4caf50', '#e05252'))}"
+
+# Where this table's record history lives. mkio advertises no history
+# table and writes no service for one, so this block is the only way the
+# client can know — every name here is a service in server.toml.
+[panes.orders.history]
+table    = "orders"          # checked against the server's versioned tables
+key      = ["id"]            # asked of the server when omitted
+versions = "order_versions"  # one record's chain: the history pane
+state    = "order_state"     # where the row sits in it: arms Redo
+feed     = "order_history"   # the audit tape
+undo     = { service = "orders", op = "undo" }
+redo     = { service = "orders", op = "redo" }
+asOf     = "order_as_of"     # the table as it stood at a moment
+
+# ─── The audit tape ───────────────────────────────────────────────────
+# An ordinary query pane over the history table: every recorded version,
+# newest first, arriving live as changes land. `_mkio_op`, `_mkio_user`
+# and `_mkio_ref` are mkio's own columns, shown because they are named.
+
+[panes.tape]
+title = "Audit tape"
+type = "mkio-table"
+service = "order_history"
+protocol = "query"
+columns = ["_mkio_ref", "id", "_mkio_version", "_mkio_op", "_mkio_user", "side", "symbol", "qty", "price", "status"]
+labels = { _mkio_ref = "When", _mkio_version = "Ver", id = "Order", _mkio_user = "Changed by" }
+sort = "-_mkio_ref"
+# Selecting a change publishes its order id; the Orders table listens.
+link = { broadcast = { order_id = "id" } }
+
+[panes.tape.display]
+# The ref is a UTC timestamp; REF_TIME reads it in the browser's zone.
+_mkio_ref  = "${REF_TIME(value, fmt: '%H:%M:%S', tz: 'local')}"
+_mkio_op   = "${BADGE(value, CASE(value == 'insert', 'green', value == 'baseline', 'gray', '#0e639c'))}"
+_mkio_user = "${value ?? MUTED('(system)')}"
+
+# Filtering narrows what you are looking at; this jumps to the record
+# instead, leaving the table showing everything around it.
+[[panes.tape.buttons]]
+label = "Go to order"
+enable = { minSelected = 1, maxSelected = 1 }
+action = { type = "action", name = "table.select", args = { pane = "orders", keys = ["${row.id}"] } }
+
+# ─── Frames ───────────────────────────────────────────────────────────
+
+[[frames]]
+id = "main"
+x = 0.02
+y = 0.03
+w = 0.56
+h = 0.48
+layout = { type = "tabs", active = 0, children = ["orders"] }
+
+[[frames]]
+id = "tape"
+x = 0.02
+y = 0.53
+w = 0.56
+h = 0.44
+layout = { type = "tabs", active = 0, children = ["tape"] }
+
+# ─── Connection ───────────────────────────────────────────────────────
+
+[mkio]
+url = "ws://localhost:8080/ws"
+connected    = { "status.message" = "Connected" }
+disconnected = { "status.message" = "Disconnected" }
+
+[statusbar]
+left  = [{ type = "text", text = "${state.status.message}" }]
+right = [{ type = "text", text = "versioned: ${state.mkio.server.versioned}" }]

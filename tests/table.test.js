@@ -250,6 +250,8 @@ function makeState(init) {
   };
 }
 
+let lastApp = null;
+
 // `opts.hub` shares a link hub between tables (lib/links.js); `opts.id`
 // names the pane, the identity a table broadcasts under.
 async function createTable(specOverrides = {}, opts = {}) {
@@ -269,7 +271,9 @@ async function createTable(specOverrides = {}, opts = {}) {
     config: { mkio: { url: "ws://localhost:8080/ws" } },
     state,
     links: opts.hub ?? new LinkHub(state),
+    fireAction() {},
   };
+  lastApp = app;
   // rowColumn defaults off here so the long-standing assertions can keep
   // indexing header/row children directly; row-column behavior has its own
   // tests that opt back in.
@@ -8300,4 +8304,184 @@ test("undo: a table with no version counter flashes updates as it always did", a
   lastSubscribe().opts.onUpdate("update", { _mkio_row: "1", name: "a", status: "open", qty: "99", ts: "" });
   const td = getTbody(host)._ch[0]._ch.find(c => c.dataset?.col === "qty");
   assert.ok([...td.classList._s].includes("mkui-flash-update"));
+});
+
+test("a custom action's args resolve against the selection", async () => {
+  const fired = [];
+  const { host, io } = await createTable({
+    protocol: "query", columns: ["name", "qty"], rowColumn: true,
+    buttons: [{ label: "Go", action: { type: "action", name: "table.select", args: { pane: "other", keys: ["${row.name}"] } } }],
+  });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  // The app the factory was handed records what the button fires.
+  const app = lastApp;
+  app.fireAction = (name, args) => fired.push([name, args]);
+  host._paneEl._select.set(["2"]);
+  await toolbarBtn(host, 0)._ev.click[0]();
+  assert.deepEqual(fired, [["table.select", { pane: "other", keys: ["b"] }]]);
+});
+
+test("a custom action with no args fires with none", async () => {
+  const fired = [];
+  const { host, io } = await createTable({
+    protocol: "query", columns: ["name"], rowColumn: true,
+    buttons: [{ label: "Go", enable: {}, action: { type: "action", name: "app.quit" } }],
+  });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  lastApp.fireAction = (name, args) => fired.push([name, args]);
+  host._paneEl._select.set(["1"]);
+  await toolbarBtn(host, 0)._ev.click[0]();
+  assert.deepEqual(fired, [["app.quit", null]]);
+});
+
+/* ── As of: the table at a moment ─────────────────────────────────────── */
+
+const AS_OF_HISTORY = { table: "orders", key: "id", asOf: "order_as_of", undo: "orders", confirm: false };
+const asOfBar = (host) => host._ch.find(c => String(c.className).includes("mkui-table-asof"));
+const asOfBtn = (host) =>
+  host._ch.find(c => String(c.className).includes("mkui-table-toolbar"))
+    ._ch.find(c => String(c.className).includes("mkui-history-asof"));
+
+// The service answers with history rows, which carry no `_mkio_row`.
+const asOfRows = () => [
+  { id: "1", _mkio_version: 2, _mkio_op: "update", name: "a", qty: "500" },
+  { id: "2", _mkio_version: 1, _mkio_op: "insert", name: "b", qty: "300" },
+];
+
+async function asOfTable(history = {}, opts = {}) {
+  const t = await createTable({
+    protocol: "query", columns: ["id", "name", "qty"], rowColumn: true,
+    history: { ...AS_OF_HISTORY, ...history },
+  }, { replies: { order_as_of: { type: "reply", rows: asOfRows() }, ...(opts.replies ?? {}) } });
+  triggerVisible(t.io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", id: "1", _mkio_version: 3, name: "a", qty: "750" },
+    { _mkio_row: "2", id: "2", _mkio_version: 1, name: "b", qty: "300" },
+  ]);
+  return t;
+}
+
+const showAsOf = (host, when = "2026-09-08T14:32") => {
+  asOfBtn(host)._ev.click[0]();
+  const bar = asOfBar(host);
+  bar._ch[0].value = when;
+  return bar._ch[1]._ev.click[0]();          // Show
+};
+
+test("as of: the button is there only when configured, and only for a query", async () => {
+  const { host } = await asOfTable();
+  assert.ok(asOfBtn(host));
+  const plain = await createTable({ columns: ["id"], history: { table: "orders", key: "id" } });
+  assert.equal(plain.host._ch.find(c => String(c.className).includes("mkui-table-toolbar")), undefined);
+});
+
+test("as of: a stream table says the option is not for it", async () => {
+  const warned = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warned.push(a.join(" "));
+  try {
+    const { host } = await createTable({
+      protocol: "stream", columns: ["id"], history: { table: "orders", key: "id", asOf: "order_as_of" },
+    });
+    assert.match(warned.join("\n"), /history\.asOf is for query tables/);
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test("as of: the bar opens on the button and closes on it again", async () => {
+  const { host } = await asOfTable();
+  assert.equal(asOfBar(host), undefined);
+  asOfBtn(host)._ev.click[0]();
+  assert.ok(asOfBar(host), "armed");
+  asOfBtn(host)._ev.click[0]();
+  assert.equal(asOfBar(host), undefined);
+});
+
+test("as of: showing a moment asks the service for that ref and renders the answer", async () => {
+  const { host } = await asOfTable();
+  await showAsOf(host);
+  const req = fakeClient.calls.filter(c => c.type === "request").at(-1);
+  assert.equal(req.service, "order_as_of");
+  assert.match(req.data.as_of, /^\d{8} \d\d:\d\d:00\.0{12}$/, "a ref, so the cutoff is a range scan");
+  assert.equal(getTbody(host)._ch.length, 2);
+  assert.deepEqual(getTbody(host)._ch.map(tr => tr._ch.find(td => td.dataset?.col === "qty").textContent),
+    ["500", "300"], "the values as they stood, not the live ones");
+  assert.ok(host.classList.contains("mkui-table-historic"));
+  assert.match(asOfBar(host)._ch[2].textContent, /read-only/);
+});
+
+test("as of: the cutoff param can be named", async () => {
+  const { host } = await asOfTable({ asOf: { service: "order_as_of", param: "at" } });
+  await showAsOf(host);
+  assert.ok("at" in fakeClient.calls.filter(c => c.type === "request").at(-1).data);
+});
+
+test("as of: history rows are given the identity the table tracks records by", async () => {
+  const { host } = await asOfTable();
+  await showAsOf(host);
+  // Selection works, which it cannot if every row shares one key.
+  assert.deepEqual(host._paneEl._select.set(["1"]).selected, ["1"]);
+});
+
+test("as of: the live subscription is dropped, and nothing lands on the view", async () => {
+  const { host } = await asOfTable();
+  const subs = fakeClient.calls.filter(c => c.type === "subscribe").length;
+  await showAsOf(host);
+  assert.equal(fakeClient.calls.filter(c => c.type === "unsubscribe").length, 1);
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "9", id: "9", name: "z", qty: "1" });
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "1", id: "1", name: "a", qty: "999" });
+  assert.equal(getTbody(host)._ch.length, 2, "a historic view takes no live changes");
+  assert.equal(fakeClient.calls.filter(c => c.type === "subscribe").length, subs);
+});
+
+test("as of: nothing that acts on a record is offered while it is up", async () => {
+  const { host } = await asOfTable();
+  host._paneEl._select.set(["1"]);
+  assert.equal(stepBtn(host, "undo").disabled, false);
+  await showAsOf(host);
+  host._paneEl._select.set(["1"]);
+  assert.ok(stepBtn(host, "undo").disabled);
+  assert.equal(stepBtn(host, "undo").title, "Not while a historic view is up");
+  assert.equal(host._paneEl._history.can("undo"), false);
+});
+
+test("as of: Live re-subscribes and takes the view down", async () => {
+  const { host } = await asOfTable();
+  await showAsOf(host);
+  const subs = fakeClient.calls.filter(c => c.type === "subscribe").length;
+  asOfBar(host)._ch[3]._ev.click[0]();          // Live
+  assert.equal(fakeClient.calls.filter(c => c.type === "subscribe").length, subs + 1);
+  assert.ok(!host.classList.contains("mkui-table-historic"));
+  // Re-subscribing starts from nothing and waits for the server's snapshot.
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", id: "1", _mkio_version: 3, name: "a", qty: "750" }]);
+  host._paneEl._select.set(["1"]);
+  assert.equal(stepBtn(host, "undo").disabled, false);
+});
+
+test("as of: a service that refuses says so and leaves the live view alone", async () => {
+  const { host } = await asOfTable({}, { replies: { order_as_of: { type: "error", message: "not permitted" } } });
+  await showAsOf(host);
+  assert.match(asOfBar(host)._ch[2].textContent, /not permitted/);
+  assert.ok(!host.classList.contains("mkui-table-historic"));
+  assert.deepEqual(getTbody(host)._ch.map(tr => tr._ch.find(td => td.dataset?.col === "qty").textContent),
+    ["750", "300"], "still live");
+});
+
+test("as of: an unreadable time is refused before anything is asked", async () => {
+  const { host } = await asOfTable();
+  const before = fakeClient.calls.filter(c => c.type === "request").length;
+  await showAsOf(host, "not a time");
+  assert.equal(asOfBar(host)._ch[2].textContent, "Pick a time");
+  assert.equal(fakeClient.calls.filter(c => c.type === "request").length, before);
+});
+
+test("as of: closing the pane returns it to live", async () => {
+  const { host } = await asOfTable();
+  await showAsOf(host);
+  host._paneEl._ev["mkui-pane-close"][0]();
+  assert.ok(!host.classList.contains("mkui-table-historic"));
+  assert.equal(asOfBar(host), undefined);
 });

@@ -94,6 +94,7 @@ test("parseHistorySpec normalizes a full block", () => {
     versions: "order_versions",
     state: "order_state",
     feed: "order_history",
+    asOf: null,
     undo: { service: "orders", op: "undo_order", label: "Undo" },
     redo: { service: "orders", op: "redo", label: "Redo" },
     columns: ["qty", "price"],
@@ -401,4 +402,18 @@ test("the verify reply is where capabilities are captured", () => {
 test("with auth on, the capabilities are probed after login and on every reconnect", () => {
   assert.match(appSrc, /if \(!hasAuth\) this\._verify\(client\);\n\s*else if \(st\.get\("auth\.authenticated"\)\) this\._probe\(client\);/);
   assert.match(appSrc, /if \(this\._probe && config\.mkio\?\.url\) this\._probe\(client \?\? await ensureMkio\(config\.mkio\.url\)\);/);
+});
+
+test("parseHistorySpec: asOf takes a name or { service, param }", () => {
+  const warn = warner();
+  assert.deepEqual(parseHistorySpec({ asOf: "order_as_of" }, { warn }).asOf,
+    { service: "order_as_of", param: "as_of" });
+  assert.deepEqual(parseHistorySpec({ asOf: { service: "s", param: "at" } }, { warn }).asOf,
+    { service: "s", param: "at" });
+  assert.deepEqual(parseHistorySpec({ asOf: { service: "s" } }, { warn }).asOf,
+    { service: "s", param: "as_of" });
+  assert.equal(parseHistorySpec({}, { warn }).asOf, null);
+  assert.deepEqual(warn.msgs, []);
+  assert.equal(parseHistorySpec({ asOf: 7 }, { warn }).asOf, null);
+  assert.equal(warn.msgs.length, 1);
 });

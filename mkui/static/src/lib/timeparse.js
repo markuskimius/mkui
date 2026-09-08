@@ -52,6 +52,17 @@ export function refToDate(ref) {
 }
 
 /**
+ * The mkio ref for a `Date` — `YYYYMMDD HH:MM:SS.ffffffffffff`, UTC, with
+ * the sub-second field zeroed. Refs sort lexicographically, so one built
+ * this way is a usable bound for "everything recorded up to here".
+ */
+export function dateToRef(d) {
+  const p = (n, w = 2) => String(n).padStart(w, "0");
+  return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())} ` +
+    `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}.${"0".repeat(12)}`;
+}
+
+/**
  * Classify a string: "datetime", "date", "time", or null when it is not
  * one of the natively recognised formats.
  */

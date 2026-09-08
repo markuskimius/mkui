@@ -1,0 +1,95 @@
+# Record history: an order book whose orders table is versioned, so every
+# version of every row is kept and a row can be stepped back and forth
+# along its own history.
+#
+#   mkio serve          # or: python -m mkui serve .
+#   python seed.py      # a few orders, edited, filled, and one undone
+#   http://localhost:8080/
+
+name = "order-history"
+version = "1.0.0"
+port = 8080
+host = "127.0.0.1"
+db_path = "orders.db"
+auto_migrate = "safe"
+
+# `versioned = true` is the whole switch: mkio numbers every version of
+# every row (`_mkio_version`, 1 on insert and +1 per edit) and records it
+# in a companion `orders__history` table, stamped with the ref, the user
+# and the service the change came through.
+[tables.orders]
+columns = { id = "INTEGER PRIMARY KEY AUTOINCREMENT", side = "TEXT NOT NULL", symbol = "TEXT NOT NULL", qty = "INTEGER", price = "REAL DEFAULT 0", status = "TEXT DEFAULT 'pending'" }
+versioned = true
+
+[services.orders]
+protocol = "transaction"
+
+[services.orders.ops]
+new    = [{ table = "orders", op_type = "insert", fields = ["side", "symbol", "qty", "price"] }]
+amend  = [{ table = "orders", op_type = "update", key = ["id"], fields = ["qty", "price"] }]
+fill   = [{ table = "orders", op_type = "update", key = ["id"], fields = ["status"], defaults = { status = "filled" } }]
+cancel = [{ table = "orders", op_type = "update", key = ["id"], fields = ["status"], defaults = { status = "cancelled" } }]
+# undo/redo take only the key — the values come from the history table —
+# and record no new version, so a step is always reversible. Undoing
+# version 1 removes the row and keeps its versions, so redo can rebuild it.
+undo   = [{ table = "orders", op_type = "undo", key = ["id"] }]
+redo   = [{ table = "orders", op_type = "redo", key = ["id"] }]
+
+# The live table.
+[services.all_orders]
+protocol = "query"
+primary_table = "orders"
+filterable = ["status", "symbol"]
+
+# ─── History ──────────────────────────────────────────────────────────
+# mkio never advertises a history table and writes no service for one, so
+# these four are the deliberate choice to expose it. Each would take its
+# own `access` rule on a server with authentication enabled — audit
+# visibility is a permission like any other.
+
+# One record's chain, oldest first: what the history pane reads.
+[services.order_versions]
+protocol = "reqrep"
+sql = "SELECT * FROM orders__history WHERE id = :id ORDER BY _mkio_version"
+
+# Where a record sits in its chain: the version its live row is on, and the
+# highest recorded. `current` is null once the row has been undone away.
+# This is what tells the client whether redo has anywhere to go.
+[services.order_state]
+protocol = "reqrep"
+sql = "SELECT (SELECT _mkio_version FROM orders WHERE id = :id) AS current, MAX(_mkio_version) AS top FROM orders__history WHERE id = :id"
+
+# The audit tape: every recorded version, newest first, live as they land.
+[services.order_history]
+protocol = "query"
+primary_table = "orders__history"
+sql = "SELECT * FROM orders__history ORDER BY _mkio_ref DESC"
+filterable = ["id", "status", "_mkio_op", "_mkio_user"]
+change_log_size = 10000
+
+# The table as it stood at a moment: for each id, the newest version
+# recorded at or before `as_of`. Refs sort lexicographically, so the cutoff
+# is an ordinary range scan.
+#
+# Reconstructed from recorded versions, which is not quite the same as
+# "what the table showed then": undo and redo move a row's cursor without
+# recording anything, so a row undone at 3pm still reads, as of 2pm, as
+# whatever its newest version by 2pm was.
+[services.order_as_of]
+protocol = "reqrep"
+sql = """
+SELECT h.* FROM orders__history h
+  JOIN (SELECT id, MAX(_mkio_version) AS v
+          FROM orders__history
+         WHERE _mkio_ref <= :as_of
+      GROUP BY id) latest
+    ON h.id = latest.id AND h._mkio_version = latest.v
+ ORDER BY h.id
+"""
+
+[static]
+"/" = "./static"
+"/mkui" = "../../"
+
+[config]
+"/config" = "./config"

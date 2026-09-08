@@ -1793,3 +1793,41 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   100% { background: transparent; }
 }
 .mkui-flash-undo { animation: mkui-flash-undo 600ms ease forwards; }
+
+/* ─── As of: the table at a moment ──────────────────────────────────── */
+/* A bar between the toolbar and the table while a historic view is armed.
+   The view itself is read-only, and the table says so by going muted. */
+.mkui-table-asof {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--mkui-border);
+  background: var(--mkui-bg-alt);
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+.mkui-asof-input {
+  background: var(--mkui-bg);
+  border: 1px solid var(--mkui-border);
+  border-radius: 3px;
+  color: var(--mkui-fg);
+  font-family: var(--mkui-font);
+  font-size: 12px;
+  padding: 1px 4px;
+}
+.mkui-asof-input:focus { outline: none; border-color: var(--mkui-accent); }
+.mkui-asof-label { flex: 1; color: var(--mkui-fg-mute); }
+.mkui-asof-error { color: #c0392b; }
+.mkui-history-asof, .mkui-asof-show, .mkui-asof-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.mkui-history-asof .mkui-icon { width: 13px; height: 13px; }
+/* Reading the past: the rows are history, not the record as it stands. */
+.mkui-table-historic .mkui-table { opacity: 0.82; }
+.mkui-table-historic .mkui-table-asof {
+  border-left: 3px solid #b5730f;
+  background: color-mix(in srgb, #b5730f 12%, var(--mkui-bg-alt));
+}

@@ -10,7 +10,7 @@ import {
 } from "../lib/history.js";
 import {
   detectTimeKind, parseTime, kindForSpec, kindForFormat, inputToBound, boundToInput,
-  inputTypeForKind, presetBounds, PRESETS,
+  inputTypeForKind, presetBounds, PRESETS, dateToRef,
 } from "../lib/timeparse.js";
 
 function midnightRef() {
@@ -265,6 +265,19 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
   const hasHistoryBtns = historyBtns.length > 0;
 
+  // "As of…" arms the historic view (below). Drawn only when the block
+  // configures it, and only on a query table.
+  let asOfBtn = null;
+  if (historySpec?.asOf && (spec.protocol ?? "query") === "query") {
+    asOfBtn = document.createElement("button");
+    asOfBtn.className = "mkui-btn mkui-toolbar-btn mkui-history-asof";
+    asOfBtn.appendChild(icon("clock"));
+    asOfBtn.appendChild(document.createTextNode("As of…"));
+    asOfBtn.title = "Show the table as it stood at a moment";
+    asOfBtn.addEventListener("click", () => (asOfOpen ? closeAsOf() : openAsOf()));
+    toolbar.appendChild(asOfBtn);
+  }
+
   // Buttons keep the first slots (tests and users find them there); the
   // chip cluster is the last child, pushed to the right edge by CSS.
   const chipsEl = document.createElement("div");
@@ -272,7 +285,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   toolbar.appendChild(chipsEl);
   let toolbarShown = false;
   function syncToolbar() {
-    const show = hasButtons || hasHistoryBtns || chipsEl.children.length > 0;
+    const show = hasButtons || hasHistoryBtns || asOfBtn != null || chipsEl.children.length > 0;
     if (show === toolbarShown) return;
     toolbarShown = show;
     if (show) host.insertBefore(toolbar, findOpen ? findBar : scrollArea); else toolbar.remove();
@@ -2750,6 +2763,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         count = rowCount;
       }
       let ok = true;
+      if (asOfRef) ok = false;   // a historical row is not one to act on
       if (en.connected && !mkioConnected) ok = false;
       // Singular units imply exactly-one unless the config says otherwise.
       const min = en.minSelected ?? (single ? 1 : null);
@@ -2831,7 +2845,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const { openDialog } = await import("./mkui-dialog.js");
       await openDialog(dialogSpec, ctx, app, { client, tableRows });
     } else if (action.type === "action") {
-      app.fireAction(action.name, action.args);
+      // `args` resolve against the selection, as a transaction's `data`
+      // does — without that a custom action could name a pane but never
+      // the record: `args = { pane = "orders", keys = ["${row.id}"] }`.
+      app.fireAction(action.name, resolveObject(action.args ?? null, ctx));
     }
   }
 
@@ -2905,7 +2922,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // existence — an undo at version 1 removes the row, so there is nothing
   // left to select.
   function canStep(dir, sel) {
-    if (!historySpec?.[dir]) return false;
+    if (!historySpec?.[dir] || asOfRef) return false;
     if (!sel.length) return dir === "redo" && undoneAway.length > 0;
     for (const row of sel) {
       if (!recordKey(row)) return false;
@@ -2941,7 +2958,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     for (const b of historyBtns) {
       const ok = mkioConnected && canStep(b.dir, sel);
       b.el.disabled = !ok;
-      b.el.title = stepTitle(b.dir, b.cfg, sel, ok);
+      b.el.title = asOfRef ? "Not while a historic view is up" : stepTitle(b.dir, b.cfg, sel, ok);
     }
     scheduleProbe();
   }
@@ -3111,6 +3128,133 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     refreshButtons();
   }
+
+  /* ── As of: the table at a moment ─────────────────────────────────── */
+
+  // `history.asOf` names a service that answers with the table as it
+  // stood at a cutoff — for each record, the newest version recorded at
+  // or before it. Query tables only: a stream is a log, and "as of" for
+  // one is just paging, which it already has.
+  //
+  // Viewing one is read-only. The live subscription is dropped while it is
+  // on, so nothing arrives to overwrite what is being read and every
+  // toolbar button is shut — a historical row is not something to act on —
+  // and Live re-subscribes from scratch.
+  //
+  // What it reconstructs is the recorded versions, which is not quite what
+  // the table showed at the time: undo and redo move a record's cursor
+  // without recording anything, so a row undone this afternoon still reads,
+  // as of this morning, as whatever its newest version by then was.
+  const asOfCfg = protocol === "query" ? historySpec?.asOf ?? null : null;
+  if (historySpec?.asOf && !asOfCfg)
+    console.warn(`[mkio-table] history.asOf is for query tables; this one is a ${protocol}`);
+  let asOfRef = null;      // the ref being viewed; null is live
+  let asOfOpen = false;    // the bar is in the DOM only while armed
+  let asOfBar = null, asOfInput = null, asOfLabel = null, asOfGen = 0;
+
+  function buildAsOfBar() {
+    asOfBar = document.createElement("div");
+    asOfBar.className = "mkui-table-asof";
+    asOfInput = document.createElement("input");
+    asOfInput.type = "datetime-local";
+    asOfInput.step = "1";   // seconds: records can change faster than a minute
+    asOfInput.className = "mkui-asof-input";
+    asOfInput.title = "Show the table as it stood at this moment";
+    const show = document.createElement("button");
+    show.className = "mkui-btn mkui-asof-show";
+    show.textContent = "Show";
+    show.addEventListener("click", () => applyAsOf(asOfInput.value));
+    asOfInput.addEventListener("keydown", (ev) => { if (ev.key === "Enter") applyAsOf(asOfInput.value); });
+    asOfLabel = document.createElement("span");
+    asOfLabel.className = "mkui-asof-label";
+    const live = document.createElement("button");
+    live.className = "mkui-btn mkui-asof-live";
+    live.textContent = "Live";
+    live.addEventListener("click", () => asOfGoLive());
+    asOfBar.append(asOfInput, show, asOfLabel, live);
+  }
+
+  function openAsOf() {
+    if (!asOfCfg) return false;
+    if (!asOfBar) buildAsOfBar();
+    if (!asOfOpen) {
+      asOfOpen = true;
+      host.insertBefore(asOfBar, findOpen ? findBar : scrollArea);
+      if (!asOfInput.value) asOfInput.value = localInputNow();
+    }
+    asOfInput.focus?.();
+    return true;
+  }
+
+  function closeAsOf() {
+    if (asOfRef) asOfGoLive();
+    if (!asOfOpen) return;
+    asOfOpen = false;
+    asOfBar.remove();
+  }
+
+  // `datetime-local` takes and gives local wall-clock time; a ref is UTC.
+  function localInputNow() {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+
+  async function applyAsOf(value) {
+    if (!asOfCfg || !client) return;
+    const at = value ? new Date(value) : null;
+    if (!at || isNaN(at.getTime())) {
+      asOfLabel.textContent = "Pick a time";
+      asOfLabel.className = "mkui-asof-label mkui-asof-error";
+      return;
+    }
+    const gen = ++asOfGen;
+    const ref = dateToRef(at);
+    asOfLabel.className = "mkui-asof-label";
+    asOfLabel.textContent = "Reading…";
+    let reply;
+    try {
+      reply = await client.request(asOfCfg.service, { [asOfCfg.param]: ref });
+    } catch (e) {
+      if (gen === asOfGen) { asOfLabel.textContent = e.message; asOfLabel.className = "mkui-asof-label mkui-asof-error"; }
+      return;
+    }
+    if (gen !== asOfGen || closed) return;
+    if (reply?.type === "error") {
+      asOfLabel.textContent = `${asOfCfg.service}: ${reply.message}`;
+      asOfLabel.className = "mkui-asof-label mkui-asof-error";
+      return;
+    }
+    // Rows come from the history table, which carries no `_mkio_row`:
+    // stamp each with the identity the table tracks records by, built
+    // from the key columns, so selection and linking work as ever.
+    const rows_ = reply.rows ?? (reply.row ? [reply.row] : []);
+    if (keyCols) for (const r of rows_) r[idKey] = keyCols.map((c) => r[c]).join("\u0000");
+    unsub();
+    asOfRef = ref;
+    host.classList.add("mkui-table-historic");
+    asOfLabel.textContent = `as at ${fmtAsOf(at)} · read-only`;
+    applySnapshot(rows_);
+    refreshButtons();
+  }
+
+  function asOfGoLive() {
+    if (!asOfRef) return;
+    asOfGen++;
+    asOfRef = null;
+    host.classList.remove("mkui-table-historic");
+    if (asOfLabel) asOfLabel.textContent = "";
+    sub();
+    refreshButtons();
+  }
+
+  const fmtAsOf = (d) => {
+    const p = (n) => String(n).padStart(2, "0");
+    const today = new Date();
+    const sameDay = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
+    const clock = `${p(d.getHours())}:${p(d.getMinutes())}`;
+    return sameDay ? clock : `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${clock}`;
+  };
 
   function closeDropdown() {
     if (dropdown) { rememberListHeight(dropdown, "filter"); dropdown.remove(); dropdown = null; dropdownCol = null; dropdownScope = null; }
@@ -5453,6 +5597,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function applyInsert(row) {
+    if (asOfRef) return;   // a historic view takes no live changes
     if (!columns) {
       columns = inferColumns(row);
       renderHead();
@@ -5467,6 +5612,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function applyDelete(row) {
+    if (asOfRef) return;   // a historic view takes no live changes
     const key = row[idKey];
     const prev = rows.get(key);
     const gated = rowInSelection(key);
@@ -5517,6 +5663,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function applyReplace(row) {
+    if (asOfRef) return;   // a historic view takes no live changes
     const key = row[idKey];
     const prev = rows.get(key);
     if (!prev) {
@@ -5701,7 +5848,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function sub() {
-    if (closed || subscribed) return;
+    if (closed || subscribed || asOfRef) return;
     subscribed = true;
     ++snapshotGen;
     const resuming = protocol === "stream" && lastRef;
@@ -6020,6 +6167,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       closeDropdown();
       closePicker();
       closeFind();
+      closeAsOf();
       io.disconnect();
       ro.disconnect();
       subscribed = false;
@@ -6041,6 +6189,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       closeDropdown();
       closePicker();
       closeFind();
+      closeAsOf();
       // A reopened pane starts over: its rows are re-fetched, so what this
       // session undid — and where a record's cursor sat — is stale.
       cursorCache.clear();
