@@ -4,7 +4,10 @@ import { resolveExpr, resolveObject, evalExpr, compileExpr, compileTemplate, exp
 import { icon } from "../lib/icons.js";
 import { gridToTSV, gridToHTML } from "../lib/copy.js";
 import { isRich, richText, richToHTML, renderRich } from "../lib/rich.js";
-import { SHOWABLE_COLUMNS, MKIO_LABELS, historyTable, parseHistorySpec } from "../lib/history.js";
+import {
+  SHOWABLE_COLUMNS, MKIO_LABELS, MKIO_FIELDS, historyTable, parseHistorySpec,
+  pkFromSchema, parseChain, diffVersions, changedOnly,
+} from "../lib/history.js";
 import {
   detectTimeKind, parseTime, kindForSpec, kindForFormat, inputToBound, boundToInput,
   inputTypeForKind, presetBounds, PRESETS,
@@ -214,6 +217,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   let findScanning = false;
   let findInputTimer = null, findDataTimer = null;
 
+  // Record history: `history = { table, key, versions, state, feed, undo,
+  // redo, … }` tells the table where the versions of its records live
+  // (lib/history.js). mkio never advertises a history table and writes no
+  // service for one, so this block is the only way a table can know — and
+  // the server's `_mkio` reply is the only way to check what it says, which
+  // is what checkHistory does once that lands.
+  const historySpec = parseHistorySpec(spec.history, {
+    warn: (msg) => console.warn(`[mkio-table] ${msg}`),
+  });
+
   /* ── Toolbar (buttons + chips) ──────────────────────────────────── */
 
   const hasButtons = Array.isArray(spec.buttons) && spec.buttons.length > 0;
@@ -233,6 +246,25 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       buttonEls.push({ el: btn, spec: btnSpec, styler: undefined });
     }
   }
+  // Record undo/redo: a button per configured direction, after the
+  // configured buttons. They step the selected records along their own
+  // recorded versions — a write to shared state, not an editor undo — so
+  // they confirm by default and take no keyboard shortcut.
+  const historyBtns = [];
+  for (const dir of ["undo", "redo"]) {
+    const cfg = historySpec?.[dir];
+    if (!cfg) continue;
+    const btn = document.createElement("button");
+    btn.className = `mkui-btn mkui-toolbar-btn mkui-history-step mkui-history-${dir}`;
+    btn.appendChild(icon(dir));
+    btn.appendChild(document.createTextNode(cfg.label));
+    btn.disabled = true;
+    btn.addEventListener("click", () => handleHistoryStep(dir));
+    toolbar.appendChild(btn);
+    historyBtns.push({ el: btn, dir, cfg });
+  }
+  const hasHistoryBtns = historyBtns.length > 0;
+
   // Buttons keep the first slots (tests and users find them there); the
   // chip cluster is the last child, pushed to the right edge by CSS.
   const chipsEl = document.createElement("div");
@@ -240,7 +272,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   toolbar.appendChild(chipsEl);
   let toolbarShown = false;
   function syncToolbar() {
-    const show = hasButtons || chipsEl.children.length > 0;
+    const show = hasButtons || hasHistoryBtns || chipsEl.children.length > 0;
     if (show === toolbarShown) return;
     toolbarShown = show;
     if (show) host.insertBefore(toolbar, findOpen ? findBar : scrollArea); else toolbar.remove();
@@ -349,16 +381,6 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     colTypes[c] = o;
   }
-
-  // Record history: `history = { table, key, versions, state, feed, undo,
-  // redo, … }` tells the table where the versions of its records live
-  // (lib/history.js). mkio never advertises a history table and writes no
-  // service for one, so this block is the only way a table can know — and
-  // the server's `_mkio` reply is the only way to check what it says, which
-  // is what checkHistory does once that lands.
-  const historySpec = parseHistorySpec(spec.history, {
-    warn: (msg) => console.warn(`[mkio-table] ${msg}`),
-  });
 
   // Tree rows: `tree = { child, parent, expand, filterScope, orphans,
   // column }` nests rows like a file navigator. A row whose `child` fields
@@ -1241,7 +1263,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     syncToggle(key);
     syncTreeAll();
     render();
-    if (hasButtons) updateButtonStates();
+    refreshButtons();
     publishSelection();
     return true;
   }
@@ -1281,7 +1303,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     for (const key of rowEls.keys()) syncToggle(key);
     syncTreeAll();
     render();
-    if (hasButtons) updateButtonStates();
+    refreshButtons();
     publishSelection();
   }
 
@@ -1755,7 +1777,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (tr._viewIdx == null) continue;
       styleRowSelection(tr, key, tr._viewIdx);
     }
-    if (hasButtons) updateButtonStates();
+    refreshButtons();
     publishSelection();
   }
 
@@ -1772,11 +1794,15 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return () => selectionListeners.delete(fn);
   }
 
-  function publishSelection() {
-    broadcastSelection();
+  function notifySelection() {
     for (const fn of selectionListeners) {
       try { fn(); } catch (e) { console.warn(`[mkio-table] selection listener failed: ${e.message}`); }
     }
+  }
+
+  function publishSelection() {
+    broadcastSelection();
+    notifySelection();
     if (!selectStatePath) return;
     let key = focusCell?.key ?? null;
     if (key == null && selectedKeys.size) {
@@ -2809,6 +2835,283 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
   }
 
+  /* ── Record undo / redo ───────────────────────────────────────────── */
+
+  // `history.undo` / `history.redo` step the selected records along their
+  // own recorded versions. mkio's ops take only the key — the values come
+  // from the history table — and write no new version, so a step is
+  // itself reversible; an *edit* made below the top, though, discards
+  // everything above it, which is why this confirms by default and takes
+  // no keyboard shortcut: it writes to state everyone shares.
+  //
+  // What can be offered depends on what can be known. Undo reads the row's
+  // own `_mkio_version` — mkio's cursor, where 1 is the first version and
+  // undoing it removes the row. Redo needs to know whether a higher
+  // version is recorded, which the row cannot say: `history.state` answers
+  // that, and failing it this session remembers its own undos, which is
+  // what an editor's redo stack is anyway.
+  const PROBE_MS = 200, PREVIEW_MAX = 8;
+  const cursorCache = new Map();  // row key -> { current, top } from `state`
+  const undoneHere = new Map();   // row key -> { key, label } this session undid
+  const undoneAway = [];          // those whose row then left the table, newest last
+  let probeTimer = null;
+  let keyCols = historySpec?.key ?? null;
+
+  const replyRows = (reply) => reply?.rows ?? (reply?.row ? [reply.row] : []);
+
+  // The record's key as its history services take it: the configured
+  // columns, else the base table's primary key (asked of the server once,
+  // as the history pane does).
+  function recordKey(row) {
+    if (!keyCols || !row) return null;
+    const out = {};
+    for (const c of keyCols) out[c] = row[c] ?? null;
+    return keyCols.every((c) => out[c] == null || out[c] === "") ? null : out;
+  }
+  const recordLabel = (row) => {
+    const key = recordKey(row);
+    return key ? Object.values(key).join(" ") : String(row?.[idKey] ?? "");
+  };
+  function versionOf(row) {
+    const v = row?.[MKIO_FIELDS.version];
+    const n = typeof v === "number" ? v : parseInt(v, 10);
+    return Number.isFinite(n) ? n : null;
+  }
+  // Where the record sits now. A row this session undid out of existence
+  // is at cursor 0 whatever its last row object said — that object is the
+  // version it *was* on, and redo rebuilds it from the bottom.
+  function cursorFor(row) {
+    const k = row[idKey];
+    if (undoneAway.some((u) => u.row[idKey] === k)) return 0;
+    return cursorCache.get(k)?.current ?? versionOf(row);
+  }
+
+  async function resolveKeyCols() {
+    if (keyCols || !historySpec?.table || !client) return;
+    try {
+      const reply = await client.request("_mkio", { table: historySpec.table });
+      if (reply?.type === "error") throw new Error(reply.message);
+      const cols = pkFromSchema(reply.row);
+      if (!cols.length) throw new Error(`table '${historySpec.table}' reports no primary key`);
+      keyCols = cols;
+      refreshButtons();
+    } catch (e) {
+      console.warn(`[mkio-table] history: cannot tell which columns identify a record (${e.message}); set history.key`);
+    }
+  }
+
+  // Whether a direction is offerable for these rows. With nothing
+  // selected, redo still has the records this session undid out of
+  // existence — an undo at version 1 removes the row, so there is nothing
+  // left to select.
+  function canStep(dir, sel) {
+    if (!historySpec?.[dir]) return false;
+    if (!sel.length) return dir === "redo" && undoneAway.length > 0;
+    for (const row of sel) {
+      if (!recordKey(row)) return false;
+      if (dir === "undo") {
+        const v = versionOf(row);
+        if (v != null && v < 1) return false;
+      } else {
+        const c = cursorCache.get(row[idKey]);
+        if (!(c ? c.top > c.current : undoneHere.has(row[idKey]))) return false;
+      }
+    }
+    return true;
+  }
+
+  // Why the button reads as it does — a disabled one that cannot say why
+  // is indistinguishable from a broken one.
+  function stepTitle(dir, cfg, sel, ok) {
+    const many = sel.length > 1 ? ` and ${sel.length - 1} more` : "";
+    if (ok && !sel.length) return `${cfg.label} ${undoneAway[undoneAway.length - 1].label} — undone here`;
+    if (ok) return `${cfg.label} ${recordLabel(sel[0])}${many}`;
+    if (!sel.length) return "Select a record";
+    if (!keyCols) return "Set history.key so a record can be identified";
+    if (!recordKey(sel[0])) return "The selected row carries no key";
+    if (dir === "undo") return "Already undone to nothing";
+    return historySpec.state
+      ? "Nothing is recorded above this version"
+      : "No way to tell what is recorded above this version — configure history.state";
+  }
+
+  function updateHistoryButtons() {
+    if (!hasHistoryBtns) return;
+    const sel = getSelectedRows();
+    for (const b of historyBtns) {
+      const ok = mkioConnected && canStep(b.dir, sel);
+      b.el.disabled = !ok;
+      b.el.title = stepTitle(b.dir, b.cfg, sel, ok);
+    }
+    scheduleProbe();
+  }
+
+  function refreshButtons() {
+    if (hasButtons) updateButtonStates();
+    updateHistoryButtons();
+  }
+
+  // Ask `history.state` where the selected record sits, so redo can be
+  // offered for a version this session did not undo itself. One row at a
+  // time (the common case), debounced, and cached per record: a drag down
+  // a table changes the selection dozens of times.
+  function scheduleProbe() {
+    if (!historySpec?.state || !historySpec.redo) return;
+    if (probeTimer) clearTimeout(probeTimer);
+    probeTimer = setTimeout(runProbe, PROBE_MS);
+  }
+  async function runProbe() {
+    probeTimer = null;
+    if (!client || closed) return;
+    const sel = getSelectedRows();
+    if (sel.length !== 1) return;
+    const key = sel[0][idKey];
+    if (cursorCache.has(key)) return;
+    const rec = recordKey(sel[0]);
+    if (!rec) return;
+    try {
+      const reply = await client.request(historySpec.state, rec);
+      const st = replyRows(reply)[0];
+      if (reply?.type === "error" || !st) return;
+      cursorCache.set(key, { current: Number(st.current ?? 0) || 0, top: Number(st.top ?? 0) || 0 });
+      updateHistoryButtons();
+    } catch (e) { /* best effort: the gate stays shut */ }
+  }
+
+  // What the step will do to the record, read from its recorded versions.
+  // Best-effort: without a `versions` service, or if the read fails, the
+  // dialog states the step without spelling out the fields.
+  async function stepPreview(dir, target) {
+    if (!historySpec.versions) return [];
+    try {
+      const reply = await client.request(historySpec.versions, target.key);
+      if (reply?.type === "error") return [];
+      const chain = parseChain(replyRows(reply), { fields: historySpec.fields });
+      const cur = cursorFor(target.row) ?? chain.top;
+      const from = chain.byVersion.get(cur) ?? null;
+      const to = chain.byVersion.get(dir === "undo" ? cur - 1 : cur + 1) ?? null;
+      if (!from && !to) return [];
+      const show = (v) => (v == null || v === "" ? "—" : String(v));
+      return changedOnly(diffVersions(from, to, historySpec.columns ?? chain.columns))
+        .slice(0, PREVIEW_MAX)
+        .map((d) => `${label(d.col)}: ${show(d.from)} → ${show(d.to)}`);
+    } catch (e) { return []; }
+  }
+
+  function stepSummary(dir, cfg, targets) {
+    if (targets.length > 1) return `${cfg.label} ${targets.length} records.`;
+    const name = recordLabel(targets[0].row);
+    const cur = cursorFor(targets[0].row);
+    if (cur == null) return `${cfg.label} ${name}.`;
+    if (dir === "undo") {
+      return cur <= 1
+        ? `${cfg.label} ${name}: this removes the record, keeping its versions.`
+        : `${cfg.label} ${name}: v${cur} → v${cur - 1}.`;
+    }
+    return cur === 0
+      ? `${cfg.label} ${name}: this rebuilds the record at v1.`
+      : `${cfg.label} ${name}: v${cur} → v${cur + 1}.`;
+  }
+
+  // The confirmation is an ordinary dialog, so the send, its timeout and
+  // its inline errors are the ones every other transaction gets.
+  async function confirmStep(dir, cfg, targets) {
+    const lines = targets.length === 1 ? await stepPreview(dir, targets[0]) : [];
+    const names = targets.map((t) => recordLabel(t.row));
+    const dialogSpec = {
+      title: `${cfg.label} ${names.length === 1 ? names[0] : `${names.length} records`}`,
+      width: 420,
+      fields: [
+        { type: "readonly", value: stepSummary(dir, cfg, targets) },
+        ...lines.map((t) => ({ type: "readonly", value: t })),
+      ],
+      submit: { label: cfg.label, service: cfg.service, op: cfg.op },
+      submitPerRow: true,
+      rowData: Object.fromEntries(keyCols.map((c) => [c, `\${row.${c}}`])),
+    };
+    const ctx = {
+      row: targets[0].row, rows: targets.map((t) => t.row),
+      selection: { count: targets.length, rowCount: targets.length, unit: "rows" },
+      state: app.state.get(),
+    };
+    const { openDialog } = await import("./mkui-dialog.js");
+    return (await openDialog(dialogSpec, ctx, app, { client, tableRows: rows })) != null;
+  }
+
+  // Returns whether the pane handled it, for `_editActions`.
+  async function handleHistoryStep(dir) {
+    const cfg = historySpec?.[dir];
+    if (!cfg || !client) return false;
+    let sel = getSelectedRows();
+    if (!sel.length && dir === "redo" && undoneAway.length) sel = [undoneAway[undoneAway.length - 1].row];
+    const targets = sel.map((row) => ({ row, key: recordKey(row) })).filter((t) => t.key);
+    if (!targets.length) return false;
+
+    // The intent is recorded before the send: an undo at version 1 removes
+    // the row, and that delete reaches the subscription before the send is
+    // acknowledged — applyDelete has to recognise the row as this
+    // session's undo as it goes, or the only handle on the record is lost.
+    const marked = dir === "undo" ? markUndone(targets) : [];
+
+    let done = false;
+    if (historySpec.confirm) {
+      done = await confirmStep(dir, cfg, targets);
+    } else {
+      try {
+        const results = await Promise.all(targets.map((t) => client.send(cfg.service, t.key, { op: cfg.op })));
+        const err = results.find((r) => r?.type === "error");
+        if (err) app.state.set("status.message", `${cfg.label} failed: ${err.message ?? "refused"}`);
+        else done = true;
+      } catch (e) {
+        app.state.set("status.message", `${cfg.label} failed: ${e.message}`);
+      }
+    }
+    if (!done) { unmarkUndone(marked); return true; }   // handled: declined or refused
+    noteStepped(dir, targets);
+    app.state.set("status.message", `${cfg.label}: ${targets.map((t) => recordLabel(t.row)).join(", ")}`);
+    return true;
+  }
+
+  // Records this session is undoing, marked before the send and unmarked
+  // if it never happens. `markUndone` reports the keys it added, so a
+  // rollback leaves an earlier undo of the same record alone.
+  function markUndone(targets) {
+    const added = [];
+    for (const t of targets) {
+      const k = t.row[idKey];
+      if (undoneHere.has(k)) continue;
+      undoneHere.set(k, { key: t.key, label: recordLabel(t.row), row: t.row });
+      added.push(k);
+    }
+    return added;
+  }
+  function unmarkUndone(keys) {
+    for (const k of keys) {
+      undoneHere.delete(k);
+      const i = undoneAway.findIndex((u) => u.row[idKey] === k);
+      if (i >= 0) undoneAway.splice(i, 1);
+    }
+    if (keys.length) refreshButtons();
+  }
+
+  // What a step leaves behind: an undo makes a redo possible, a redo
+  // consumes it. A record whose row then leaves the table joins
+  // `undoneAway` (applyDelete), which is the only handle left on it.
+  function noteStepped(dir, targets) {
+    for (const t of targets) {
+      const k = t.row[idKey];
+      cursorCache.delete(k);
+      if (dir === "undo") {
+        undoneHere.set(k, { key: t.key, label: recordLabel(t.row), row: t.row });
+      } else {
+        undoneHere.delete(k);
+        const i = undoneAway.findIndex((u) => u.row[idKey] === k);
+        if (i >= 0) undoneAway.splice(i, 1);
+      }
+    }
+    refreshButtons();
+  }
+
   function closeDropdown() {
     if (dropdown) { rememberListHeight(dropdown, "filter"); dropdown.remove(); dropdown = null; dropdownCol = null; dropdownScope = null; }
     if (dropdownCleanup) { dropdownCleanup(); dropdownCleanup = null; }
@@ -3615,7 +3918,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       }
     }
     render();
-    if (hasButtons) updateButtonStates();
+    refreshButtons();
     // Pruning can retire the published row, or promote a different one.
     publishSelection();
   }
@@ -5166,7 +5469,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function applyDelete(row) {
     const key = row[idKey];
     const prev = rows.get(key);
-    const gated = hasButtons && rowInSelection(key);
+    const gated = rowInSelection(key);
     const vi = viewIndexOf(prev ?? row);
     if (tree && prev) {
       // Its children re-home (orphans become roots or hide): rebuild. A
@@ -5197,8 +5500,18 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       tr.addEventListener("animationend", () => tr.remove(), { once: true });
     }
     render();
+    // A record undone past version 1 leaves the table: this session's
+    // memory of having undone it is the only handle left on it, and the
+    // Redo button offers it while nothing is selected. The cursor would
+    // otherwise fall onto a neighbouring row and point Redo at a record
+    // the user never touched, so the selection goes with the record.
+    const undone = undoneHere.get(key);
+    if (undone && !undoneAway.some((u) => u.row[idKey] === key)) {
+      undoneAway.push(undone);
+      if (gated) { clearSelection(); return; }   // clearSelection republishes
+    }
     // A selected row leaving the table changes the count the buttons see.
-    if (gated) updateButtonStates();
+    if (gated) refreshButtons();
     // The published row may be the one that just went away.
     publishSelection();
   }
@@ -5277,7 +5590,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (findRe && changed.length) scheduleFindRescan();
     // A live update to a row the buttons act on can flip an `enable.when`
     // verdict (a status column crossing a gate), so re-evaluate them.
-    if (hasButtons && rowInSelection(key)) updateButtonStates();
+    if (rowInSelection(key)) {
+      refreshButtons();
+      // The row a follower is showing was replaced under it — an undo
+      // steps the version, which is exactly what a history pane tracks.
+      cursorCache.delete(key);
+      notifySelection();
+    }
     if (hasBroadcast() && inBroadcast(key)) broadcastSelection(); // its broadcast values may have changed
     // A live update to the published row replaces the object it points at,
     // so followers see the new values instead of a snapshot.
@@ -5293,6 +5612,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     host.textContent = "[mkio-table] " + e.message;
     return;
   }
+
+  if (historySpec && !keyCols && (historySpec.undo || historySpec.redo)) resolveKeyCols();
 
   let lastRef = null;
 
@@ -5564,7 +5885,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   mkioConnected = !!app.state.get("mkio.connected");
   app.state.subscribe("mkio.connected", (v) => {
     mkioConnected = !!v;
-    if (hasButtons) updateButtonStates();
+    refreshButtons();
     updatePagingUI();
   });
 
@@ -5650,6 +5971,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       find: () => { openFind(); return true; },
       findNext: () => findStep(1),
       findPrev: () => findStep(-1),
+      // Record undo/redo, for the `edit.undo` / `edit.redo` menu actions.
+      // No key is bound: this writes to state everyone shares, and
+      // Ctrl/Cmd+Z means the editor kind of undo.
+      undo: () => handleHistoryStep("undo"),
+      redo: () => handleHistoryStep("redo"),
     };
     // Filter hook: `workspace.setPaneFilters` / `getPaneFilters` and the
     // `table.filter` action reach the column filters through it.
@@ -5675,7 +6001,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     // History hook: `workspace.showPaneHistory` and the `table.history`
     // action read the record's versions through the `history` block, over
     // the rows the selection implies.
-    if (historySpec) paneEl._history = { spec: historySpec, rows: getSelectedRows };
+    if (historySpec) paneEl._history = {
+      spec: historySpec, rows: getSelectedRows,
+      step: handleHistoryStep, can: (dir) => canStep(dir, getSelectedRows()),
+    };
     paneEl.addEventListener("mkui-pane-close", () => {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       if (presetTimer) { clearTimeout(presetTimer); presetTimer = null; }
@@ -5687,6 +6016,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       ro.disconnect();
       subscribed = false;
       pageFetchPending = false;
+      if (probeTimer) { clearTimeout(probeTimer); probeTimer = null; }
       client.unsubscribe(subid);
       client.unsubscribe(pageSubId);
       // Nothing is selected in a closed table, so followers stop showing
@@ -5703,6 +6033,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       closeDropdown();
       closePicker();
       closeFind();
+      // A reopened pane starts over: its rows are re-fetched, so what this
+      // session undid — and where a record's cursor sat — is stale.
+      cursorCache.clear();
+      undoneHere.clear();
+      undoneAway.length = 0;
       columns = spec.columns ?? null;
       loadVisibleSpec(spec.visible);
       loadSortSpec(spec.sort);

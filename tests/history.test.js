@@ -94,8 +94,8 @@ test("parseHistorySpec normalizes a full block", () => {
     versions: "order_versions",
     state: "order_state",
     feed: "order_history",
-    undo: { service: "orders", op: "undo_order" },
-    redo: { service: "orders", op: "redo" },
+    undo: { service: "orders", op: "undo_order", label: "Undo" },
+    redo: { service: "orders", op: "redo", label: "Redo" },
     columns: ["qty", "price"],
     fields: { version: "v" },
     confirm: false,
@@ -145,9 +145,10 @@ test("parseHistorySpec warns on an unknown key", () => {
 
 test("parseHistorySpec: undo/redo shapes", () => {
   const warn = warner();
-  assert.deepEqual(parseHistorySpec({ undo: "orders" }, { warn }).undo, { service: "orders", op: "undo" });
-  assert.deepEqual(parseHistorySpec({ redo: "orders" }, { warn }).redo, { service: "orders", op: "redo" });
-  assert.deepEqual(parseHistorySpec({ undo: { service: "o", op: "back" } }, { warn }).undo, { service: "o", op: "back" });
+  assert.deepEqual(parseHistorySpec({ undo: "orders" }, { warn }).undo, { service: "orders", op: "undo", label: "Undo" });
+  assert.deepEqual(parseHistorySpec({ redo: "orders" }, { warn }).redo, { service: "orders", op: "redo", label: "Redo" });
+  assert.deepEqual(parseHistorySpec({ undo: { service: "o", op: "back" } }, { warn }).undo, { service: "o", op: "back", label: "Undo" });
+  assert.deepEqual(parseHistorySpec({ undo: { service: "o", label: "Revert" } }, { warn }).undo, { service: "o", op: "undo", label: "Revert" });
   assert.equal(parseHistorySpec({ undo: false }, { warn }).undo, null, "false switches a direction off");
   assert.deepEqual(warn.msgs, []);
   assert.equal(parseHistorySpec({ undo: { op: "back" } }, { warn }).undo, null);

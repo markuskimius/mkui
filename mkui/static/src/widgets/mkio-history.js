@@ -21,7 +21,7 @@ import { isRich, richText, renderRich } from "../lib/rich.js";
 import { gridToTSV, gridToHTML } from "../lib/copy.js";
 import { refToDate } from "../lib/timeparse.js";
 import {
-  parseHistorySpec, parseChain, cursorOf, diffVersions, MKIO_LABELS,
+  parseHistorySpec, parseChain, cursorOf, diffVersions, pkFromSchema, MKIO_LABELS,
 } from "../lib/history.js";
 
 const el = (cls, tag = "div") => {
@@ -152,7 +152,7 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     if (!h.table) return null;
     const reply = await client.request("_mkio", { table: h.table });
     if (reply?.type === "error") throw new Error(reply.message ?? "schema unavailable");
-    const cols = (reply?.row?.columns ?? []).filter((c) => c.pk).map((c) => c.name);
+    const cols = pkFromSchema(reply?.row);
     if (!cols.length) throw new Error(`table '${h.table}' reports no primary key`);
     return (keyCols = cols);
   }

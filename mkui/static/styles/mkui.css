@@ -1738,3 +1738,12 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 }
 .mkui-history-config { white-space: pre-wrap; }
 .mkui-history-error { color: #c0392b; }
+
+/* Record undo/redo, drawn only when `history.undo` / `history.redo` are
+   configured. An icon plus its label, sitting with the toolbar buttons. */
+.mkui-history-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.mkui-history-step .mkui-icon { width: 13px; height: 13px; }

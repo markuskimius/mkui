@@ -81,6 +81,15 @@ export function historyCapabilities(info) {
   return { versioned: info.versioned.filter((t) => typeof t === "string" && t), suffix };
 }
 
+/**
+ * The primary key columns of an `_mkio` table-schema reply (`{ table }`),
+ * in declaration order — how a client learns what identifies a record when
+ * the config did not say.
+ */
+export function pkFromSchema(row) {
+  return (row?.columns ?? []).filter((c) => c && c.pk).map((c) => c.name);
+}
+
 /* ── The `history` pane-spec block ─────────────────────────────────────── */
 
 const SPEC_KEYS = new Set([
@@ -152,20 +161,24 @@ export function parseHistorySpec(spec, opts = {}) {
     else warn("bad history.columns: expected a column name or a list of them");
   }
 
-  // `undo = "orders"` or `undo = { service = "orders", op = "undo" }` — the
-  // op defaults to the direction's own name, which is what mkio's own
-  // examples call it.
+  // `undo = "orders"` or `undo = { service = "orders", op = "undo", label
+  // = "Undo" }` — the op defaults to the direction's own name, which is
+  // what mkio's own examples call it, and the label to its capitalised
+  // form (the button is drawn only when the direction is configured).
   for (const dir of ["undo", "redo"]) {
     const v = spec[dir];
     if (v == null || v === "" || v === false) continue;
-    if (typeof v === "string") { out[dir] = { service: v, op: dir }; continue; }
+    const cap = dir[0].toUpperCase() + dir.slice(1);
+    if (typeof v === "string") { out[dir] = { service: v, op: dir, label: cap }; continue; }
     if (typeof v !== "object" || Array.isArray(v) || typeof v.service !== "string" || !v.service) {
       warn(`bad history.${dir}: expected a service name or { service, op }`);
       continue;
     }
     const op = v.op == null || v.op === "" ? dir : v.op;
     if (typeof op !== "string") { warn(`bad history.${dir}: op must be a name`); continue; }
-    out[dir] = { service: v.service, op };
+    let label = v.label == null || v.label === "" ? cap : v.label;
+    if (typeof label !== "string") { warn(`bad history.${dir}: label must be text`); label = cap; }
+    out[dir] = { service: v.service, op, label };
   }
 
   // Only the overrides are kept: a field left unnamed is resolved against

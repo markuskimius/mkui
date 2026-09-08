@@ -193,12 +193,26 @@ globalThis.ResizeObserver = class {
 };
 
 let fakeClient;
+// Replies for reqrep calls (`_mkio` schema, history services), keyed by
+// service name: a value, or a function of the request data.
+let fakeReplies = {};
 globalThis.MkioClient = class {
   constructor() {
     this.calls = [];
     fakeClient = this;
   }
   async connect() {}
+  async request(service, data) {
+    this.calls.push({ type: "request", service, data });
+    const r = fakeReplies[service];
+    if (r === undefined) return { type: "error", message: `no stub for '${service}'` };
+    return typeof r === "function" ? r(data) : r;
+  }
+  async send(service, data, opts) {
+    this.calls.push({ type: "send", service, data, opts });
+    const r = fakeReplies[`send:${service}`];
+    return typeof r === "function" ? r(data, opts) : r ?? { type: "ok" };
+  }
   subscribe(service, protocol, opts) {
     this.calls.push({ type: "subscribe", service, protocol, opts });
   }
@@ -241,6 +255,10 @@ function makeState(init) {
 async function createTable(specOverrides = {}, opts = {}) {
   rafQueue.length = 0;
   pendingTimers.clear();
+  fakeReplies = opts.replies ?? {};
+  // The mkio client is cached across tests (ensureMkio holds one); its
+  // call log is per-table, so a test reads only its own traffic.
+  if (fakeClient) fakeClient.calls.length = 0;
   const host = mockEl("div");
   const paneEl = mockEl("mkui-pane");
   if (opts.id) paneEl.dataset.id = opts.id;
@@ -7949,7 +7967,7 @@ test("history: a versioned table with no `versions` service names the one to wri
 
 test("history: a configured block against a versioned table is quiet", async () => {
   const warned = await historyWarnings({
-    history: { table: "orders", versions: "order_versions", undo: "orders", redo: "orders" },
+    history: { table: "orders", key: "id", versions: "order_versions", undo: "orders", redo: "orders" },
   }, ["orders"]);
   assert.deepEqual(warned, []);
 });
@@ -7989,7 +8007,7 @@ test("history: the hook carries the parsed block and the selection's rows", asyn
   const hook = host._paneEl._history;
   assert.equal(hook.spec.versions, "order_versions");
   assert.deepEqual(hook.spec.key, ["name"]);
-  assert.deepEqual(hook.spec.undo, { service: "orders", op: "undo" });
+  assert.deepEqual(hook.spec.undo, { service: "orders", op: "undo", label: "Undo" });
   assert.deepEqual(hook.rows(), [], "nothing selected, nothing to show history for");
   host._paneEl._select.set(["2"]);
   assert.deepEqual(hook.rows().map(r => r.name), ["b"]);
@@ -8031,4 +8049,227 @@ test("history: a listener that throws does not break the selection", async () =>
   } finally {
     console.warn = origWarn;
   }
+});
+
+/* ── Record undo / redo ───────────────────────────────────────────────── */
+// `history.undo` / `history.redo` step the selected records along their
+// recorded versions. Undo reads the row's own `_mkio_version`; redo needs
+// to know whether a higher version is recorded, which comes from a `state`
+// service or from this session's own undos.
+
+const UNDO_HISTORY = {
+  table: "orders", key: "id", versions: "order_versions",
+  undo: "orders", redo: "orders", confirm: false,
+};
+
+const versionedRows = (over = {}) => [
+  { _mkio_row: "1", id: "1", _mkio_version: 3, name: "a", status: "filled", ...over },
+  { _mkio_row: "2", id: "2", _mkio_version: 1, name: "b", status: "pending" },
+];
+
+async function undoTable(history = {}, opts = {}) {
+  const t = await createTable({
+    protocol: "query", columns: ["id", "name", "status"], rowColumn: true,
+    history: { ...UNDO_HISTORY, ...history },
+  }, opts);
+  triggerVisible(t.io);
+  lastSubscribe().opts.onSnapshot(opts.rows ?? versionedRows());
+  return t;
+}
+
+const stepBtn = (host, dir) =>
+  host._ch.find(c => String(c.className).includes("mkui-table-toolbar"))
+    ._ch.find(c => String(c.className).includes(`mkui-history-${dir}`));
+const sends = () => fakeClient.calls.filter(c => c.type === "send");
+
+test("undo/redo: the buttons exist only for the directions configured", async () => {
+  const { host } = await undoTable({ redo: null });
+  assert.ok(stepBtn(host, "undo"), "undo is configured");
+  assert.equal(stepBtn(host, "redo"), undefined);
+  const plain = await createTable({ columns: ["id"] });
+  assert.equal(plain.host._ch.find(c => String(c.className).includes("mkui-table-toolbar")), undefined,
+    "no history, no toolbar of its own");
+});
+
+test("undo/redo: the buttons alone bring up the toolbar and start disabled", async () => {
+  const { host } = await undoTable();
+  assert.ok(stepBtn(host, "undo").disabled);
+  assert.ok(stepBtn(host, "redo").disabled);
+  assert.equal(stepBtn(host, "undo").title, "Select a record");
+});
+
+test("undo: enabled by a selection, and it names the record", async () => {
+  const { host } = await undoTable();
+  host._paneEl._select.set(["1"]);
+  const btn = stepBtn(host, "undo");
+  assert.equal(btn.disabled, false);
+  assert.equal(btn.title, "Undo 1");
+  host._paneEl._select.set(["1", "2"]);
+  assert.equal(stepBtn(host, "undo").title, "Undo 1 and 1 more");
+});
+
+test("undo: disabled while disconnected", async () => {
+  const { host, state } = await undoTable();
+  host._paneEl._select.set(["1"]);
+  assert.equal(stepBtn(host, "undo").disabled, false);
+  state.set("mkio.connected", false);
+  assert.ok(stepBtn(host, "undo").disabled, "an undo is a write; it needs the server");
+});
+
+test("undo: sends the key with the configured op, once per selected record", async () => {
+  const { host } = await undoTable();
+  host._paneEl._select.set(["1", "2"]);
+  await stepBtn(host, "undo")._ev.click[0]();
+  assert.deepEqual(sends().map(c => [c.service, c.data, c.opts]), [
+    ["orders", { id: "1" }, { op: "undo" }],
+    ["orders", { id: "2" }, { op: "undo" }],
+  ]);
+});
+
+test("undo: a custom op and label ride through", async () => {
+  const { host } = await undoTable({ undo: { service: "trades", op: "revert", label: "Revert" } });
+  const btn = stepBtn(host, "undo");
+  assert.equal(btn._ch.find(c => c.nodeType === 3).textContent, "Revert");
+  host._paneEl._select.set(["1"]);
+  await btn._ev.click[0]();
+  assert.deepEqual(sends().at(-1), { type: "send", service: "trades", data: { id: "1" }, opts: { op: "revert" } });
+});
+
+test("redo: nothing to redo until this session undoes something", async () => {
+  const { host } = await undoTable();
+  host._paneEl._select.set(["1"]);
+  assert.ok(stepBtn(host, "redo").disabled);
+  assert.match(stepBtn(host, "redo").title, /configure history\.state/);
+  await stepBtn(host, "undo")._ev.click[0]();
+  assert.equal(stepBtn(host, "redo").disabled, false, "what this session undid, it can redo");
+  assert.equal(stepBtn(host, "redo").title, "Redo 1");
+});
+
+test("redo: a `state` service says whether anything is recorded above the row", async () => {
+  const { host } = await undoTable({ state: "order_state" }, {
+    replies: { order_state: { type: "reply", rows: [{ current: 2, top: 4 }] } },
+  });
+  host._paneEl._select.set(["1"]);
+  assert.ok(stepBtn(host, "redo").disabled, "not until the answer arrives");
+  advanceTimers();                       // the debounced probe
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(fakeClient.calls.filter(c => c.type === "request").map(c => [c.service, c.data]),
+    [["order_state", { id: "1" }]]);
+  assert.equal(stepBtn(host, "redo").disabled, false);
+});
+
+test("redo: a `state` service that says the row is at the top keeps it shut", async () => {
+  const { host } = await undoTable({ state: "order_state" }, {
+    replies: { order_state: { type: "reply", rows: [{ current: 3, top: 3 }] } },
+  });
+  host._paneEl._select.set(["1"]);
+  advanceTimers();
+  await new Promise(r => setImmediate(r));
+  assert.ok(stepBtn(host, "redo").disabled);
+  assert.equal(stepBtn(host, "redo").title, "Nothing is recorded above this version");
+});
+
+test("redo: a record undone out of existence stays reachable, and takes the selection with it", async () => {
+  const { host } = await undoTable();
+  host._paneEl._select.set(["2"]);                    // v1: undoing it removes the row
+  await stepBtn(host, "undo")._ev.click[0]();
+  lastSubscribe().opts.onUpdate("delete", { _mkio_row: "2", id: "2" });
+  assert.deepEqual(host._paneEl._select.get().keys, [],
+    "the cursor would otherwise fall on a neighbour and point Redo at a record the user never touched");
+  const redo = stepBtn(host, "redo");
+  assert.equal(redo.disabled, false, "nothing to select, but this session knows what it undid");
+  assert.equal(redo.title, "Redo 2 — undone here");
+  await redo._ev.click[0]();
+  assert.deepEqual(sends().at(-1).data, { id: "2" });
+  assert.ok(stepBtn(host, "redo").disabled, "and it is consumed");
+});
+
+test("undo/redo: the edit hook routes both, and reports whether it acted", async () => {
+  const { host } = await undoTable();
+  assert.equal(await host._paneEl._editActions.undo(), false, "nothing selected: not handled");
+  host._paneEl._select.set(["1"]);
+  assert.equal(await host._paneEl._editActions.undo(), true);
+  assert.deepEqual(sends().at(-1).data, { id: "1" });
+});
+
+test("undo/redo: the history hook exposes the step and the gate", async () => {
+  const { host } = await undoTable();
+  host._paneEl._select.set(["1"]);
+  assert.equal(host._paneEl._history.can("undo"), true);
+  assert.equal(host._paneEl._history.can("redo"), false);
+  await host._paneEl._history.step("undo");
+  assert.deepEqual(sends().at(-1).data, { id: "1" });
+  assert.equal(host._paneEl._history.can("redo"), true);
+});
+
+test("undo: confirms by default — nothing is sent without the dialog", async () => {
+  const origErr = console.error;
+  console.error = () => {};              // the dialog needs a workspace it has no route to here
+  try {
+    const { host } = await undoTable({ confirm: true });
+    host._paneEl._select.set(["1"]);
+    await stepBtn(host, "undo")._ev.click[0]();
+    await new Promise(r => setImmediate(r));
+    assert.deepEqual(sends(), [], "a step the user never confirmed is a step not taken");
+  } finally {
+    console.error = origErr;
+  }
+});
+
+test("undo: a row the key cannot be read from is not offered", async () => {
+  const { host } = await undoTable({}, { rows: [{ _mkio_row: "1", name: "a" }] });
+  host._paneEl._select.set(["1"]);
+  assert.ok(stepBtn(host, "undo").disabled);
+  assert.equal(stepBtn(host, "undo").title, "The selected row carries no key");
+});
+
+test("undo: without a configured key the server is asked which columns identify a record", async () => {
+  const { host } = await undoTable({ key: null }, {
+    replies: { _mkio: { type: "reply", row: { table: "orders", columns: [
+      { name: "id", pk: true }, { name: "name", pk: false },
+    ] } } },
+  });
+  await new Promise(r => setImmediate(r));
+  host._paneEl._select.set(["1"]);
+  assert.equal(stepBtn(host, "undo").disabled, false);
+  await stepBtn(host, "undo")._ev.click[0]();
+  assert.deepEqual(sends().at(-1).data, { id: "1" });
+});
+
+test("undo: reopening the pane forgets what this session undid", async () => {
+  const { host, io } = await undoTable();
+  host._paneEl._select.set(["1"]);
+  await stepBtn(host, "undo")._ev.click[0]();
+  assert.equal(stepBtn(host, "redo").disabled, false);
+  host._paneEl._ev["mkui-pane-close"][0]();
+  host._paneEl._ev["mkui-pane-open"][0]();
+  assert.ok(stepBtn(host, "redo").disabled, "the rows are re-fetched; the memory is stale");
+});
+
+test("undo: a live replace of a selected row tells the followers", async () => {
+  const { host } = await undoTable();
+  host._paneEl._select.set(["1"]);
+  let n = 0;
+  host._paneEl._select.on(() => n++);
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "1", id: "1", _mkio_version: 2, name: "a", status: "accepted" });
+  assert.equal(n, 1, "the record a history pane is showing stepped under it");
+});
+
+test("undo: a delete that beats the acknowledgement is still recognised as this session's", async () => {
+  // The server's delete reaches the subscription before `send` resolves,
+  // so the intent has to be on record before the send goes out.
+  const { host } = await undoTable();
+  host._paneEl._select.set(["2"]);
+  const step = host._paneEl._history.step("undo");
+  lastSubscribe().opts.onUpdate("delete", { _mkio_row: "2", id: "2" });
+  await step;
+  assert.deepEqual(host._paneEl._select.get().keys, []);
+  assert.equal(stepBtn(host, "redo").title, "Redo 2 — undone here");
+});
+
+test("undo: a step that never happens leaves no memory of itself", async () => {
+  const { host } = await undoTable({}, { replies: { "send:orders": { type: "error", message: "not permitted" } } });
+  host._paneEl._select.set(["1"]);
+  await stepBtn(host, "undo")._ev.click[0]();
+  assert.ok(stepBtn(host, "redo").disabled, "a refused undo is not something to redo");
 });

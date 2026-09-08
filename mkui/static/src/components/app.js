@@ -65,6 +65,11 @@ class MkuiApp extends HTMLElement {
     this._app.registerAction("edit.copy",       () => ws.editAction("copy"));
     this._app.registerAction("edit.selectAll",  () => ws.editAction("selectAll"));
     this._app.registerAction("edit.find",       () => ws.editAction("find"));
+    // Record undo/redo, on the same route — a table with `history.undo` /
+    // `history.redo` configured steps its selected records. No shortcut is
+    // bound: this writes to state everyone shares.
+    this._app.registerAction("edit.undo",       () => ws.editAction("undo"));
+    this._app.registerAction("edit.redo",       () => ws.editAction("redo"));
     // `args = { pane = "<id>", filters = { col = <filter> }, merge = false }`;
     // `pane` omitted targets the focused pane.
     this._app.registerAction("table.filter",    (app, a = {}) => ws.setPaneFilters(a.pane ?? null, a.filters ?? {}, { merge: a.merge === true }));
