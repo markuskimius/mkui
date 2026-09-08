@@ -8273,3 +8273,31 @@ test("undo: a step that never happens leaves no memory of itself", async () => {
   await stepBtn(host, "undo")._ev.click[0]();
   assert.ok(stepBtn(host, "redo").disabled, "a refused undo is not something to redo");
 });
+
+test("undo: a record stepping back along its versions flashes differently from an edit", async () => {
+  const { host, io } = await createTable({
+    protocol: "query", columns: ["id", "_mkio_version", "status"], rowColumn: true,
+  });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", id: "1", _mkio_version: 3, status: "filled" }]);
+  const cellClasses = (col) => {
+    const td = getTbody(host)._ch[0]._ch.find(c => c.dataset?.col === col);
+    return [...td.classList._s];
+  };
+  // An edit: the counter goes up.
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "1", id: "1", _mkio_version: 4, status: "settled" });
+  assert.ok(cellClasses("status").includes("mkui-flash-update"));
+  // An undo: it goes down.
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "1", id: "1", _mkio_version: 3, status: "filled" });
+  assert.ok(cellClasses("status").includes("mkui-flash-undo"));
+  assert.ok(!cellClasses("status").includes("mkui-flash-update"));
+});
+
+test("undo: a table with no version counter flashes updates as it always did", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "qty"], rowColumn: true });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "1", name: "a", status: "open", qty: "99", ts: "" });
+  const td = getTbody(host)._ch[0]._ch.find(c => c.dataset?.col === "qty");
+  assert.ok([...td.classList._s].includes("mkui-flash-update"));
+});

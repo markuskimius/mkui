@@ -1732,6 +1732,44 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-history-same { opacity: 0.6; }
 .mkui-history-same .mkui-history-arrow { visibility: hidden; }
 
+/* Diff | Blame. Two views of the same chain: what changed between two
+   versions, and which version last set each field. */
+.mkui-history-views { display: flex; gap: 2px; }
+.mkui-history-view {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--mkui-fg-mute);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 1px 6px;
+}
+.mkui-history-view:hover { color: var(--mkui-fg); }
+.mkui-history-view.active {
+  color: var(--mkui-fg);
+  border-color: var(--mkui-border);
+  background: var(--mkui-bg-alt);
+}
+
+/* A blame line: the field, its value at the version on show, and the
+   version that last set it — clicking goes there. */
+.mkui-history-blame {
+  display: grid;
+  grid-template-columns: minmax(80px, 25%) 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.mkui-history-blame:hover { background: var(--mkui-bg-hover); }
+.mkui-history-unset { cursor: default; opacity: 0.6; }
+.mkui-history-bvalue { overflow-wrap: anywhere; }
+.mkui-history-bwho {
+  color: var(--mkui-fg-mute);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .mkui-history-empty {
   padding: 12px;
   color: var(--mkui-fg-mute);
@@ -1747,3 +1785,11 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   gap: 4px;
 }
 .mkui-history-step .mkui-icon { width: 13px; height: 13px; }
+
+/* A record stepping back along its recorded versions — someone undid it —
+   reads differently from an edit: amber rather than the accent. */
+@keyframes mkui-flash-undo {
+  0%   { background: #b5730f; }
+  100% { background: transparent; }
+}
+.mkui-flash-undo { animation: mkui-flash-undo 600ms ease forwards; }

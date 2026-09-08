@@ -5395,7 +5395,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function flash(el, cls) {
-    el.classList.remove("mkui-flash-in", "mkui-flash-out", "mkui-flash-update");
+    el.classList.remove("mkui-flash-in", "mkui-flash-out", "mkui-flash-update", "mkui-flash-undo");
     void el.offsetWidth;
     el.classList.add(cls);
     el.addEventListener("animationend", () => el.classList.remove(cls), { once: true });
@@ -5569,6 +5569,14 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     const tr = rowEls.get(key);
     if (tr) {
+      // A record that steps *back* along its versions was undone, not
+      // edited — mkio's cursor moved down — and a row changing under you
+      // because someone undid something is a different event from one
+      // being edited, so it gets its own colour. An increase stays an
+      // ordinary update: a redo and a fresh edit both raise the counter by
+      // one, and nothing on the row says which it was.
+      const was = versionOf(prev), now = versionOf(row);
+      const cls = was != null && now != null && now < was ? "mkui-flash-undo" : "mkui-flash-update";
       const changedCols = new Set(changed.map(([c]) => c));
       for (const c of visibleColumns()) {
         // Cells whose value changed re-render; display cells also re-render
@@ -5580,7 +5588,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         if (!isChanged && displayText(row, c) === td._mkuiText) continue;
         renderCell(td, row, c);
         styleCell(td, c);
-        flash(td, "mkui-flash-update");
+        flash(td, cls);
       }
       restyleRowStylers(tr, row);
       if (findRe && tr._viewIdx != null) styleRowSelection(tr, key, tr._viewIdx);

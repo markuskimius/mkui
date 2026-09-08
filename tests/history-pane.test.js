@@ -450,3 +450,91 @@ test("the record hook re-reads on demand", async () => {
   await flush();
   assert.equal(requests.length, n + 1, "a forced refresh re-reads the same record");
 });
+
+/* ── Blame ────────────────────────────────────────────────────────────── */
+// The same chain read the other way: which version last gave each field
+// the value it has, and who wrote it.
+
+const views = (host) => findAll(host, "mkui-history-view");
+const blameLines = (host) => findAll(host, "mkui-history-blame").map((l) => [
+  find(l, "mkui-history-fname").textContent,
+  find(l, "mkui-history-bvalue").textContent,
+  find(l, "mkui-history-bwho").textContent,
+]);
+const showBlame = (host) => click(views(host)[1]);
+
+test("blame: the switch is there, and Diff is what opens", async () => {
+  const { host } = await makePane({ rows: [liveRow()] });
+  assert.deepEqual(views(host).map((v) => v.textContent), ["Diff", "Blame"]);
+  assert.ok(views(host)[0].classList.contains("active"));
+  assert.equal(blameLines(host).length, 0);
+});
+
+test("blame: each field carries the version that last set it", async () => {
+  const { host } = await makePane({ rows: [liveRow()] });
+  showBlame(host);
+  const lines = blameLines(host);
+  assert.deepEqual(lines.map((l) => l.slice(0, 2)), [
+    ["id", "O1"], ["qty", "750"], ["status", "filled"],
+  ]);
+  assert.match(lines[0][2], /^v1 · alice/, "id was set when the record was inserted");
+  assert.match(lines[1][2], /^v2 · alice/, "qty last moved at v2");
+  assert.match(lines[2][2], /^v3 · bob/);
+  assert.ok(views(host)[1].classList.contains("active"));
+});
+
+test("blame: it reads as at the version on show, not the top of the chain", async () => {
+  const { host } = await makePane({ rows: [liveRow()] });
+  click(versions(host)[1]);                       // v2
+  showBlame(host);
+  const lines = blameLines(host);
+  assert.deepEqual(lines.map((l) => l.slice(0, 2)), [
+    ["id", "O1"], ["qty", "750"], ["status", "pending"],
+  ]);
+  assert.match(lines[2][2], /^v1 /, "at v2 the status is still the one the insert gave it");
+});
+
+test("blame: a field never set says so and does not navigate", async () => {
+  const { host } = await makePane({
+    rows: [liveRow()],
+    chain: [hrow(1, "insert", "alice", { id: "O1", qty: 1, note: "" })],
+  });
+  showBlame(host);
+  const note = blameLines(host).find((l) => l[0] === "note");
+  assert.deepEqual(note, ["note", "—", "never set"]);
+  const line = findAll(host, "mkui-history-blame").find((l) => find(l, "mkui-history-fname").textContent === "note");
+  assert.ok(line.classList.contains("mkui-history-unset"));
+  assert.equal(line._ev.mousedown, undefined, "nothing to go to");
+});
+
+test("blame: clicking a field goes to the version that set it", async () => {
+  const { host } = await makePane({ rows: [liveRow()] });
+  showBlame(host);
+  const qty = findAll(host, "mkui-history-blame").find((l) => find(l, "mkui-history-fname").textContent === "qty");
+  click(qty);
+  assert.ok(versions(host)[1].classList.contains("sel"), "v2 is where qty last moved");
+  assert.equal(find(host, "mkui-history-pair").textContent, "as at v2", "and blame stays on show");
+});
+
+test("blame: the view follows the record and the labels", async () => {
+  const { host, ws } = await makePane({
+    rows: [liveRow()], srcSpec: { labels: { status: "State" }, display: { status: "${UPPER(value)}" } },
+  });
+  showBlame(host);
+  assert.deepEqual(blameLines(host).at(-1).slice(0, 2), ["State", "FILLED"]);
+  replies.order_versions = { type: "reply", rows: [hrow(1, "insert", "carol", { id: "O2", qty: 9, status: "new" })] };
+  ws.select([{ id: "O2", qty: 9, status: "new", _mkio_version: 1 }]);
+  await flush();
+  assert.equal(find(host, "mkui-history-pair").textContent, "as at v1", "the view is a preference, not per record");
+  assert.deepEqual(blameLines(host).map((l) => l[0]), ["id", "qty", "State"]);
+});
+
+test("blame: copy takes the provenance grid", async () => {
+  const { host, paneEl } = await makePane({ rows: [liveRow()] });
+  showBlame(host);
+  paneEl._editActions.copy();
+  await flush();
+  const tsv = clipboard[0].parts["text/plain"].text.split("\r\n");
+  assert.equal(tsv[0], "\tv3\tVersion\tUser\tWhen");
+  assert.match(tsv[2], /^qty\t750\tv2\talice\t/);
+});

@@ -21,7 +21,7 @@ import { isRich, richText, renderRich } from "../lib/rich.js";
 import { gridToTSV, gridToHTML } from "../lib/copy.js";
 import { refToDate } from "../lib/timeparse.js";
 import {
-  parseHistorySpec, parseChain, cursorOf, diffVersions, pkFromSchema, MKIO_LABELS,
+  parseHistorySpec, parseChain, cursorOf, diffVersions, blame, pkFromSchema, MKIO_LABELS,
 } from "../lib/history.js";
 
 const el = (cls, tag = "div") => {
@@ -131,6 +131,7 @@ registerPaneType("mkio-history", async (spec, app, host) => {
   let selVersion = null;  // the version being viewed
   let baseVersion = null; // what it is compared against (null = its predecessor)
   let showUnchanged = false;
+  let panel = "diff";     // "diff" | "blame"
   let keyCols = null;     // resolved primary key columns
   let loadGen = 0;        // cancels a load whose record changed under it
   let client = null;
@@ -269,7 +270,7 @@ registerPaneType("mkio-history", async (spec, app, host) => {
   function render() {
     renderHead();
     renderList();
-    renderDiff();
+    renderPanel();
   }
 
   function renderList() {
@@ -339,34 +340,112 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     return [from, to, from?.version ?? null, selVersion];
   }
 
-  function renderDiff() {
+  // The panel header, shared by both views: what is on show, how much of
+  // it, the Diff | Blame switch, and whatever else the view offers.
+  function panelHead(what, count, extra = null) {
+    const dhead = el("mkui-history-diffhead");
+    const pair = el("mkui-history-pair");
+    pair.textContent = what;
+    const n = el("mkui-history-count");
+    n.textContent = count;
+    const views = el("mkui-history-views");
+    for (const [name, text, title] of [
+      ["diff", "Diff", "What changed between two versions"],
+      ["blame", "Blame", "Which version last set each field, and who"],
+    ]) {
+      const b = el("mkui-history-view", "button");
+      if (panel === name) b.classList.add("active");
+      b.textContent = text;
+      b.title = title;
+      b.addEventListener("mousedown", (ev) => {
+        if (ev.button !== 0 || panel === name) return;
+        panel = name;
+        renderPanel();
+      });
+      views.appendChild(b);
+    }
+    dhead.append(pair, n, views);
+    if (extra) dhead.appendChild(extra);
+    diff.appendChild(dhead);
+    return dhead;
+  }
+
+  function renderPanel() {
     diff.textContent = "";
     if (!chain) return;
     if (!chain.versions.length) {
       status("No versions are recorded for this record.");
       return;
     }
+    if (panel === "blame") renderBlame(); else renderDiff();
+  }
+
+  // Per-field provenance as at the selected version: the version that last
+  // gave each field the value it has there, and who wrote it. Clicking a
+  // line goes to that version, so blame is a way to navigate the chain and
+  // not only to read it.
+  function renderBlame() {
+    const h = hspec();
+    const cols = h?.columns ?? chain.columns;
+    const at = chain.byVersion.get(selVersion) ?? null;
+    const who = blame(chain, { columns: cols, upto: selVersion });
+    const known = cols.filter((c) => who[c]);
+    panelHead(`as at v${selVersion}`, `${known.length} of ${plural(cols.length, "field")} set`);
+
+    const fields = el("mkui-history-fields");
+    for (const col of cols) {
+      const b = who[col];
+      const line = el("mkui-history-blame");
+      if (!b) line.classList.add("mkui-history-unset");
+      const name = el("mkui-history-fname");
+      name.textContent = label(col);
+      name.title = col;
+      const val = el("mkui-history-bvalue");
+      if (at && at.values[col] != null && at.values[col] !== "") {
+        const shownVal = shown(at.values, col);
+        if (shownVal.rich) renderRich(val, shownVal.rich);
+        else val.textContent = shownVal.text;
+      } else {
+        val.classList.add("mkui-history-blank");
+        val.textContent = "—";
+      }
+      const src = el("mkui-history-bwho");
+      if (b) {
+        src.textContent = [`v${b.version}`, b.user, fmtWhen(b.ref)].filter(Boolean).join(" · ");
+        src.title = `${label(col)} last changed at v${b.version}${b.user ? ` by ${b.user}` : ""}`;
+        line.addEventListener("mousedown", (ev) => {
+          if (ev.button !== 0) return;
+          selVersion = b.version;
+          baseVersion = null;
+          render();
+        });
+      } else {
+        src.textContent = "never set";
+      }
+      line.append(name, val, src);
+      fields.appendChild(line);
+    }
+    diff.appendChild(fields);
+  }
+
+  function renderDiff() {
     const h = hspec();
     const [from, to, fromV, toV] = diffPair();
     const cols = h?.columns ?? chain.columns;
     const rows = diffVersions(from, to, cols);
     const changed = rows.filter((d) => d.kind !== "same");
 
-    const dhead = el("mkui-history-diffhead");
-    const what = el("mkui-history-pair");
-    what.textContent = fromV == null ? `v${toV} (first recorded)` : `v${fromV} → v${toV}`;
-    const count = el("mkui-history-count");
-    count.textContent = changed.length ? plural(changed.length, "change") : "no changes";
-    const toggle = el("mkui-history-toggle" + (showUnchanged ? " active" : ""), "button");
+    const toggle = el("mkui-history-toggle", "button");
+    if (showUnchanged) toggle.classList.add("active");
     toggle.textContent = showUnchanged ? "Hide unchanged" : "Show unchanged";
     toggle.disabled = rows.length === changed.length;
     toggle.addEventListener("mousedown", (ev) => {
       if (ev.button !== 0) return;
       showUnchanged = !showUnchanged;
-      renderDiff();
+      renderPanel();
     });
-    dhead.append(what, count, toggle);
-    diff.appendChild(dhead);
+    panelHead(fromV == null ? `v${toV} (first recorded)` : `v${fromV} → v${toV}`,
+              changed.length ? plural(changed.length, "change") : "no changes", toggle);
 
     const fields = el("mkui-history-fields");
     for (const d of rows) {
@@ -447,18 +526,36 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     paneEl.addEventListener("mkui-pane-close", () => { unfollow?.(); unfollow = null; });
   }
 
-  function copyDiff() {
-    if (!chain || !chain.versions.length) return false;
+  // The panel as it is shown, as a grid: the diff's two columns, or
+  // blame's value and provenance.
+  function copyGrid() {
     const h = hspec();
+    const cols = h?.columns ?? chain.columns;
+    if (panel === "blame") {
+      const at = chain.byVersion.get(selVersion) ?? null;
+      const who = blame(chain, { columns: cols, upto: selVersion });
+      const grid = [["", `v${selVersion}`, "Version", "User", "When"]];
+      for (const col of cols) {
+        const b = who[col];
+        grid.push([label(col), at ? shown(at.values, col).text : "",
+          b ? `v${b.version}` : "", b?.user ?? "", b ? fmtWhen(b.ref) : ""]);
+      }
+      return grid;
+    }
     const [from, to, fromV, toV] = diffPair();
-    const rows = diffVersions(from, to, h?.columns ?? chain.columns)
-      .filter((d) => showUnchanged || d.kind !== "same");
+    const rows = diffVersions(from, to, cols).filter((d) => showUnchanged || d.kind !== "same");
     const grid = [["", fromV == null ? "(none)" : `v${fromV}`, `v${toV}`]];
     for (const d of rows) {
       grid.push([label(d.col),
         from == null || d.from == null ? "" : shown(from.values, d.col).text,
         to == null || d.to == null ? "" : shown(to.values, d.col).text]);
     }
+    return grid;
+  }
+
+  function copyDiff() {
+    if (!chain || !chain.versions.length) return false;
+    const grid = copyGrid();
     const write = navigator?.clipboard?.write;
     if (!write) return false;
     const item = new ClipboardItem({
