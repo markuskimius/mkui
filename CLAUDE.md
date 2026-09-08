@@ -22,8 +22,6 @@ mkui is a config-driven, zero-dependency web GUI framework built with Web Compon
 
 Paths are under `mkui/static/src/` unless they start with `mkui/`.
 
-- `mkui/__init__.py` — Python package; `static_dir`, `__version__`
-- `mkui/__main__.py` — CLI (`init`, `serve`)
 - `layout/tree.js` — normalized tree math (normalize, find, insert, remove, layout); `layout/drag.js` — clamp, snap, drop-zone, frac↔rect helpers; both DOM-free
 - `components/workspace.js` — frame lifecycle, z-order, arrangement, inter-frame drag routing, snap
 - `components/frame.js` — frame chrome, internal tree rendering, splitter drag; defines `<mkui-pane>`
@@ -35,15 +33,13 @@ Paths are under `mkui/static/src/` unless they start with `mkui/`.
 - `lib/timeparse.js` — range-filter time parsing (`detectTimeKind`, `parseTime`, input↔bound, `PRESETS`)
 - `lib/icons.js` — `icon(name)` → a currentColor `<svg>` from vendored path data (Lucide + custom)
 - `lib/copy.js` — clipboard grids: `gridToTSV` (CRLF, Excel quoting), `gridToHTML`
-- `lib/history.js` — versioned tables (mkio 0.3.0): the `__history` naming convention, `historyCapabilities` (the `_mkio` reply), `parseHistorySpec` (a pane's `history` block), and the chain logic — `parseChain`, `cursorOf`, `diffVersions`, `blame`; DOM-free (`tests/history.test.js`)
+- `lib/history.js` — versioned tables (`__history`): `historyCapabilities`, `parseHistorySpec`, `parseChain`, `cursorOf`, `diffVersions`, `blame`; DOM-free (`tests/history.test.js`)
 - `widgets/mkio-table.js` — the `mkio-table` pane type: subscribes to mkio services, renders live tables
 - `widgets/mkui-dialog.js` — `openDialog()`: config-driven, live-updating modal forms (see Dialogs)
 - `auth.js` — config-driven login dialog; `showLogin()` runs before the app loads
-- `layouts.js` — `LayoutManager`: `layout.*` actions, stores, startup restore
-- `lib/layouts.js` — layout format, `sanitizeLayout`, `retained`, the stores
+- `layouts.js` / `lib/layouts.js` — `LayoutManager` (`layout.*` actions, startup restore); the format: `sanitizeLayout`, `retained`, the stores
 - `lib/links.js` — `LinkHub`, the table-link bus (retained values per name, queued delivery, `MAX_CHAIN`); `App.links` owns one
 - `mkui/control.py` — `ControlService` / `install(app)`, pushing actions to browsers (see Control channel)
-- `mkio-bridge.js` — lazy-loads mkio's `/mkio.js` client
 - `mkui/static/styles/mkui.css` — default theme, CSS custom properties
 
 ## Commands
@@ -53,7 +49,7 @@ Paths are under `mkui/static/src/` unless they start with `mkui/`.
 - `node --test tests/*.test.js` — JS unit tests (`version.test.js` pins the four version strings)
 - `python -m pytest tests/test_cli.py` — CLI tests
 - `python -m build && twine upload dist/*`
-- `cd mkui/static && python3 -m http.server 8000` — serve `mkui/static/examples/` (`standalone-json`, `library-js`, `mkio-table`)
+- `cd mkui/static && python3 -m http.server 8000` — serve `mkui/static/examples/`
 
 ## Config format
 
@@ -73,7 +69,7 @@ mkui uses mkio's expression language for everything conditional or derived in co
 - `layouts` — `true` expands into a submenu of saved layouts (state `layouts.list`; `layout.restore` leaves, `args` = id; empty → a `disabled` leaf), firing `layout.refresh`.
 - `disabled` — an inert leaf; `shortcut` — right-aligned hint (`.mkui-menu-shortcut`), `mod` rendering it platform-native via `formatShortcut`. Display only; handlers accept either modifier.
 
-Leaf items fire `app.fireAction(action, args)` on mouseup. Built-ins: `app.quit`, `pane.show` (pane ID: switches to its tab and raises the frame, or opens a new frame if parked), `window.tileH`/`tileV`/`grid`/`cascade`, `edit.copy`, `edit.selectAll`, `edit.find`, `table.filter` (`{ pane, filters, merge }` → `workspace.setPaneFilters`; no `pane` targets the focused pane), `table.sort` (`{ pane, sort }`), `table.columns` (`{ pane, visible }`; no `visible` shows all), `table.expand` (`{ pane, depth }`), `table.select` (`{ pane, keys, focus }` → `workspace.selectPane`), `table.link` (`{ pane, link, merge }` or the link keys flat → `workspace.setPaneLink`), `layout.*` (see Saved layouts). Custom actions: `app.registerAction(name, fn)`.
+Leaf items fire `app.fireAction(action, args)` on mouseup. Built-ins: `app.quit`, `pane.show` (pane ID: raises its frame, or opens one if parked), `window.tileH`/`tileV`/`grid`/`cascade`, `edit.copy`, `edit.selectAll`, `edit.find`, `table.filter`/`sort`/`columns`/`expand`/`select`/`link` (each `{ pane, … }` → the matching `workspace.setPane*`/`selectPane`/`expandPane`; no `pane` targets the focused pane, and `table.link` also takes the link keys flat), `layout.*` (see Saved layouts). Custom actions: `app.registerAction(name, fn)`.
 
 Edit routing: `edit.copy`/`edit.selectAll`/`edit.find` call `workspace.editAction(name)`, which resolves the focused frame's active pane (`workspace.activePaneEl()`) and invokes its `_editActions` hook (`{ copy, selectAll, clearSelection, find, findNext, findPrev }`; any pane type may implement it). The window keydown handler routes Ctrl/Cmd+C, +A, +F, +G, +Shift+G, and Escape through the same hook; editable elements and a native text selection win; `preventDefault` fires only when a pane handled the action. `tests/edit-routing.test.js`.
 
@@ -86,6 +82,8 @@ Edit routing: `edit.copy`/`edit.selectAll`/`edit.find` call `workspace.editActio
 When `config.mkio.url` is present, `<mkui-app>` calls `ensureMkio` with `onConnect`/`onDisconnect` callbacks **before** setting up menubar, workspace, and statusbar — load-bearing: the bridge caches the first caller's promise. Callbacks get the `client` first.
 
 Connection is two-phase: **connect** then **verify**. On WebSocket open, `mkio.connected` is set `true` and the `config.mkio.connected` state map applies; an async `_mkio` reqrep then queries the server's identity. Pass sets `mkio.verified` `true`; fail leaves it `false` and applies `config.mkio.incompatible`. Verification reruns on reconnect.
+
+Capabilities ride the same reply: `capture` writes `mkio.server.services`/`.versioned`/`.historySuffix` only when it carries them (an old server, or the pre-login reply under auth, leaves them alone). Under auth `_verify` never runs: `_probe` re-reads after login, and on each reconnect once authenticated.
 
 `config.mkio.expect` (`name` exact, `version`/`protocol`/`mkio` semver-compatible server-side, `expr` exact; mkui vendors `"1"`) is optional: the query still runs to fill `mkio.server.*`, timing out per `config.mkio.timeout` (5s). State maps `config.mkio.connected` / `.disconnected` / `.incompatible` are `"state.path": value` objects applied per lifecycle event.
 
@@ -113,17 +111,16 @@ Config keys (under `panes.<id>`):
 - `start` — where stream paged mode opens: `"today"` (default, local midnight) or `""` (the buffer's start)
 - `live` — `true` starts stream paged mode live; see Paging
 - `rowColumn` — `false` hides the row-number column (default `true`)
-- `values` — column → expression; see Derived columns
-- `styles` — column → styler, `rowStyle` one for the row; see Conditional styling
-- `display` — column → template; see Display templates
+- `values` / `styles` (+ `rowStyle`) / `display` — column → expression, styler, template; see Derived columns, Conditional styling, Display templates
 - `select` — `{ state = "<path>" }`; see Selection publishing
 - `types` — column → `"number"`/`"time"`/`"text"` or `{ type, parse, tz, unit }`; see Range filters
 - `filters` — column → filter, or an array of scoped ones; see Configured filters
 - `sort`, `visible`, `groups` — see Configured sort, Column visibility, Column groups
 - `tree` — `{ child, parent, expand, filterScope, orphans, column }`; see Tree rows
 - `link` — `{ broadcast, listen, broadcasting, listening, chips }`; see Table linking
+- `history` — `{ table, key, versions, state, feed, undo, redo, … }`: where a record's versions live (`parseHistorySpec`, `checkHistory` vs `mkio.server.versioned`)
 
-Row identity: query `_mkio_row`, stream `_mkio_ref`, subpub `_mkio_topic`; `_mkio_*` columns hidden.
+Row identity: query `_mkio_row`, stream `_mkio_ref`, subpub `_mkio_topic`. `_mkio_*` columns are hidden unless `columns`/`visible` names one of `SHOWABLE_COLUMNS` (lib/history.js); `noteMkioCols` remembers it, so hiding keeps it in the picker, and `MKIO_LABELS` heads it.
 
 Derived columns: `values = { col = "<expr>" }` derives a column with an expression in the cell scope — `value` (raw `row[col]`, NULL for a virtual column), `row`, `col`, `state`, then the row's fields. Every column read goes through `cellValue`, so a derived column behaves like a real field everywhere; a virtual one must be listed in `columns`. Button payloads carry raw row fields. A bad expression warns once.
 
@@ -135,7 +132,7 @@ Selection publishing: `select = { state = "path" }` writes the current row into 
 
 Programmatic selection: `selectRows(keys, { focus = true })` selects by identity as a click does — one `refreshSelectionStyles`, so followers never see a null between; `[]` clears. A tree opens each key's collapsed ancestors; filters are never touched, so a key they hide comes back `hidden`, one not in `rows` `missing`, the rest `selected` (the first takes the cursor and scrolls); nothing changes unless a key resolves. Hook `_select = { set, get }` (`get` → `{ keys, focus }`); `workspace.selectPane`/`getPaneSelection`; `table.select`; not in layouts, not re-applied after a snapshot.
 
-Numeric alignment: all-numeric columns right-align with per-cell right padding (`--mkui-num-pad`, ch) so decimals line up (`colStats.maxFrac`), the dropdown alike. Flash classes `mkui-flash-in`/`-out`/`-update`. Each pane gets a unique `subid`.
+Numeric alignment: all-numeric columns right-align with per-cell right padding (`--mkui-num-pad`, ch) so decimals line up (`colStats.maxFrac`), dropdown alike. Flash classes `mkui-flash-in`/`-out`/`-update`. Each pane gets a unique `subid`.
 
 Selection: two exclusive modes plus an always-present **focused cell** (`.mkui-cell-focus`), the *implicit* selection copy, row-unit buttons, and broadcasts fall back to. Row mode: the sticky-left **row-number column** (`rowColumn: false` disables; view position, or per-level in a tree; outside stats/reorder/resize) selects rows — click / ctrl-toggle / shift-range / drag-range, header corner selects all. Cell mode: click places the focus (its row gets `.mkui-row-hl`), drag extends a rect, ctrl/cmd-click adds rects or toggles cells off, shift extends from the anchor. Rects are anchor/focus `(key, col)` pairs plus a `keys` snapshot of the rows spanned when last user-modified (`snapRectKeys`): membership is that record set × the column range, so sorts/filters move the same records and live inserts inside don't join; `rectBounds` resolves keys to view-index runs, cached. Keyboard: arrows/Home/End/PageUp/PageDown move, shift extends, Space selects the focused row (ctrl toggles), Escape clears the selection, keeps the cursor. Filter changes prune `selectedKeys`; copy and actions see view rows only.
 
@@ -153,7 +150,7 @@ Columns button & picker: the **Columns button** (`.mkui-columns-btn` + `.mkui-co
 
 Column groups: `groups = [{ label, columns }, …]` categorises columns for the picker only — `visible` stays the truth. Parsed once into `colGroupsSpec` (bad entries warn `bad groups[i]` and drop; a column in two groups keeps the first). `colGroups()` cuts configured groups to known columns, omits empty ones, adds an implicit "Other". `inferColumns(row)` orders inferred columns grouped keys first.
 
-Tree rows: `tree = { child, parent }` (names or equal-length lists) nests rows: all `child` fields empty → root, else the parent is the first row whose `parent` fields match. Maps beside `rows`: `parentOf` (null = root, `undefined` = hidden orphan), `kids` (`null` → roots), `depthOf`, `expanded`, `pendingKids` (children awaiting a parent, adopted by `linkRow`; `orphans` `"root"` shows them meanwhile, `"hide"` doesn't). `unlinkRow` re-homes a deleted parent's children; a cycle warns once, stays a root. **`view` is the pre-order flattening of rows whose ancestors are all expanded** (`rebuildView` → `flattenVisible` over `sortedKids`, cached), so selection, keyboard, copy, and buttons see only shown rows. Incremental: `insertRow` → `linkRow`, then `treeInsertIntoView`; re-parenting or a sort-key change dirties the view. `setExpanded` splices the subtree in or cuts its run, `pruneSelection` dropping hidden keys (the cursor climbs to the collapsed row); `setExpandDepth` for bulk. Row numbers are per-level positions (`1`, `5.3`, `5.3.1`) among *all* siblings in sort order — a filtered row keeps its slot: `rankOf` (`shiftRanks` on live insert/delete; `rowLabel`, `rowNumDigits`); a flat table uses view position until a filter is on, then `rankOf` (`flatRanks`). Filters carry `scope` (`roots` default / `children` / `all`; `tree.filterScope` overrides): `matchesFilters` judges `roots`/`children` by level (a miss hides the subtree), `all` goes through `buildSubtreeOk` in `rebuildView` (post-order: ok when the row or any child passes), so while one is active every data change rebuilds (`allScopeActive`). `describeFilter` appends a non-default scope. `filters` is keyed `fkey(col, scope)`, each filter carrying `col`/`scope` (`colFilters(col)`): a column holds up to three, its spec may be an array (`filtersFromSpec`), an entry replacing the column's filters. The dropdown's `.mkui-filter-scopes` tabs (Top / Child / Branch) hold one filter each (`dropdownScope`), shown on alt/option-click of button or chip (`openFilterDropdown(col, th, { advanced, scope })`) or when the column is filtered off `roots`. UI: caret column = `tree.column` when visible, else the first visible (`treeCol`); `.mkui-tree-cell` holds `--mkui-tree-depth`, `.mkui-tree-toggle`, and the `.mkui-tree-text` span `renderCell` writes to (`syncToggle`/`syncDepth` refresh reused `tr`s). Header `.mkui-tree-all` opens all roots / closes all, shift every level; Enter toggles a row, `*` its subtree; `expand` applies as rows link. Hook `_tree = { expand, toggle, expanded }`; `workspace.expandPane`; `table.expand`; not in layouts.
+Tree rows: `tree = { child, parent }` (names or equal-length lists) nests rows: all `child` fields empty → root, else the parent is the first row whose `parent` fields match. Maps beside `rows`: `parentOf` (null = root, `undefined` = hidden orphan), `kids` (`null` → roots), `depthOf`, `expanded`, `pendingKids` (awaiting a parent, adopted by `linkRow`; `orphans` `"root"` shows them meanwhile, `"hide"` doesn't). `unlinkRow` re-homes a deleted parent's children; a cycle warns once, stays a root. **`view` is the pre-order flattening of rows whose ancestors are all expanded** (`rebuildView` → `flattenVisible` over `sortedKids`, cached), so selection, keyboard, copy, and buttons see only shown rows. Incremental: `insertRow` → `linkRow`, then `treeInsertIntoView`; re-parenting or a sort-key change dirties the view. `setExpanded` splices the subtree in or cuts its run, `pruneSelection` dropping hidden keys (the cursor climbs to the collapsed row); `setExpandDepth` for bulk. Row numbers are per-level positions (`1`, `5.3`, `5.3.1`) among *all* siblings in sort order — a filtered row keeps its slot: `rankOf` (`shiftRanks` on live insert/delete; `rowLabel`, `rowNumDigits`); flat tables use view position until a filter is on, then `rankOf` (`flatRanks`). Filters carry `scope` (`roots` default / `children` / `all`; `tree.filterScope` overrides): `matchesFilters` judges `roots`/`children` by level (a miss hides the subtree), `all` goes through `buildSubtreeOk` in `rebuildView` (post-order: ok when the row or any child passes), so while one is active every data change rebuilds (`allScopeActive`). `describeFilter` appends a non-default scope. `filters` is keyed `fkey(col, scope)`, each filter carrying `col`/`scope` (`colFilters(col)`): a column holds up to three, its spec may be an array (`filtersFromSpec`), an entry replacing the column's filters. The dropdown's `.mkui-filter-scopes` tabs (Top / Child / Branch) hold one filter each (`dropdownScope`), shown on alt/option-click of button or chip (`openFilterDropdown(col, th, { advanced, scope })`) or when the column is filtered off `roots`. UI: caret column = `tree.column` when visible, else the first visible (`treeCol`); `.mkui-tree-cell` holds `--mkui-tree-depth`, `.mkui-tree-toggle`, and the `.mkui-tree-text` span `renderCell` writes to (`syncToggle`/`syncDepth` refresh reused `tr`s). Header `.mkui-tree-all` opens all roots / closes all, shift every level; Enter toggles a row, `*` its subtree; `expand` applies as rows link. Hook `_tree = { expand, toggle, expanded }`; `workspace.expandPane`; `table.expand`; not in layouts.
 
 Find: `_editActions.find` (Ctrl/Cmd+F, `edit.find`) opens `.mkui-table-find` between toolbar and scroll area, in the DOM only while open (`findOpen`; `syncToolbar` inserts ahead of it): input, `.mkui-find-toggle`s (regex, case), count, step buttons, close. `compileFind` builds one RegExp (invalid → `.mkui-find-error`); `scanFind` fills `findMatches` `[{ key, col, idx }]` (header first, then `view` × `visibleColumns()` on the shown text) in rAF chunks (`FIND_CHUNK`). `findScanRev` = the `viewRev` scanned: `render` schedules a `FIND_DATA_MS` rescan on drift, `applyVisible` rescans at once, `findPos` surviving by identity. `findGo(dir)` steps and wraps, else starts at the cursor; `showMatch` = cursor move + scroll (`.mkui-cell-match`, `.mkui-th-match`/`-current`). Hooks `findNext`/`findPrev` (`findStep`: Ctrl/Cmd+G / +Shift+G, F3; closed → reopen on the last query, then step); Escape closes, after `clearSelection`. Closed on pane close/open, not in layouts.
 
@@ -171,7 +168,7 @@ Virtualized rows: only rows overlapping the viewport (plus overscan) exist in th
 
 Column widths: once the header row exists (init with `columns`, else first data), each header is measured under `width: max-content` and locked via `<colgroup>` + `table-layout: fixed`, capped at 50% of the pane. From there columns only grow: `bumpStats` canvas-measures ingested values, `growColWidth` ratchets once per render; never shrinks, never touches `userSized` columns. In paged streams only the first data sizes columns (`growSuspended`). Widths ignore pane resizes: the table keeps `width: 100%` with no inline width, a trailing auto-width filler (`.mkui-th-filler` + widthless `<col>`) absorbing the rest (`tests/styles.test.js`). Each divider carries a `.mkui-col-resizer` grip (on the *following* header cell's left edge, the filler the last) resizing the column to its left; header cells must not clip overflow. `colWidths` is keyed by name (reset on reopen); double-clicking a grip auto-sizes the column (80% viewport cap) or every selected column.
 
-Column reorder: drag a header (5px threshold), ghost label + drop indicator; the order persists in `visible`.
+Column reorder: drag a header (5px threshold), ghost label + drop indicator; the order lands in `visible`.
 
 Paging (query): with `maxcount` (default 200) the client accumulates every page, firing `onSnapshot` once. `applySnapshot` ingests in rAF chunks; a generation counter cancels stale loops.
 
@@ -213,7 +210,6 @@ Pin button: an `icon("pin")` toggle before maximize/close (`frameEl._extraContro
 
 ## Conventions
 
-- Zero runtime dependencies; Web Components
 - Pointer guards: every mousedown/pointerdown that opens a menu or starts an action/drag checks `ev.button === 0` (exception: the frame-raise mousedown, any button). Modified clicks are inert where the modifier means nothing: sort headers ignore ctrl/cmd/alt (shift keeps multi-sort), the select-all corner ignores all. `tests/pointer-guards.test.js`
 - Icons are inline SVGs from `lib/icons.js` (`icon(name)`), never text glyphs: `currentColor`, sized by `.mkui-icon` CSS, which keeps `pointer-events: none` so hits land on the hosting button (`tests/styles.test.js`)
 - `registerPaneType(name, factory)` for custom content; `registerWidget(name, factory)` for inline widgets

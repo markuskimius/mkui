@@ -438,6 +438,28 @@ test("_mkio_ columns are hidden from header", async () => {
   assert.deepEqual(getHeaderTexts(host), ["name", "value"]);
 });
 
+// mkio's identity fields stay plumbing, but the five that carry data — a
+// versioned row's `_mkio_version`, a history table's op/user/service, a
+// stream row's ref — show when the config asks for one by name.
+test("a config-named mkio data column shows, under a default label", async () => {
+  const { host } = await createTable({
+    columns: ["_mkio_row", "_mkio_version", "_mkio_op", "name"],
+  });
+  assert.deepEqual(getHeaderTexts(host), ["Version", "Op", "name"]);
+});
+
+test("labels win over an mkio column's default label", async () => {
+  const { host } = await createTable({
+    columns: ["_mkio_version", "name"], labels: { _mkio_version: "Rev" },
+  });
+  assert.deepEqual(getHeaderTexts(host), ["Rev", "name"]);
+});
+
+test("naming an identity column shows nothing: only the data ones can be asked for", async () => {
+  const { host } = await createTable({ columns: ["_mkio_row", "_mkio_topic", "name"] });
+  assert.deepEqual(getHeaderTexts(host), ["name"]);
+});
+
 /* ── Config & maxcount defaults ───────────────────────────────────────── */
 
 test("maxcount defaults to 200 when not specified", async () => {
@@ -5641,6 +5663,31 @@ test("visible config shows only those columns, in that order, before and after d
   assert.equal(getRawTbody(host)._ch[0]._ch[0].colSpan, 3, "spacer spans the visible columns");
 });
 
+test("an mkio data column joins the visible set, and hiding it does not put it out of reach", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["_mkio_version", "name", "qty"] });
+  assert.deepEqual(headerCols(host), ["_mkio_version", "name", "qty"]);
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", _mkio_version: 3, name: "a", qty: "50" },
+    { _mkio_row: "2", _mkio_version: 1, name: "b", qty: "150" },
+  ]);
+  assert.deepEqual(rowCols(host), ["_mkio_version", "name", "qty"]);
+  assert.deepEqual(getTbody(host)._ch.map(tr => tr._ch[0].textContent), ["3", "1"]);
+  host._paneEl._columns.set(["name"]);
+  assert.deepEqual(headerCols(host), ["name"]);
+  assert.equal(columnsBtn(host).title, "Columns: 1 of 3 shown", "it is still a column, just a hidden one");
+  host._paneEl._columns.set(null);
+  assert.deepEqual(headerCols(host), ["_mkio_version", "name", "qty"]);
+});
+
+test("`visible` alone can ask for an mkio data column, with the columns inferred", async () => {
+  const { host, io } = await createTable({ protocol: "query", visible: ["name", "_mkio_version"] });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", _mkio_version: 2, name: "a", qty: "50" }]);
+  assert.deepEqual(headerCols(host), ["name", "_mkio_version"]);
+  assert.deepEqual(rowCols(host), ["name", "_mkio_version"]);
+});
+
 test("the Columns button is always there: disabled before columns, no badge while all show", async () => {
   const { host, io } = await createTable({ protocol: "query" });
   let b = columnsBtn(host);
@@ -7866,4 +7913,63 @@ test("select action: a tree selection broadcasts the subtree, as a click on the 
   lastSubscribe().opts.onSnapshot(linkRows());
   host._paneEl._select.set(["2"]);                  // B, whose child D stays collapsed
   assert.deepEqual(hub.current("order").values, ["B", "D"], "collapsed descendants broadcast too");
+});
+
+/* ── Record history: the config block ─────────────────────────────────── */
+// mkio never advertises a history table and writes no service for one, so
+// the `history` block is the only way a table can know where its versions
+// live — and the server's `_mkio` reply (state `mkio.server.versioned`) is
+// the only way to tell the config it is wrong.
+
+async function historyWarnings(spec, versioned) {
+  const warned = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warned.push(a.join(" "));
+  try {
+    const { state } = await createTable(spec);
+    if (versioned !== undefined) state.set("mkio.server.versioned", versioned);
+    return warned;
+  } finally {
+    console.warn = origWarn;
+  }
+}
+
+test("history: a table the server does not version is called out", async () => {
+  const warned = await historyWarnings({ history: { table: "orders", versions: "order_versions" } }, ["trades"]);
+  assert.equal(warned.length, 1);
+  assert.match(warned[0], /history\.table 'orders' is not versioned/);
+});
+
+test("history: a versioned table with no `versions` service names the one to write", async () => {
+  const warned = await historyWarnings({ history: { table: "orders" } }, ["orders"]);
+  assert.equal(warned.length, 1);
+  assert.match(warned[0], /no 'versions' service/);
+  assert.match(warned[0], /orders__history/, "the history table follows mkio's naming convention");
+});
+
+test("history: a configured block against a versioned table is quiet", async () => {
+  const warned = await historyWarnings({
+    history: { table: "orders", versions: "order_versions", undo: "orders", redo: "orders" },
+  }, ["orders"]);
+  assert.deepEqual(warned, []);
+});
+
+test("history: nothing is claimed before the server has said", async () => {
+  // No `_mkio` reply yet, or an older server that omits `versioned`: the
+  // pane says nothing rather than guessing the config is broken.
+  assert.deepEqual(await historyWarnings({ history: { table: "orders" } }, undefined), []);
+  assert.deepEqual(await historyWarnings({ history: { table: "orders" } }, null), []);
+});
+
+test("history: a bad block warns through the table's own prefix", async () => {
+  const warned = await historyWarnings({ history: { versions: 7, nope: 1 } }, ["orders"]);
+  assert.equal(warned.length, 2);
+  for (const w of warned) assert.match(w, /^\[mkio-table\] bad history/);
+});
+
+test("history: no block at all subscribes to nothing", async () => {
+  const { state } = await createTable({});
+  assert.equal(state.writes("mkio.server.versioned"), 0);
+  const warned = await historyWarnings({}, ["orders"]);
+  assert.deepEqual(warned, []);
 });

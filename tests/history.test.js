@@ -377,3 +377,27 @@ test("blame takes an explicit column list", () => {
   const b = blame(parseChain(chainRows), { columns: ["status"] });
   assert.deepEqual(Object.keys(b), ["status"]);
 });
+
+/* ── Capability wiring in <mkui-app> ──────────────────────────────────── */
+// <mkui-app> can't be instantiated here (it needs the DOM), so guard the
+// wiring at the source: the `_mkio` reply is the only place the client
+// learns what the server records, and with auth on it has to be asked
+// again after the login, since the pre-login reply does not say.
+
+const appSrc = await (async () => {
+  const { readFileSync } = await import("node:fs");
+  return readFileSync(new URL("../mkui/static/src/components/app.js", import.meta.url), "utf8");
+})();
+
+test("the verify reply is where capabilities are captured", () => {
+  assert.match(appSrc, /st\.set\("mkio\.server\.mkio",\s+info\.mkio\s+\?\? null\);\n\s*capture\(info\);/);
+  assert.match(appSrc, /const caps = historyCapabilities\(info\);\n\s*if \(caps\) \{/);
+  assert.match(appSrc, /st\.set\("mkio\.server\.versioned", caps\.versioned\);/);
+  assert.match(appSrc, /st\.set\("mkio\.server\.historySuffix", caps\.suffix\);/);
+  assert.match(appSrc, /if \(info\.services && typeof info\.services === "object"\) st\.set\("mkio\.server\.services", info\.services\);/);
+});
+
+test("with auth on, the capabilities are probed after login and on every reconnect", () => {
+  assert.match(appSrc, /if \(!hasAuth\) this\._verify\(client\);\n\s*else if \(st\.get\("auth\.authenticated"\)\) this\._probe\(client\);/);
+  assert.match(appSrc, /if \(this\._probe && config\.mkio\?\.url\) this\._probe\(client \?\? await ensureMkio\(config\.mkio\.url\)\);/);
+});

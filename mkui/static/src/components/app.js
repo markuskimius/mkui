@@ -9,6 +9,7 @@
 import { App } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
 import { LayoutManager } from "../layouts.js";
+import { historyCapabilities } from "../lib/history.js";
 import "./menubar.js";
 import "./statusbar.js";
 import "./workspace.js";
@@ -105,6 +106,38 @@ class MkuiApp extends HTMLElement {
     if (config.mkio?.url) {
       let verifyGen = 0;
 
+      // What the server can do, from the same `_mkio` reply that verifies
+      // it: the services it offers, the tables whose changes it records,
+      // and the suffix their history tables take. Written only when the
+      // reply actually says — an older server omits them, and so does the
+      // limited reply an unauthenticated client gets from a server with
+      // auth on, neither of which means "nothing is versioned".
+      const capture = (info) => {
+        if (info.services && typeof info.services === "object") st.set("mkio.server.services", info.services);
+        const caps = historyCapabilities(info);
+        if (caps) {
+          st.set("mkio.server.versioned", caps.versioned);
+          st.set("mkio.server.historySuffix", caps.suffix);
+        }
+      };
+
+      // With auth enabled `_verify` never runs — logging in proves the
+      // server — but the capabilities still have to be read, and only an
+      // authenticated request carries them. Runs after login and again on
+      // each reconnect, once mkio's client has re-authenticated.
+      this._probe = async (client) => {
+        try {
+          const ms = config.mkio.timeout ?? 5000;
+          const reply = await Promise.race([
+            client.request("_mkio"),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms)),
+          ]);
+          capture(reply.row ?? {});
+        } catch (e) {
+          console.warn(`[mkui] could not read server capabilities: ${e.message}`);
+        }
+      };
+
       this._verify = async (client) => {
         const gen = ++verifyGen;
         st.set("mkio.verified", false);
@@ -138,6 +171,7 @@ class MkuiApp extends HTMLElement {
         st.set("mkio.server.version",  info.version  ?? null);
         st.set("mkio.server.protocol", info.protocol ?? null);
         st.set("mkio.server.mkio",     info.mkio     ?? null);
+        capture(info);
 
         let verified = true;
         if (expect) {
@@ -163,7 +197,11 @@ class MkuiApp extends HTMLElement {
           } else {
             apply(config.mkio.connected ?? { "status.message": "Connected" });
           }
+          // Under auth the first read waits for the login (_authenticate);
+          // a reconnect after that re-reads, the client having
+          // re-authenticated itself.
           if (!hasAuth) this._verify(client);
+          else if (st.get("auth.authenticated")) this._probe(client);
         },
         onDisconnect: () => {
           st.set("mkio.connected", false);
@@ -249,6 +287,10 @@ class MkuiApp extends HTMLElement {
         st.set(path, value);
     };
     apply(config.auth.connected ?? config.mkio?.connected ?? { "status.message": "Connected" });
+
+    // Not awaited: the capabilities feed panes that react to state, and
+    // frames should not wait on a round trip to open.
+    if (this._probe && config.mkio?.url) this._probe(client ?? await ensureMkio(config.mkio.url));
 
     await this._loadFrames(config);
   }

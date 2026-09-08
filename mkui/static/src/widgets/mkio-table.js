@@ -4,6 +4,7 @@ import { resolveExpr, resolveObject, evalExpr, compileExpr, compileTemplate, exp
 import { icon } from "../lib/icons.js";
 import { gridToTSV, gridToHTML } from "../lib/copy.js";
 import { isRich, richText, richToHTML, renderRich } from "../lib/rich.js";
+import { SHOWABLE_COLUMNS, MKIO_LABELS, historyTable, parseHistorySpec } from "../lib/history.js";
 import {
   detectTimeKind, parseTime, kindForSpec, kindForFormat, inputToBound, boundToInput,
   inputTypeForKind, presetBounds, PRESETS,
@@ -274,7 +275,23 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   const MIN_COL_W = 40;
   const CELL_CHROME = 17;      // 8px cell padding each side + 1px divider (mkui.css)
   const labels = spec.labels ?? {};
-  const label = (col) => labels[col] ?? col;
+  const label = (col) => labels[col] ?? MKIO_LABELS[col] ?? col;
+
+  // mkio's own columns. `_mkio_row` / `_mkio_topic` are identity plumbing
+  // and never show; the five that carry data — a versioned row's
+  // `_mkio_version`, a history table's `_mkio_op` / `_mkio_user` /
+  // `_mkio_service`, a stream row's `_mkio_ref` — show when the config
+  // names one in `columns` or `visible` (lib/history.js SHOWABLE_COLUMNS).
+  // Naming is remembered rather than re-read, so a column shown this way
+  // stays in the picker once hidden and can be brought back.
+  const shownMkioCols = new Set();
+  function noteMkioCols(list) {
+    if (list == null) return;
+    for (const c of Array.isArray(list) ? list : [list])
+      if (typeof c === "string" && SHOWABLE_COLUMNS.has(c)) shownMkioCols.add(c);
+  }
+  noteMkioCols(spec.columns);
+  noteMkioCols(spec.visible);
 
   // Column groups (categories): `groups = [{ label, columns }, …]` in the
   // pane spec, an ordered array so the picker can section hundreds of
@@ -333,6 +350,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     colTypes[c] = o;
   }
 
+  // Record history: `history = { table, key, versions, state, feed, undo,
+  // redo, … }` tells the table where the versions of its records live
+  // (lib/history.js). mkio never advertises a history table and writes no
+  // service for one, so this block is the only way a table can know — and
+  // the server's `_mkio` reply is the only way to check what it says, which
+  // is what checkHistory does once that lands.
+  const historySpec = parseHistorySpec(spec.history, {
+    warn: (msg) => console.warn(`[mkio-table] ${msg}`),
+  });
+
   // Tree rows: `tree = { child, parent, expand, filterScope, orphans,
   // column }` nests rows like a file navigator. A row whose `child` fields
   // (x, y, z) are all empty is a root; otherwise its parent is the row whose
@@ -378,8 +405,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       }
     }
   }
-  // Data columns: everything known except mkio's identity fields.
-  const dataColumns = () => columns.filter((c) => !c.startsWith("_mkio_"));
+  // Data columns: everything known except mkio's own fields, save those
+  // the config asked for by name (noteMkioCols above).
+  const dataColumns = () => columns.filter((c) => !c.startsWith("_mkio_") || shownMkioCols.has(c));
   // Names in `visible` that aren't (yet) known columns are skipped rather
   // than rendered empty — config may name a column ahead of the data, and
   // it takes its place as soon as the data carries it. Cached on the
@@ -818,7 +846,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     dataSeen = true;
     const canMeasure = ensureMeasureCtx();
     for (const k of statColumns(row)) {
-      if (k.startsWith("_mkio_")) continue;
+      if (k.startsWith("_mkio_") && !shownMkioCols.has(k)) continue;
       const v = cellValue(row, k);
       if (v == null || v === "") continue;
       let st = colStats.get(k);
@@ -3034,6 +3062,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function loadVisibleSpec(s) {
     try {
       visible = visibleFromSpec(s);
+      noteMkioCols(visible);
     } catch (e) {
       console.warn(`[mkio-table] bad visible: ${e.message}`);
     }
@@ -5501,6 +5530,24 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       },
     });
   }
+
+  // Config help, once the server has said which tables it records: a
+  // `history` block naming a table the server does not version cannot
+  // work, and one that reads no `versions` service can show nothing.
+  // Checked once — the list does not change while a server runs.
+  let historyChecked = false;
+  function checkHistory(versioned) {
+    if (historyChecked || !Array.isArray(versioned) || !historySpec?.table) return;
+    historyChecked = true;
+    const t = historySpec.table;
+    if (!versioned.includes(t)) {
+      console.warn(`[mkio-table] history.table '${t}' is not versioned on this server`);
+    } else if (!historySpec.versions) {
+      const ht = historyTable(t, app.state.get("mkio.server.historySuffix") ?? undefined);
+      console.warn(`[mkio-table] history for '${t}': no 'versions' service — configure one on ${ht} to read its versions`);
+    }
+  }
+  if (historySpec) app.state.subscribe("mkio.server.versioned", checkHistory);
 
   mkioConnected = !!app.state.get("mkio.connected");
   app.state.subscribe("mkio.connected", (v) => {
