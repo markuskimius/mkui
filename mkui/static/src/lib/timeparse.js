@@ -40,6 +40,18 @@ function assemble(Y, mo, d, H, M, S, f, offMin) {
 }
 
 /**
+ * A `Date` for an mkio ref (`YYYYMMDD HH:MM:SS.ffffff`, always UTC), or
+ * null when the string is not one. Refs are what mkio stamps on every
+ * record and every recorded version, so this is how a ref becomes a local
+ * time to show.
+ */
+export function refToDate(ref) {
+  const m = REF_RE.exec(String(ref ?? ""));
+  if (!m) return null;
+  return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+}
+
+/**
  * Classify a string: "datetime", "date", "time", or null when it is not
  * one of the natively recognised formats.
  */

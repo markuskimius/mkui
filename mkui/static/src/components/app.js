@@ -88,6 +88,10 @@ class MkuiApp extends HTMLElement {
     // empty list clears; `focus = false` selects without moving the cursor.
     // Returns the table's `{ ok, selected, missing, hidden }`, or false.
     this._app.registerAction("table.select",    (app, a = {}) => ws.selectPane(a.pane ?? null, a.keys ?? [], { focus: a.focus !== false }));
+    // Record history: `args = { pane, keys }` — opens (or re-points) the
+    // history pane for the selected record of a table with a `history`
+    // block; `keys` selects those rows first, so a link can name a record.
+    this._app.registerAction("table.history",   (app, a = {}) => ws.showPaneHistory(a.pane ?? null, a.keys ?? null));
 
     const hasAuth = !!config.auth;
     const st = this._app.state;

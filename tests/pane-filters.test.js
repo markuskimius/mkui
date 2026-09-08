@@ -220,3 +220,121 @@ test("setPaneLink / getPaneLink reach the pane's `_link` hook the same way", () 
   assert.equal(ws.setPaneLink("plain", {}), false, "a pane without the hook declines");
   assert.equal(ws.getPaneLink("plain"), null);
 });
+
+/* ── Record history routing ───────────────────────────────────────────── */
+// `showPaneHistory` opens one history pane per table pane and points it at
+// whatever that table has selected; `table.history` is the action over it.
+
+function historyWorkspace(log) {
+  const ws = makeWorkspace(log);
+  for (const [id, el] of ws._paneEls) {
+    el.dataset = { id };
+    if (el._filters) {
+      el._history = { spec: { table: "orders", versions: "order_versions" }, rows: () => [{ id: "O1" }] };
+      el._select = {
+        set: (keys, opts) => { log.push(["sel:" + id, keys, opts]); return { ok: true }; },
+        get: () => null,
+        on: (fn) => { log.push(["on:" + id]); return () => log.push(["off:" + id]); },
+      };
+    }
+  }
+  ws.registerPane = (id, spec) => { log.push(["register", id, spec]); ws._panes.set(id, spec); };
+  ws.showPane = (id) => log.push(["show", id]);
+  return ws;
+}
+
+test("showPaneHistory registers one history pane per table and shows it", () => {
+  const log = [];
+  const ws = historyWorkspace(log);
+  ws._panes.set("a", { title: "Orders" });
+  assert.equal(ws.showPaneHistory("a"), true);
+  assert.deepEqual(log[0], ["register", "_history:a", {
+    type: "mkio-history", source: "a", title: "History — Orders",
+  }]);
+  assert.deepEqual(log[1], ["show", "_history:a"]);
+
+  // Again: the same pane, registered once, re-pointed at the selection.
+  const el = { _record: { refresh: () => log.push(["refresh"]) } };
+  ws._paneEls.set("_history:a", el);
+  log.length = 0;
+  ws.showPaneHistory("a");
+  assert.deepEqual(log, [["show", "_history:a"], ["refresh"]]);
+});
+
+test("showPaneHistory declines a pane with no history to read", () => {
+  const log = [];
+  const ws = historyWorkspace(log);
+  assert.equal(ws.showPaneHistory("plain"), false);
+  assert.equal(ws.showPaneHistory("nope"), false);
+  assert.deepEqual(log, []);
+});
+
+test("showPaneHistory selects the named keys in the table first", () => {
+  const log = [];
+  const ws = historyWorkspace(log);
+  ws.showPaneHistory("a", ["O7"]);
+  assert.deepEqual(log[0], ["sel:a", ["O7"], {}], "the record is selected, then its history opens");
+  assert.equal(log[1][0], "register");
+});
+
+test("showPaneHistory with no id follows the focused pane", () => {
+  const log = [];
+  const ws = historyWorkspace(log);
+  assert.equal(ws.showPaneHistory(null), true);
+  assert.deepEqual(log[0][1], "_history:b", "tab index 1 of the focused frame");
+});
+
+test("a pane still building gets its record once its factory settles", async () => {
+  const log = [];
+  const ws = historyWorkspace(log);
+  let resolve;
+  const el = { _ready: new Promise((r) => { resolve = r; }) };
+  ws._paneEls.set("_history:a", el);
+  ws.showPaneHistory("a");
+  el._record = { refresh: () => log.push(["refresh"]) };
+  resolve();
+  await el._ready;
+  await Promise.resolve();
+  assert.deepEqual(log.at(-1), ["refresh"]);
+});
+
+test("paneHistory and onPaneSelection reach the pane's hooks", () => {
+  const log = [];
+  const ws = historyWorkspace(log);
+  assert.equal(ws.paneHistory("a").spec.versions, "order_versions");
+  assert.equal(ws.paneHistory("plain"), null);
+  const off = ws.onPaneSelection("a", () => {});
+  assert.deepEqual(log, [["on:a"]]);
+  off();
+  assert.deepEqual(log.at(-1), ["off:a"]);
+  assert.equal(ws.onPaneSelection("plain", () => {}), null);
+});
+
+test("table.history action routes to the workspace", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../mkui/static/src/components/app.js", import.meta.url), "utf8");
+  assert.match(src, /registerAction\("table\.history",\s*\(app, a = \{\}\) => ws\.showPaneHistory\(a\.pane \?\? null, a\.keys \?\? null\)\)/);
+});
+
+test("a pane joins the workspace before its content is built", () => {
+  // A pane factory that looks up the workspace it lives in — mkio-history
+  // does, to follow another pane — sees a detached element if the build
+  // runs first, and reads it as "no such pane".
+  const ws = new MkuiWorkspace();
+  const order = [];
+  ws._panes = new Map([["p", { type: "whatever" }]]);
+  ws._paneEls = new Map();
+  ws._pool = { appendChild: (el) => order.push(["pool", el.tagName]) };
+  ws._buildPaneContent = () => { order.push(["build"]); return null; };
+  const origCreate = document.createElement;
+  document.createElement = (tag) => ({
+    tagName: tag.toUpperCase(), _built: false, contentEl: { textContent: "" },
+    setAttribute() {}, _build() { this._built = true; },
+  });
+  try {
+    ws._ensurePaneEl("p");
+  } finally {
+    document.createElement = origCreate;
+  }
+  assert.deepEqual(order, [["pool", "MKUI-PANE"], ["build"]]);
+});

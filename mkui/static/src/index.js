@@ -6,6 +6,7 @@ import "./components/app.js";
 import "./widgets/text.js";
 import "./widgets/button.js";
 import "./widgets/mkio-table.js";
+import "./widgets/mkio-history.js";
 
 export {
   VERSION, version,

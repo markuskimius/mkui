@@ -1763,8 +1763,20 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // other panes (a detail view, a chart) can follow it. The current row is
   // the cursor's row, else the first selected row in view order, else null —
   // so clearing the selection publishes null rather than a stale row.
+  // Panes that follow this table's selection — mkio-history, through
+  // `workspace.onPaneSelection`. Called on every selection change, so a
+  // listener that fetches should coalesce.
+  const selectionListeners = new Set();
+  function onSelectionChange(fn) {
+    selectionListeners.add(fn);
+    return () => selectionListeners.delete(fn);
+  }
+
   function publishSelection() {
     broadcastSelection();
+    for (const fn of selectionListeners) {
+      try { fn(); } catch (e) { console.warn(`[mkio-table] selection listener failed: ${e.message}`); }
+    }
     if (!selectStatePath) return;
     let key = focusCell?.key ?? null;
     if (key == null && selectedKeys.size) {
@@ -5659,7 +5671,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     // Selection hook: `workspace.selectPane` and `table.select` select rows
     // by identity (see selectRows); `get` reports the selection back.
-    paneEl._select = { set: selectRows, get: getSelection };
+    paneEl._select = { set: selectRows, get: getSelection, on: onSelectionChange };
+    // History hook: `workspace.showPaneHistory` and the `table.history`
+    // action read the record's versions through the `history` block, over
+    // the rows the selection implies.
+    if (historySpec) paneEl._history = { spec: historySpec, rows: getSelectedRows };
     paneEl.addEventListener("mkui-pane-close", () => {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       if (presetTimer) { clearTimeout(presetTimer); presetTimer = null; }

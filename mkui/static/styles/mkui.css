@@ -1588,3 +1588,153 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   font-size: 12px;
   padding: 6px 0;
 }
+
+/* ── Record history (mkio-history) ─────────────────────────────────── */
+/* One record's recorded versions on the left, the diff between two of
+   them on the right. The pane is a flex column so the list and the diff
+   scroll independently while the header stays put. */
+.mkui-pane-content:has(.mkui-history) { padding: 0; }
+.mkui-history {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font-size: 12px;
+  color: var(--mkui-fg);
+}
+.mkui-history-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--mkui-border);
+  background: var(--mkui-bg-alt);
+}
+.mkui-history-title { font-weight: 600; white-space: nowrap; }
+.mkui-history-sub {
+  color: var(--mkui-fg-mute);
+  font-size: 11px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mkui-history-reload {
+  background: none;
+  border: none;
+  color: var(--mkui-fg-mute);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-self: center;
+}
+.mkui-history-reload:hover { color: var(--mkui-fg); }
+.mkui-history-reload .mkui-icon { width: 13px; height: 13px; }
+
+.mkui-history-body { display: flex; flex: 1; min-height: 0; }
+.mkui-history-list {
+  width: 190px;
+  min-width: 120px;
+  overflow: auto;
+  border-right: 1px solid var(--mkui-border);
+  resize: horizontal;
+}
+.mkui-history-diff { flex: 1; min-width: 0; overflow: auto; }
+
+/* A version: number, op, who, when. The row the record currently sits on
+   is marked; the versions above it are the redo branch, which the next
+   edit discards — so they read as provisional rather than as history. */
+.mkui-history-ver {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  white-space: nowrap;
+}
+.mkui-history-ver:hover { background: var(--mkui-bg-hover); }
+.mkui-history-ver.sel { background: var(--mkui-accent); color: var(--mkui-accent-fg); }
+.mkui-history-ver.sel .mkui-history-user,
+.mkui-history-ver.sel .mkui-history-when { color: inherit; opacity: 0.85; }
+.mkui-history-ver.current { border-left-color: var(--mkui-accent); }
+.mkui-history-ver.current .mkui-history-vnum { font-weight: 700; }
+.mkui-history-ver.sel.current { border-left-color: var(--mkui-focus); }
+.mkui-history-ver.ahead { opacity: 0.55; font-style: italic; }
+.mkui-history-ver.base { border-left-color: var(--mkui-fg-mute); }
+.mkui-history-vnum { font-family: var(--mkui-font-mono); }
+.mkui-history-op {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  opacity: 0.9;
+}
+.mkui-history-op[data-op="insert"] { color: #4caf50; }
+.mkui-history-op[data-op="baseline"] { color: var(--mkui-fg-mute); }
+.mkui-history-ver.sel .mkui-history-op { color: inherit; }
+.mkui-history-user {
+  color: var(--mkui-fg-mute);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mkui-history-when { color: var(--mkui-fg-mute); font-size: 11px; }
+/* Versions `mkio archive` moved out to CSV: the chain has a hole there,
+   and undo cannot step across it. */
+.mkui-history-gap {
+  padding: 2px 8px;
+  color: var(--mkui-fg-mute);
+  font-size: 10px;
+  font-style: italic;
+  text-align: center;
+  border-top: 1px dashed var(--mkui-border);
+  border-bottom: 1px dashed var(--mkui-border);
+}
+
+.mkui-history-diffhead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--mkui-border);
+}
+.mkui-history-pair { font-family: var(--mkui-font-mono); }
+.mkui-history-count { color: var(--mkui-fg-mute); font-size: 11px; flex: 1; }
+.mkui-history-toggle {
+  background: none;
+  border: none;
+  color: var(--mkui-accent);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+}
+.mkui-history-toggle:hover { text-decoration: underline; }
+.mkui-history-toggle:disabled { color: var(--mkui-fg-mute); cursor: default; text-decoration: none; }
+
+/* A field's change: name, before, after. Unchanged fields are hidden
+   unless asked for, so what moved is what shows. */
+.mkui-history-fields { padding: 4px 0; }
+.mkui-history-field {
+  display: grid;
+  grid-template-columns: minmax(80px, 25%) 1fr auto 1fr;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 8px;
+}
+.mkui-history-field:hover { background: var(--mkui-bg-hover); }
+.mkui-history-fname { color: var(--mkui-fg-mute); overflow: hidden; text-overflow: ellipsis; }
+.mkui-history-from, .mkui-history-to { overflow-wrap: anywhere; }
+.mkui-history-from { opacity: 0.75; }
+.mkui-history-changed .mkui-history-to,
+.mkui-history-set .mkui-history-to { font-weight: 600; }
+.mkui-history-cleared .mkui-history-from { text-decoration: line-through; }
+.mkui-history-arrow { color: var(--mkui-fg-mute); }
+.mkui-history-blank { color: var(--mkui-fg-mute); }
+.mkui-history-same { opacity: 0.6; }
+.mkui-history-same .mkui-history-arrow { visibility: hidden; }
+
+.mkui-history-empty {
+  padding: 12px;
+  color: var(--mkui-fg-mute);
+}
+.mkui-history-config { white-space: pre-wrap; }
+.mkui-history-error { color: #c0392b; }

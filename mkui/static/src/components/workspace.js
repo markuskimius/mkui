@@ -254,6 +254,45 @@ class MkuiWorkspace extends HTMLElement {
     return this._paneHook(paneId, "_select", false)?.get() ?? null;
   }
 
+  // Subscribe to a pane's selection: `fn` runs on every change, and the
+  // returned function unsubscribes. null when the pane has no selection to
+  // follow. A detail pane (mkio-history) follows a table this way.
+  onPaneSelection(paneId, fn) {
+    return this._paneHook(paneId, "_select", false)?.on?.(fn) ?? null;
+  }
+
+  // A pane's record-history hook — `{ spec, rows }`, the parsed `history`
+  // block and the rows its selection implies — or null when the pane has
+  // no history configured.
+  paneHistory(paneId) {
+    return this._paneHook(paneId, "_history", false);
+  }
+
+  // Open (or raise) the history pane for a table pane's selected record:
+  // one history pane per table, so firing it again re-points the one that
+  // is open rather than piling up windows. `keys` selects those rows in
+  // the table first, so a deep link can name the record it means. Returns
+  // false when the pane has no `history` block to read.
+  showPaneHistory(paneId = null, keys = null) {
+    const el = paneId == null ? this.activePaneEl() : this._paneEls.get(paneId);
+    const srcId = el?.dataset?.id ?? paneId;
+    if (srcId == null || !el?._history) return false;
+    if (keys && keys.length) this.selectPane(srcId, keys);
+
+    const id = `_history:${srcId}`;
+    if (!this._panes.has(id)) {
+      const title = this._panes.get(srcId)?.title ?? srcId;
+      this.registerPane(id, { type: "mkio-history", source: srcId, title: `History — ${title}` });
+    }
+    this.showPane(id);
+    // An open pane re-reads the selection; a pane built just now reads it
+    // as it starts, and its factory may still be awaiting its client.
+    const hist = this._paneEls.get(id);
+    if (hist?._record) hist._record.refresh();
+    else hist?._ready?.then(() => hist._record?.refresh());
+    return true;
+  }
+
   setApp(app) {
     this._app = app;
     this._panes = new Map(Object.entries(app.config.panes ?? {}));
@@ -309,10 +348,14 @@ class MkuiWorkspace extends HTMLElement {
     // `_ready` resolves once an async pane factory (mkio-table awaits its
     // client) has finished — its hooks (`_filters`, ...) exist only then.
     el._ready = null;
-    if (spec) el._ready = this._buildPaneContent(el.contentEl, spec);
-    else el.contentEl.textContent = `[mkui] unknown pane: ${id}`;
+    // In the pool before its content is built: a pane factory that looks
+    // up the workspace it lives in (`closest("mkui-workspace")`, as
+    // mkio-history does to follow another pane) would otherwise be run
+    // against a detached element.
     this._paneEls.set(id, el);
     this._pool.appendChild(el);
+    if (spec) el._ready = this._buildPaneContent(el.contentEl, spec);
+    else el.contentEl.textContent = `[mkui] unknown pane: ${id}`;
     return el;
   }
 

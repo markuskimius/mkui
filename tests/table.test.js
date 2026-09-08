@@ -7973,3 +7973,62 @@ test("history: no block at all subscribes to nothing", async () => {
   const warned = await historyWarnings({}, ["orders"]);
   assert.deepEqual(warned, []);
 });
+
+/* ── The history hook ─────────────────────────────────────────────────── */
+// `workspace.showPaneHistory` reads a table's `history` block and the rows
+// its selection implies through `_history`; a follower pane re-reads on
+// every selection change through `_select.on`.
+
+test("history: the hook carries the parsed block and the selection's rows", async () => {
+  const { host, io } = await createTable({
+    protocol: "query", columns: ["name", "qty"], rowColumn: true,
+    history: { table: "orders", key: "name", versions: "order_versions", undo: "orders" },
+  });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  const hook = host._paneEl._history;
+  assert.equal(hook.spec.versions, "order_versions");
+  assert.deepEqual(hook.spec.key, ["name"]);
+  assert.deepEqual(hook.spec.undo, { service: "orders", op: "undo" });
+  assert.deepEqual(hook.rows(), [], "nothing selected, nothing to show history for");
+  host._paneEl._select.set(["2"]);
+  assert.deepEqual(hook.rows().map(r => r.name), ["b"]);
+});
+
+test("history: a table without a `history` block exposes no hook", async () => {
+  const { host } = await createTable({ columns: ["name"] });
+  assert.equal(host._paneEl._history, undefined);
+});
+
+test("history: `_select.on` fires on every selection change until it is dropped", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "qty"], rowColumn: true });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  let n = 0;
+  const off = host._paneEl._select.on(() => n++);
+  host._paneEl._select.set(["1"]);
+  assert.equal(n, 1);
+  host._paneEl._select.set(["2"]);
+  assert.equal(n, 2);
+  host._paneEl._select.set([]);
+  assert.equal(n, 3, "clearing the selection is a change like any other");
+  off();
+  host._paneEl._select.set(["1"]);
+  assert.equal(n, 3);
+});
+
+test("history: a listener that throws does not break the selection", async () => {
+  const warned = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warned.push(a.join(" "));
+  try {
+    const { host, io } = await createTable({ protocol: "query", columns: ["name", "qty"], rowColumn: true });
+    triggerVisible(io);
+    lastSubscribe().opts.onSnapshot(orderRows());
+    host._paneEl._select.on(() => { throw new Error("boom"); });
+    assert.deepEqual(host._paneEl._select.set(["1"]).selected, ["1"]);
+    assert.equal(warned.filter(w => w.includes("selection listener failed")).length, 1);
+  } finally {
+    console.warn = origWarn;
+  }
+});
