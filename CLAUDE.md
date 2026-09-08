@@ -35,6 +35,7 @@ Paths are under `mkui/static/src/` unless they start with `mkui/`.
 - `lib/timeparse.js` — range-filter time parsing (`detectTimeKind`, `parseTime`, input↔bound, `PRESETS`)
 - `lib/icons.js` — `icon(name)` → a currentColor `<svg>` from vendored path data (Lucide + custom)
 - `lib/copy.js` — clipboard grids: `gridToTSV` (CRLF, Excel quoting), `gridToHTML`
+- `lib/history.js` — versioned tables (mkio 0.3.0): the `__history` naming convention, `historyCapabilities` (the `_mkio` reply), `parseHistorySpec` (a pane's `history` block), and the chain logic — `parseChain`, `cursorOf`, `diffVersions`, `blame`; DOM-free (`tests/history.test.js`)
 - `widgets/mkio-table.js` — the `mkio-table` pane type: subscribes to mkio services, renders live tables
 - `widgets/mkui-dialog.js` — `openDialog()`: config-driven, live-updating modal forms (see Dialogs)
 - `auth.js` — config-driven login dialog; `showLogin()` runs before the app loads
