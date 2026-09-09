@@ -450,13 +450,15 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     views.appendChild(b);
     viewBtns[name] = b;
   }
-  const unchangedBtn = el("mkui-history-toggle", "button");
+  // A toggle and an action, so they wear the toolbar's button chrome; the
+  // Diff | Blame pair is one-of-two, so it is a segmented control instead.
+  const unchangedBtn = el("mkui-btn mkui-toolbar-btn mkui-history-toggle", "button");
   unchangedBtn.addEventListener("mousedown", (ev) => {
     if (ev.button !== 0) return;
     showUnchanged = !showUnchanged;
     renderPanel();
   });
-  const copyBtn = el("mkui-history-copy", "button");
+  const copyBtn = el("mkui-btn mkui-toolbar-btn mkui-history-copy", "button");
   copyBtn.textContent = "Copy";
   copyBtn.title = "Copy this panel as a grid";
   copyBtn.addEventListener("mousedown", (ev) => { if (ev.button === 0) copyPanel(); });

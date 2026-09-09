@@ -687,7 +687,11 @@ test("the controls sit in the versions table's toolbar, not the panel", async ()
   const { host, paneEl, table } = await makePane({ rows: [liveRow()] });
   const extras = paneEl._toolbar.extras();
   const names = extras._ch.map((n) => n.className);
-  assert.deepEqual(names, ["mkui-history-views", "mkui-history-toggle", "mkui-history-copy"]);
+  assert.deepEqual(names, [
+    "mkui-history-views",                              // one-of-two: a segmented control
+    "mkui-btn mkui-toolbar-btn mkui-history-toggle",   // on/off: the toolbar's button, pressed when on
+    "mkui-btn mkui-toolbar-btn mkui-history-copy",     // an action: just a button
+  ]);
   assert.ok(table().synced >= 1, "the toolbar is told, since an empty one is not in the DOM");
   // The panel keeps only what it is showing.
   const head = find(host, "mkui-history-diffhead");

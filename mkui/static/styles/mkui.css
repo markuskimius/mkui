@@ -1666,26 +1666,15 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 }
 .mkui-history-pair { font-family: var(--mkui-font-mono); }
 .mkui-history-count { color: var(--mkui-fg-mute); font-size: 11px; flex: 1; }
-.mkui-history-toggle {
-  background: none;
-  border: none;
+/* An on/off toggle: the toolbar's button, wearing the same pressed look
+   the find strip's toggles take when they are on. (Copy needs nothing of
+   its own — it is an action, so it is just a button.) */
+.mkui-history-toggle.active {
   color: var(--mkui-accent);
-  cursor: pointer;
-  font-size: 11px;
-  padding: 0;
+  border-color: var(--mkui-accent);
+  background: color-mix(in srgb, var(--mkui-accent) 15%, var(--mkui-bg-alt));
 }
-.mkui-history-toggle:hover { text-decoration: underline; }
-.mkui-history-toggle:disabled { color: var(--mkui-fg-mute); cursor: default; text-decoration: none; }
-/* Copies the panel as a grid; Ctrl/Cmd+C is the table's above it. */
-.mkui-history-copy {
-  background: none;
-  border: none;
-  color: var(--mkui-accent);
-  cursor: pointer;
-  font-size: 11px;
-  padding: 0;
-}
-.mkui-history-copy:hover { text-decoration: underline; }
+.mkui-history-toggle.active:hover { background: color-mix(in srgb, var(--mkui-accent) 25%, var(--mkui-bg-alt)); }
 
 /* A field's change: name, before, after. Unchanged fields are hidden
    unless asked for, so what moved is what shows. */
@@ -1711,22 +1700,27 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 
 /* Diff | Blame. Two views of the same chain: what changed between two
    versions, and which version last set each field. */
-.mkui-history-views { display: flex; gap: 2px; }
-.mkui-history-view {
-  background: none;
-  border: 1px solid transparent;
+/* Diff | Blame is one-of-two, not two actions: a segmented control, sized
+   to sit level with the toolbar's buttons. The chosen segment is filled in
+   the accent, as a selected row is — a mode has to read at a glance. */
+.mkui-history-views {
+  display: inline-flex;
+  border: 1px solid var(--mkui-border);
   border-radius: 3px;
+  overflow: hidden;
+}
+.mkui-history-view {
+  background: var(--mkui-bg-alt);
+  border: none;
   color: var(--mkui-fg-mute);
   cursor: pointer;
-  font-size: 11px;
-  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
 }
-.mkui-history-view:hover { color: var(--mkui-fg); }
-.mkui-history-view.active {
-  color: var(--mkui-fg);
-  border-color: var(--mkui-border);
-  background: var(--mkui-bg-alt);
-}
+.mkui-history-view + .mkui-history-view { border-left: 1px solid var(--mkui-border); }
+.mkui-history-view:hover { background: var(--mkui-bg-hover); color: var(--mkui-fg); }
+.mkui-history-view.active { background: var(--mkui-accent); color: var(--mkui-accent-fg); }
 
 /* A blame line: the field, its value at the version on show, and the
    version that last set it — clicking goes there. */
