@@ -791,7 +791,8 @@ python3 -m http.server 8000
 # http://localhost:8000/examples/library-js/
 ```
 
-The mkio-table example requires [mkio](https://pypi.org/project/mkio/):
+The mkio-table example requires [mkio](https://pypi.org/project/mkio/) 0.3.0 or
+later (its `orders` table is versioned):
 
 ```
 cd mkui/static/examples/mkio-table
@@ -812,6 +813,8 @@ python seed.py      # four orders: one amended and filled, one undone
 Its `orders` table is `versioned = true`, so mkio records every version of every row in `orders__history`, and `server.toml` writes the four services that expose it — one record's chain, where a record sits in it, the live tape, and the table as at a moment. The **Orders** pane shows `_mkio_version` beside the data and carries a `history` block naming those services; the **Audit tape** is an ordinary query pane over the history table, showing mkio's own `_mkio_op` / `_mkio_user` / `_mkio_ref` columns because it names them. Select a change on the tape and the Orders table narrows to that record (the tape broadcasts the id, the table listens); *Go to order* selects it there instead of filtering, which is what a custom action's `args` resolving against the selection is for. Record → History… opens the version timeline with its diff and blame views, Undo and Redo step the selected record along its versions with a confirmation that says what will change, and *As of…* shows the table as it stood before the seeder's edits.
 
 **All Orders** broadcasts the selected orders' `id` and `symbol`; the **Child Orders** frame listens for the id on its `parent_id` column and **Pending** for the symbol, so a selection filters both (the chips on each toolbar show and pause the links, and a saved layout keeps them). `python control.py` serves the example in place of `mkio serve` and rewires those links from Python a few seconds after a browser connects. The seeder places child orders under pending parents (and some under other children), so the **Order Tree** tab shows the same orders nested by `parent_id`: expand a parent with its caret, place a child order under the selected row with *+ Child Order*, and try the View menu's expand/collapse actions and alt/option-clicking a filter button for the scope row. The toolbar buttons show both styling forms: the **Pending** tab's Fill and Cancel wear a plain `style` map (green, and black on red in capitals) at all times, while the All Orders Cancel turns red only once a pending order is selected, through a rule conditioned on `enabled`.
+
+The `orders` table is `versioned = true`, so mkio records every version of every row in `orders__history`, and `server.toml` writes the four services that expose it — one record's chain, where a record sits in it, the live tape, and the table as at a moment. **All Orders** names them in a `history` block and shows `_mkio_version` beside the data, which puts *Undo*, *Redo* and *As of…* on its toolbar: filling or cancelling an order moves it to a second version, Undo steps it back with a confirmation that says what will change, and *As of…* shows the book as it stood before the seeder's last few minutes, read-only until *Live* re-subscribes. Undo, Redo and *As of…* arrive with the block; the version timeline does not, so All Orders adds a **History** button of its own beside them — a `table.history` action over one selected record — and Record → History… is the same step from the menubar. Either opens that order's version timeline with its diff and blame views. Record → Audit Tape opens a parked query pane over the history table — every recorded version, newest first, live as they land — whose *Go to order* selects the record in All Orders rather than filtering it (a key All Orders' `status` and `notional` filters hide is reported back rather than revealed). An existing `orders.db` picks all this up on the next start: `auto_migrate = "safe"` creates the history table and records every live row as its baseline version.
 
 ## Project layout
 
@@ -850,9 +853,10 @@ mkui/                    Python package (pip install mkui)
       standalone-json/   Loaded from a static config
       library-js/        Built imperatively from JS
       mkio-table/        Live table backed by mkio query/subpub services
-                         (config-only derived columns, styling rules, and
-                         enable conditions; static/app.js registers an
-                         expression function and the order-detail pane)
+                         (config-only derived columns, styling rules,
+                         enable conditions, and record history over a
+                         versioned orders table; static/app.js registers
+                         an expression function and the order-detail pane)
       history/           Versioned table: the audit tape, the version
                          timeline with diff and blame, record undo/redo,
                          and the table as at a moment (config only)
@@ -861,13 +865,29 @@ tests/
   layout.test.js         Layout tree unit tests (node:test)
   state.test.js          State + connection lifecycle tests (node:test)
   table.test.js          mkio-table pane tests (node:test)
+  pane-filters.test.js   Configured filters, sort, visible: specs and API (node:test)
+  links.test.js          LinkHub and table-to-table linking (node:test)
+  history.test.js        Versioned tables: capabilities, spec, chain logic (node:test)
+  history-pane.test.js   mkio-history pane: versions, diff, blame (node:test)
+  copy.test.js           Clipboard grids: TSV quoting and HTML (node:test)
+  timeparse.test.js      Time detection, parsing, bounds, presets (node:test)
+  icons.test.js          Icon library: every name resolves to an SVG (node:test)
   dialog.test.js         Dialog expression + submission tests (node:test)
   auth.test.js           Authentication module + state lifecycle tests (node:test)
   expressions.test.js    Expression conformance fixtures + mkui wrapper tests (node:test)
   vendor-sync.test.js    lib/expr.js and expr_cases.json match the installed mkio (node:test)
   rich.test.js           Rich text type, mkui function library, clipboard HTML (node:test)
   styles.test.js         mkui.css layout invariants (node:test)
+  tabbar.test.js         Tab bar: drag, reorder, overflow, rename (node:test)
+  tab-focus.test.js      Active tab group and focus routing (node:test)
+  edit-routing.test.js   edit.* actions and shortcuts reach the pane (node:test)
+  pointer-guards.test.js Button/modifier guards on every drag start (node:test)
+  windows-menu.test.js   Windows and layouts menu expansion (node:test)
   layouts.test.js        Saved layouts: format, stores, workspace restore, menu (node:test)
   version.test.js        The four version strings agree (node:test)
   test_cli.py            CLI init/serve tests (unittest)
+  test_control.py        ControlService: push actions to browsers (unittest)
+  test_examples.py       Each example config against its server: the
+                         [mkio.expect] pins, pane services, history
+                         blocks, menu and frame pane ids (unittest)
 ```

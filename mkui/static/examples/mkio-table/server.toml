@@ -12,6 +12,13 @@ auto_migrate = "safe"
 # `parent_id` nests child orders under a parent (the Order Tree pane): a
 # row whose parent_id is empty is a top-level order.
 columns = { id = "INTEGER PRIMARY KEY AUTOINCREMENT", ts = "TEXT DEFAULT CURRENT_TIMESTAMP", side = "TEXT NOT NULL", symbol = "TEXT NOT NULL", qty = "INTEGER", price = "REAL DEFAULT 0", status = "TEXT DEFAULT 'pending'", parent_id = "INTEGER" }
+# `versioned = true` is the whole switch: mkio numbers every version of
+# every row (`_mkio_version`, 1 on insert and +1 per edit) and records it
+# in a companion `orders__history` table, stamped with the ref, the user,
+# and the service the change came through. `auto_migrate = "safe"` above
+# turns it on for an orders.db that predates this line — the history table
+# is created and every live row recorded as its baseline version.
+versioned = true
 
 # Write endpoint: place and manage orders
 [services.orders]
@@ -22,6 +29,11 @@ new    = [{ table = "orders", op_type = "insert", fields = ["side", "symbol", "q
 child  = [{ table = "orders", op_type = "insert", fields = ["side", "symbol", "qty", "price", "parent_id"] }]
 fill   = [{ table = "orders", op_type = "update", key = ["id"], fields = ["status"], defaults = { status = "filled" } }]
 cancel = [{ table = "orders", op_type = "update", key = ["id"], fields = ["status"], defaults = { status = "cancelled" } }]
+# undo/redo take only the key — the values come from the history table —
+# and record no new version, so a step is always reversible. Undoing
+# version 1 removes the row and keeps its versions, so redo can rebuild it.
+undo   = [{ table = "orders", op_type = "undo", key = ["id"] }]
+redo   = [{ table = "orders", op_type = "redo", key = ["id"] }]
 
 # Live table of all orders (mkui subscribes here)
 [services.all_orders]
@@ -44,6 +56,54 @@ qty    = "qty"
 
 [services.last_trade.defaults]
 symbol = "_mkio_topic"
+
+# ─── Record history ───────────────────────────────────────────────────
+# mkio never advertises a history table and writes no service for one, so
+# these four are the deliberate choice to expose it. Each would take its
+# own `access` rule on a server with authentication enabled — audit
+# visibility is a permission like any other.
+
+# One record's chain, oldest first: what the history pane reads.
+[services.order_versions]
+protocol = "reqrep"
+sql = "SELECT * FROM orders__history WHERE id = :id ORDER BY _mkio_version"
+
+# Where a record sits in its chain: the version its live row is on, and the
+# highest recorded. `current` is null once the row has been undone away.
+# This is what tells the client whether redo has anywhere to go.
+[services.order_state]
+protocol = "reqrep"
+sql = "SELECT (SELECT _mkio_version FROM orders WHERE id = :id) AS current, MAX(_mkio_version) AS top FROM orders__history WHERE id = :id"
+
+# The audit tape: every recorded version, newest first, live as they land.
+# The seeder fills and cancels orders as it runs, so the chains build up
+# on their own.
+[services.order_history]
+protocol = "query"
+primary_table = "orders__history"
+sql = "SELECT * FROM orders__history ORDER BY _mkio_ref DESC"
+filterable = ["id", "symbol", "status", "_mkio_op", "_mkio_user"]
+change_log_size = 10000
+
+# The table as it stood at a moment: for each id, the newest version
+# recorded at or before `as_of`. Refs sort lexicographically, so the cutoff
+# is an ordinary range scan.
+#
+# Reconstructed from recorded versions, which is not quite the same as
+# "what the table showed then": undo and redo move a row's cursor without
+# recording anything, so a row undone at 3pm still reads, as of 2pm, as
+# whatever its newest version by 2pm was.
+[services.order_as_of]
+protocol = "reqrep"
+sql = """
+SELECT h.* FROM orders__history h
+  JOIN (SELECT id, MAX(_mkio_version) AS v
+          FROM orders__history
+         WHERE _mkio_ref <= :as_of
+      GROUP BY id) latest
+    ON h.id = latest.id AND h._mkio_version = latest.v
+ ORDER BY h.id
+"""
 
 # Saved window layouts for mkui's Layout menu: one row per save, the
 # newest being the current layout (`delete` is how the client prunes the

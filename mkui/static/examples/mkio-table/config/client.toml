@@ -28,6 +28,24 @@ items = [
 ]
 
 [[menubar]]
+label = "Record"
+items = [
+  # The version timeline for whatever All Orders has selected: the chain
+  # as a table, with a diff and a blame view under it. One history pane
+  # per table, re-pointed as the selection moves rather than re-opened.
+  { label = "History…", action = "table.history", args = { pane = "all-orders" } },
+  # `keys` names the record instead, so a menu item can be a deep link.
+  { label = "History of order 1", action = "table.history", args = { pane = "all-orders", keys = ["1"] } },
+  { sep = true },
+  # The steps the All Orders toolbar's Undo and Redo take, on the focused
+  # pane. Deliberately without a shortcut: this writes to shared state.
+  { label = "Undo record", action = "edit.undo" },
+  { label = "Redo record", action = "edit.redo" },
+  { sep = true },
+  { label = "Audit Tape", action = "pane.show", args = "audit-tape" },
+]
+
+[[menubar]]
 label = "View"
 items = [
   # table.filter sets a pane's column filters; the shapes match `filters`
@@ -106,8 +124,12 @@ protocol = "query"
 # exists in no row, so it must be listed in `columns` explicitly. Derived
 # values are what the table sorts, filters, and copies. SPREAD_BPS is an
 # application function registered in static/app.js.
-columns = ["id", "ts", "side", "symbol", "qty", "price", "notional", "status"]
-labels = { ts = "Time" }
+columns = ["id", "_mkio_version", "ts", "side", "symbol", "qty", "price", "notional", "status"]
+# `_mkio_version` is mkio's own column — the cursor into the record's
+# chain, and the one thing the row itself says about its history. Naming
+# it here is what shows it; mkio's columns are hidden otherwise, and
+# `labels` overrides the default heading ("Version") as for any column.
+labels = { ts = "Time", _mkio_version = "Ver" }
 values = { notional = "ROUND(qty * price, 2)" }
 # Which columns show, in this order. `id` and `price` start hidden — the
 # Columns button at the header's right edge (badge: 2) opens the picker
@@ -115,14 +137,14 @@ values = { notional = "ROUND(qty * price, 2)" }
 # columns still work: `notional` is derived from the hidden
 # `price`, and sorts and filters on hidden columns still apply. Without
 # `visible`, every column shows, including ones added later.
-visible = ["ts", "side", "symbol", "qty", "notional", "status"]
+visible = ["ts", "side", "symbol", "qty", "notional", "status", "_mkio_version"]
 # Column groups categorise the picker (sections with show/hide-the-group
 # toggles; ungrouped columns fall into "Other"). Structure only — `visible`
 # says what shows. With hundreds of columns this is how a user finds the
 # few they want; the config's `visible` is the curated default they can
 # always reset to.
 groups = [
-  { label = "Order",   columns = ["id", "ts", "side", "symbol"] },
+  { label = "Order",   columns = ["id", "_mkio_version", "ts", "side", "symbol"] },
   { label = "Pricing", columns = ["qty", "price", "notional"] },
 ]
 # Mirror the current row into app state; the order-detail pane follows it.
@@ -168,6 +190,26 @@ symbol = "${BOLD(value)}"
 side = "${BADGE(value, IF(value == 'Buy', 'green', 'red'))}"
 notional = "${NUM(value, digits: 2, group: TRUE)}"
 status = "${ICON(CASE(value == 'filled', 'check', value == 'cancelled', 'close', 'clock'))} ${TITLE(value)}"
+
+# Where this table's record history lives. `versioned = true` on the
+# server's orders table is what records it; mkio advertises no history
+# table and writes no service for one, so this block is the only way the
+# client can know — every name here is a service in server.toml.
+#
+# What it buys: Undo and Redo on the toolbar, stepping the selected orders
+# along their own versions with a confirmation that says what will change;
+# an *As of…* button that shows the table as it stood at a moment,
+# read-only, until *Live* re-subscribes; and Record → History…, the
+# version timeline for the selected order.
+[panes.all-orders.history]
+table    = "orders"          # checked against the server's versioned tables
+key      = ["id"]            # asked of the server when omitted
+versions = "order_versions"  # one record's chain: the history pane
+state    = "order_state"     # where the row sits in it: arms Redo
+feed     = "order_history"   # the audit tape
+undo     = { service = "orders", op = "undo" }
+redo     = { service = "orders", op = "redo" }
+asOf     = "order_as_of"     # the table as it stood at a moment
 
 [[panes.all-orders.buttons]]
 label = "+ New Order"
@@ -234,6 +276,17 @@ style = [
   { bold = true, caps = true },
 ]
 action = { type = "transaction", service = "orders", op = "cancel", data = { id = "${row.id}" } }
+
+# Undo, Redo and "As of…" arrive on their own — the `history` block above
+# is what puts them there. The version timeline does not: it opens through
+# the `table.history` action, so a table that wants it next to them says
+# so. `unit = "row"` means exactly one record, which is what a history is
+# about; with no `keys` the action takes the pane's current selection.
+[[panes.all-orders.buttons]]
+label = "History"
+unit = "row"
+enable = { connected = true }
+action = { type = "action", name = "table.history", args = { pane = "all-orders" } }
 
 [panes.pending]
 title = "Pending"
@@ -373,6 +426,35 @@ columns = ["id", "parent_id", "side", "symbol", "qty", "price", "status"]
 labels = { parent_id = "Parent" }
 link.listen = { order_id = "parent_id" }
 link.broadcast = { child_id = "id" }
+
+# Every recorded version of every order, newest first, arriving live as
+# changes land — an ordinary query pane over the history table, with no
+# history block of its own. `_mkio_op`, `_mkio_user` and `_mkio_ref` are
+# mkio's own columns, shown because they are named. The pane is parked (no
+# frame lists it): Record → Audit Tape opens it in a frame of its own.
+[panes.audit-tape]
+title = "Audit Tape"
+type = "mkio-table"
+service = "order_history"
+protocol = "query"
+columns = ["_mkio_ref", "id", "_mkio_version", "_mkio_op", "_mkio_user", "side", "symbol", "qty", "price", "status"]
+labels = { _mkio_ref = "When", _mkio_version = "Ver", id = "Order", _mkio_user = "Changed by" }
+sort = "-_mkio_ref"
+
+[panes.audit-tape.display]
+# The ref is a UTC timestamp; REF_TIME reads it in the browser's zone.
+_mkio_ref  = "${REF_TIME(value, fmt: '%H:%M:%S', tz: 'local')}"
+_mkio_op   = "${BADGE(value, CASE(value == 'insert', 'green', value == 'baseline', 'gray', '#0e639c'))}"
+_mkio_user = "${value ?? MUTED('(system)')}"
+
+# Filtering would narrow what you are looking at; this jumps to the record
+# instead, leaving All Orders showing everything around it. A key its
+# filters hide is reported back rather than revealed, so an order below
+# the pane's `notional` floor says so instead of silently doing nothing.
+[[panes.audit-tape.buttons]]
+label = "Go to order"
+enable = { minSelected = 1, maxSelected = 1 }
+action = { type = "action", name = "table.select", args = { pane = "all-orders", keys = ["${row.id}"] } }
 
 [panes.last-trade]
 title = "Last Trade"

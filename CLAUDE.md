@@ -46,8 +46,8 @@ Paths are under `mkui/static/src/` unless they start with `mkui/`.
 
 - `mkui serve [dir] [-p PORT]` — serve a project via mkio
 - `node --test tests/*.test.js` — JS unit tests (`version.test.js` pins the four version strings)
-- `python -m pytest tests/` — CLI, control and example-config tests (`test_examples.py` checks each `[mkio.expect]` against its server); `python -m build && twine upload dist/*` releases
-- `examples/history`: `python -m mkui serve .` + `python seed.py` — versioned tables end to end
+- `python -m pytest tests/` — CLI, control and example-config tests (`test_examples.py` checks each `[mkio.expect]`, pane service and `history` block against its server); `python -m build && twine upload dist/*` releases
+- `examples/mkio-table`, `examples/history`: `python -m mkui serve .` + `python seed.py` — both `versioned`, the second about nothing else
 
 ## Config format
 
@@ -90,7 +90,7 @@ Login dialog: a floating frame (`stayOnTop`, `noDock`) made undismissable by `_h
 
 ## mkio-table pane type
 
-Config keys (under `panes.<id>`): `type` = `"mkio-table"` and `service` are required. `protocol` — `"query"` (default), `"subpub"`, `"stream"`; `topic` — string or array, required for subpub (one subscription each); `filter` — an mkio filter expression (query); `columns` — default: the first row's keys; `labels` — column → display label; `maxcount` — paged subscriptions' page size (200, `null` disables); `start` — where a stream page opens, `"today"` (default, local midnight) or `""` (the buffer's start); `live` — start stream paging live; `rowColumn` — `false` hides the row-number column. The rest have sections of their own: `values` (Derived columns), `styles` + `rowStyle` (Conditional styling), `display` (Display templates), `select` (Selection publishing), `types` (Range filters), `filters` (Configured filters), `sort`, `visible`, `groups`, `tree`, `link` (Table linking), `history` (Record history).
+Config keys (under `panes.<id>`): `type` = `"mkio-table"` and `service` are required. `protocol` — `"query"` (default), `"subpub"`, `"stream"`; `topic` — string or array, required for subpub (one subscription each); `filter` — an mkio filter expression (query); `columns` — default: the first row's keys; `labels` — column → display label; `maxcount` — paged subscriptions' page size (200, `null` disables); `start` — where a stream page opens, `"today"` (default, local midnight) or `""` (the buffer's start); `live` — start stream paging live; `rowColumn` — `false` hides the row-number column. The rest have sections of their own: `values` (Derived columns), `styles` + `rowStyle` (Conditional styling), `types` (Range filters), `display`, `select`, `filters`, `sort`, `visible`, `groups`, `tree`, `link`, `history`.
 
 Row identity: query `_mkio_row`, stream `_mkio_ref`, subpub `_mkio_topic`. `_mkio_*` columns hide unless `columns`/`visible` names one of `SHOWABLE_COLUMNS` (lib/history.js); `noteMkioCols` remembers it, so hiding keeps it in the picker, and `MKIO_LABELS` heads it.
 
