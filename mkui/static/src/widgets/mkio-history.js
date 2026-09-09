@@ -26,7 +26,7 @@ import { ensureMkio } from "../mkio-bridge.js";
 import { compileTemplate, expr } from "../lib/expressions.js";
 import { icon } from "../lib/icons.js";
 import { isRich, richText, renderRich } from "../lib/rich.js";
-import { gridToTSV, gridToHTML } from "../lib/copy.js";
+import { writeGrid, makeCopyStatus } from "../lib/copy.js";
 import { refToDate } from "../lib/timeparse.js";
 import {
   parseHistorySpec, parseChain, cursorOf, diffVersions, blame, pkFromSchema,
@@ -637,17 +637,53 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     return grid;
   }
 
+  // Feedback in three places, as a table's copy has it: the lines that
+  // went pulse, so it is plain *what* was taken; the button says so where
+  // the click was; and the statusbar says it in words, then puts back
+  // whatever it was showing.
+  const showCopyStatus = makeCopyStatus(app.state);
+  let copyBtnTimer = null;
+
+  function pulse(node) {
+    node.classList.remove("mkui-flash-copy");
+    void node.offsetWidth;                       // restart a running animation
+    node.classList.add("mkui-flash-copy");
+    node.addEventListener?.("animationend",
+      () => node.classList.remove("mkui-flash-copy"), { once: true });
+  }
+
+  function sayCopied(text, ok) {
+    copyBtn.textContent = "";
+    copyBtn.appendChild(icon(ok ? "check" : "close"));
+    copyBtn.appendChild(document.createTextNode(text));
+    copyBtn.classList.toggle("mkui-history-copied", ok);
+    if (copyBtnTimer) clearTimeout(copyBtnTimer);
+    copyBtnTimer = setTimeout(() => {
+      copyBtnTimer = null;
+      copyBtn.classList.remove("mkui-history-copied");
+      copyBtn.textContent = "";
+      copyBtn.appendChild(icon("copy"));
+      copyBtn.appendChild(document.createTextNode("Copy"));
+    }, 1600);
+  }
+
   function copyPanel() {
     if (!chain || !chain.versions.length) return false;
+    if (typeof navigator === "undefined" || !navigator.clipboard) return false;
     const grid = copyGrid();
-    if (!navigator?.clipboard?.write) return false;
-    const item = new ClipboardItem({
-      "text/plain": new Blob([gridToTSV(grid)], { type: "text/plain" }),
-      "text/html": new Blob([gridToHTML(grid)], { type: "text/html" }),
+    for (const line of panelLines()) pulse(line);
+    const what = plural(grid.length - 1, "field");
+    writeGrid(grid, { headerRows: 1 }).then((ok) => {
+      sayCopied(ok ? "Copied" : "Failed", ok);
+      showCopyStatus(ok ? `Copied ${what}` : "Copy failed");
     });
-    navigator.clipboard.write([item]).catch((e) => console.warn(`[mkio-history] copy failed: ${e.message}`));
-    app.state.set("status.message", `Copied ${plural(grid.length - 1, "field")}`);
     return true;
+  }
+
+  // The lines the grid was built from — a diff's fields, or blame's.
+  function panelLines() {
+    const box = panel.querySelector?.(".mkui-history-fields");
+    return box ? [...(box.children ?? [])] : [];
   }
 
   /* ── Following the tables ─────────────────────────────────────────── */

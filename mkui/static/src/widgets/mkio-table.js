@@ -2,7 +2,7 @@ import { registerPaneType } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
 import { resolveExpr, resolveObject, evalExpr, compileExpr, compileTemplate, expr } from "../lib/expressions.js";
 import { icon } from "../lib/icons.js";
-import { gridToTSV, gridToHTML } from "../lib/copy.js";
+import { writeGrid, makeCopyStatus } from "../lib/copy.js";
 import { isRich, richText, richToHTML, renderRich } from "../lib/rich.js";
 import {
   SHOWABLE_COLUMNS, MKIO_LABELS, MKIO_FIELDS, historyTable, parseHistorySpec,
@@ -2665,56 +2665,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
   }
 
-  // …and announce it on the statusbar's conventional state path, reverting
-  // after a moment. The revert only fires if the message is still ours, so
-  // a connection-status update landing mid-timeout is never clobbered;
-  // back-to-back copies keep the original message to restore.
-  let copyStatusTimer = null;
-  let copyStatusPrev = null;
-  function showCopyStatus(msg) {
-    const st = app.state;
-    if (!st?.get || !st?.set) return;
-    if (copyStatusTimer) clearTimeout(copyStatusTimer);
-    else copyStatusPrev = st.get("status.message");
-    st.set("status.message", msg);
-    copyStatusTimer = setTimeout(() => {
-      copyStatusTimer = null;
-      if (st.get("status.message") === msg)
-        st.set("status.message", copyStatusPrev ?? "");
-    }, 2000);
-  }
-
-  // Very large grids skip the HTML flavor to halve peak string memory —
-  // TSV alone still pastes into spreadsheets.
-  const HTML_COPY_MAX_ROWS = 100000;
+  // …and announce it on the statusbar (lib/copy.js).
+  const showCopyStatus = makeCopyStatus(app.state);
 
   function copySelection() {
     const g = buildCopyGrid();
     if (!g) return false;
-    const clip = typeof navigator !== "undefined" ? navigator.clipboard : null;
-    if (!clip) return false;
-    const tsv = gridToTSV(g.grid);
+    if (typeof navigator === "undefined" || !navigator.clipboard) return false;
     flashCopied();
-    (async () => {
-      if (clip.write && typeof ClipboardItem !== "undefined" &&
-          typeof Blob !== "undefined" && g.grid.length <= HTML_COPY_MAX_ROWS) {
-        try {
-          const html = gridToHTML(g.grid, g.headerRows);
-          await clip.write([new ClipboardItem({
-            "text/plain": new Blob([tsv], { type: "text/plain" }),
-            "text/html": new Blob([html], { type: "text/html" }),
-          })]);
-          showCopyStatus(`Copied ${g.what}`);
-          return;
-        } catch { /* fall through to writeText */ }
-      }
-      try {
-        await clip.writeText(tsv);
-        showCopyStatus(`Copied ${g.what}`);
-      } catch {
-        showCopyStatus("Copy failed");
-      }
-    })();
+    writeGrid(g.grid, { headerRows: g.headerRows })
+      .then((ok) => showCopyStatus(ok ? `Copied ${g.what}` : "Copy failed"));
     return true;
   }
 

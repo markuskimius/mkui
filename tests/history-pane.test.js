@@ -35,6 +35,18 @@ function mockEl(tag) {
     removeEventListener() {},
     dispatchEvent(ev) { for (const fn of el._ev[ev.type] ?? []) fn(ev); return true; },
     getBoundingClientRect: () => el._rect ?? { top: 0, left: 0, width: 400, height: 500 },
+    offsetWidth: 0,
+    querySelector(sel) {
+      const cls = sel.startsWith(".") ? sel.slice(1) : null;
+      if (!cls) return null;
+      const hit = (n) => {
+        if (String(n.className).split(" ").includes(cls)) return n;
+        for (const c of n._ch ?? []) { const h = c._ch ? hit(c) : null; if (h) return h; }
+        return null;
+      };
+      return hit(el);
+    },
+    get children() { return el._ch; },
     closest(sel) {
       for (let n = el; n; n = n._parent) {
         const hit = n._closest?.(sel);
@@ -62,6 +74,12 @@ globalThis.document = {
   removeEventListener() {},
 };
 globalThis.window = globalThis;
+let pendingTimers = new Map();
+let timerSeq = 0;
+globalThis.setTimeout = (fn, ms) => { const id = ++timerSeq; pendingTimers.set(id, fn); return id; };
+globalThis.clearTimeout = (id) => { pendingTimers.delete(id); };
+const advanceTimers = () => { const fns = [...pendingTimers.values()]; pendingTimers.clear(); for (const fn of fns) fn(); };
+
 const winEv = {};
 globalThis.addEventListener = (e, fn) => { (winEv[e] ??= []).push(fn); };
 globalThis.removeEventListener = (e, fn) => {
@@ -721,4 +739,50 @@ test("copy is off until there are versions to copy", async () => {
   assert.ok(find(host, "mkui-history-copy") == null, "no versions, no panel header to hang it from");
   const on = await makePane({ rows: [liveRow()] });
   assert.equal(find(on.host, "mkui-history-copy").disabled, false);
+});
+
+/* ── Copy feedback ────────────────────────────────────────────────────── */
+
+const btnText = (b) => b._ch.map((n) => n.textContent ?? "").join("");
+
+test("copy says so where the click was, and pulses what it took", async () => {
+  const { host, state } = await makePane({ rows: [liveRow()] });
+  click(find(host, "mkui-history-toggle"));      // show unchanged: three lines
+  const lines = findAll(host, "mkui-history-field");
+  assert.equal(lines.length, 3);
+  click(copyBtn(host));
+  // The pulse is on at once: it marks what went, not what landed.
+  assert.ok(lines.every((l) => l.classList.contains("mkui-flash-copy")));
+  await flush();
+  assert.equal(btnText(copyBtn(host)), "Copied");
+  assert.ok(copyBtn(host).classList.contains("mkui-history-copied"));
+  assert.equal(state.get("status.message"), "Copied 3 fields");
+});
+
+test("copy that does not land says that instead", async () => {
+  const orig = navigator.clipboard.write;
+  navigator.clipboard.write = async () => { throw new Error("denied"); };
+  navigator.clipboard.writeText = async () => { throw new Error("denied"); };
+  try {
+    const { host, state } = await makePane({ rows: [liveRow()] });
+    click(copyBtn(host));
+    await flush();
+    assert.equal(btnText(copyBtn(host)), "Failed");
+    assert.ok(!copyBtn(host).classList.contains("mkui-history-copied"));
+    assert.equal(state.get("status.message"), "Copy failed");
+  } finally {
+    navigator.clipboard.write = orig;
+    delete navigator.clipboard.writeText;
+  }
+});
+
+test("the button goes back to Copy, and the statusbar to what it said", async () => {
+  const { host, state } = await makePane({ rows: [liveRow()] });
+  state.set("status.message", "Connected");
+  click(copyBtn(host));
+  await flush();
+  assert.equal(state.get("status.message"), "Copied 1 field");
+  advanceTimers();
+  assert.equal(btnText(copyBtn(host)), "Copy");
+  assert.equal(state.get("status.message"), "Connected", "and puts back what was there");
 });

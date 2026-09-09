@@ -1689,6 +1689,10 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   border-color: var(--mkui-border);
   background: var(--mkui-bg-alt);
 }
+/* Just copied: the check goes accent for a moment, so the answer lands
+   where the click did. */
+.mkui-history-copy.mkui-history-copied { color: var(--mkui-accent); border-color: transparent; }
+.mkui-history-copy.mkui-history-copied:hover { background: none; color: var(--mkui-accent); }
 .mkui-history-copy:disabled { opacity: 0.4; cursor: default; }
 .mkui-history-copy:disabled:hover { color: var(--mkui-fg-mute); border-color: transparent; background: none; }
 
