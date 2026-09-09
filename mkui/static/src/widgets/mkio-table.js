@@ -283,9 +283,25 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   const chipsEl = document.createElement("div");
   chipsEl.className = "mkui-table-chips";
   toolbar.appendChild(chipsEl);
+  // A pane that embeds this table puts its own controls here (the history
+  // pane's Diff | Blame): they follow the configured buttons, precede the
+  // chips, and their presence alone keeps the toolbar up. Made on demand,
+  // so a table nobody embeds carries no empty box. The element is the
+  // contract, as a frame's `_extraControls` is.
+  let extrasEl = null;
+  function toolbarExtras() {
+    if (!extrasEl) {
+      extrasEl = document.createElement("div");
+      extrasEl.className = "mkui-table-extras";
+      toolbar.insertBefore(extrasEl, chipsEl);
+    }
+    return extrasEl;
+  }
+
   let toolbarShown = false;
   function syncToolbar() {
-    const show = hasButtons || hasHistoryBtns || asOfBtn != null || chipsEl.children.length > 0;
+    const show = hasButtons || hasHistoryBtns || asOfBtn != null
+      || extrasEl?.children.length > 0 || chipsEl.children.length > 0;
     if (show === toolbarShown) return;
     toolbarShown = show;
     if (show) host.insertBefore(toolbar, findOpen ? findBar : scrollArea); else toolbar.remove();
@@ -6180,6 +6196,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         expanded: () => [...expanded].filter(hasKids),
       };
     }
+    // Toolbar hook: where an embedding pane's controls go. `sync` after
+    // filling it, since an otherwise empty toolbar is not in the DOM.
+    paneEl._toolbar = { extras: toolbarExtras, sync: syncToolbar };
     // Source hook: re-aim the table at another slice of its service.
     // `set({ filter })` re-subscribes, so the rows are the server's answer
     // for the new slice rather than a client-side narrowing of the old.

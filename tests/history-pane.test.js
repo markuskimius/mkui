@@ -115,6 +115,10 @@ function installTableStub() {
     };
     stub.sources.push(tspec.filter);
     if (paneEl) {
+      const extras = { className: "mkui-table-extras", _ch: [], _parent: host,
+        append(...ns) { for (const n of ns) { n._parent = extras; extras._ch.push(n); } } };
+      host._ch.push(extras);
+      paneEl._toolbar = { extras: () => extras, sync: () => { stub.synced = (stub.synced ?? 0) + 1; } };
       paneEl._data = {
         rows: () => stub.rows,
         view: () => stub.rows,
@@ -675,4 +679,43 @@ test("a right-click on the divider starts nothing", async () => {
   assert.ok(!sp.classList.contains("dragging"));
   fireWindow("mousemove", { clientY: 100 });
   assert.equal(tableShare(host), "65.00%");
+});
+
+/* ── Where the controls live ──────────────────────────────────────────── */
+
+test("the controls sit in the versions table's toolbar, not the panel", async () => {
+  const { host, paneEl, table } = await makePane({ rows: [liveRow()] });
+  const extras = paneEl._toolbar.extras();
+  const names = extras._ch.map((n) => n.className);
+  assert.deepEqual(names, ["mkui-history-views", "mkui-history-toggle", "mkui-history-copy"]);
+  assert.ok(table().synced >= 1, "the toolbar is told, since an empty one is not in the DOM");
+  // The panel keeps only what it is showing.
+  const head = find(host, "mkui-history-diffhead");
+  assert.deepEqual(head._ch.map((n) => n.className), ["mkui-history-pair", "mkui-history-count"]);
+});
+
+test("the controls are placed once, however many times the panel renders", async () => {
+  const { paneEl, table } = await makePane({ rows: [liveRow()] });
+  const n = paneEl._toolbar.extras()._ch.length;
+  table().select([ORDER_CHAIN[0]]);
+  table().deliver(ORDER_CHAIN);
+  await flush();
+  assert.equal(paneEl._toolbar.extras()._ch.length, n);
+});
+
+test("the unchanged toggle is for the diff, and only when there is something unchanged", async () => {
+  const { host } = await makePane({ rows: [liveRow()] });
+  const toggle = find(host, "mkui-history-toggle");
+  assert.equal(toggle.disabled, false, "v2 → v3 leaves five fields alone");
+  showBlame(host);
+  assert.ok(toggle.disabled, "blame shows every field already");
+  click(views(host)[0]);                             // back to Diff
+  assert.equal(toggle.disabled, false);
+});
+
+test("copy is off until there are versions to copy", async () => {
+  const { host } = await makePane({ rows: [], chain: null });
+  assert.ok(find(host, "mkui-history-copy") == null, "no table, no controls");
+  const on = await makePane({ rows: [liveRow()] });
+  assert.equal(find(on.host, "mkui-history-copy").disabled, false);
 });

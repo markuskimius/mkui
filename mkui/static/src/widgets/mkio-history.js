@@ -185,6 +185,7 @@ registerPaneType("mkio-history", async (spec, app, host) => {
   let client = null;
   let built = false;      // the embedded table exists
   let autoSelected = false;  // the cursor's row has had its one selection
+  let controlsPlaced = false;  // ...in the table's toolbar, once it exists
   let building = null;    // ...or is on its way: two loads must not race
                           // one another into building two of them
 
@@ -428,43 +429,75 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     return vs.length ? vs[vs.length - 1] : null;
   };
 
-  // The panel header: what is on show, how much of it, the Diff | Blame
-  // switch, whatever else the view offers, and copy.
-  function panelHead(what, count, extra = null) {
+  // The controls sit in the versions table's toolbar — the row between the
+  // tab and the table, where a table's buttons go — and are built once,
+  // then updated in place. The panel below keeps only the line saying
+  // what it is showing.
+  const views = el("mkui-history-views");
+  const viewBtns = {};
+  for (const [name, text, tip] of [
+    ["diff", "Diff", "What changed between two versions"],
+    ["blame", "Blame", "Which version last set each field, and who"],
+  ]) {
+    const b = el("mkui-history-view", "button");
+    b.textContent = text;
+    b.title = tip;
+    b.addEventListener("mousedown", (ev) => {
+      if (ev.button !== 0 || view === name) return;
+      view = name;
+      renderPanel();
+    });
+    views.appendChild(b);
+    viewBtns[name] = b;
+  }
+  const unchangedBtn = el("mkui-history-toggle", "button");
+  unchangedBtn.addEventListener("mousedown", (ev) => {
+    if (ev.button !== 0) return;
+    showUnchanged = !showUnchanged;
+    renderPanel();
+  });
+  const copyBtn = el("mkui-history-copy", "button");
+  copyBtn.textContent = "Copy";
+  copyBtn.title = "Copy this panel as a grid";
+  copyBtn.addEventListener("mousedown", (ev) => { if (ev.button === 0) copyPanel(); });
+
+  // Into the table's toolbar once it exists; the pane's own strip until
+  // then, so a pane that never builds a table still offers them nothing
+  // to hang from.
+  function placeControls() {
+    const slot = paneEl?._toolbar;
+    if (controlsPlaced || !slot) return;
+    controlsPlaced = true;
+    slot.extras().append(views, unchangedBtn, copyBtn);
+    slot.sync();
+  }
+
+  // What the panel is showing, in the panel: the controls are elsewhere.
+  function panelHead(what, count) {
     const dhead = el("mkui-history-diffhead");
     const pair = el("mkui-history-pair");
     pair.textContent = what;
     const n = el("mkui-history-count");
     n.textContent = count;
-    const views = el("mkui-history-views");
-    for (const [name, text, tip] of [
-      ["diff", "Diff", "What changed between two versions"],
-      ["blame", "Blame", "Which version last set each field, and who"],
-    ]) {
-      const b = el("mkui-history-view", "button");
-      if (view === name) b.classList.add("active");
-      b.textContent = text;
-      b.title = tip;
-      b.addEventListener("mousedown", (ev) => {
-        if (ev.button !== 0 || view === name) return;
-        view = name;
-        renderPanel();
-      });
-      views.appendChild(b);
-    }
-    dhead.append(pair, n, views);
-    if (extra) dhead.appendChild(extra);
-    const copy = el("mkui-history-copy", "button");
-    copy.textContent = "Copy";
-    copy.title = "Copy this panel as a grid";
-    copy.addEventListener("mousedown", (ev) => { if (ev.button === 0) copyPanel(); });
-    dhead.appendChild(copy);
+    dhead.append(pair, n);
     panel.appendChild(dhead);
     return dhead;
   }
 
+  // The controls follow the panel: which view is on, and whether there is
+  // anything unchanged to show.
+  function syncControls(hasUnchanged = false) {
+    for (const [name, b] of Object.entries(viewBtns)) b.classList.toggle("active", view === name);
+    unchangedBtn.textContent = showUnchanged ? "Hide unchanged" : "Show unchanged";
+    unchangedBtn.classList.toggle("active", showUnchanged);
+    unchangedBtn.disabled = view !== "diff" || !hasUnchanged;
+    copyBtn.disabled = !chain?.versions.length;
+  }
+
   function renderPanel() {
     panel.textContent = "";
+    placeControls();
+    syncControls();
     if (!chain) return;
     if (!chain.versions.length) {
       status(record ? "No versions are recorded for this record." : "Select a row to see its history.");
@@ -523,17 +556,9 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     const rows = diffVersions(from, to, cols);
     const changed = rows.filter((d) => d.kind !== "same");
 
-    const toggle = el("mkui-history-toggle", "button");
-    if (showUnchanged) toggle.classList.add("active");
-    toggle.textContent = showUnchanged ? "Hide unchanged" : "Show unchanged";
-    toggle.disabled = rows.length === changed.length;
-    toggle.addEventListener("mousedown", (ev) => {
-      if (ev.button !== 0) return;
-      showUnchanged = !showUnchanged;
-      renderPanel();
-    });
+    syncControls(rows.length !== changed.length);
     panelHead(fromV == null ? `v${toV} (first recorded)` : `v${fromV} → v${toV}`,
-              changed.length ? plural(changed.length, "change") : "no changes", toggle);
+              changed.length ? plural(changed.length, "change") : "no changes");
 
     const fields = el("mkui-history-fields");
     for (const d of rows) {
