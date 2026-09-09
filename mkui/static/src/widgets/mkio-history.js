@@ -139,10 +139,39 @@ registerPaneType("mkio-history", async (spec, app, host) => {
   head.append(title, sub, reload);
 
   const tableHost = el("mkui-history-table");
+  const splitter = el("mkui-history-split");
   const panel = el("mkui-history-panel");
-  root.append(head, tableHost, panel);
+  root.append(head, tableHost, splitter, panel);
   host.textContent = "";
   host.appendChild(root);
+
+  // The divider between the versions and the panel, dragged as the ones
+  // between panes are: the table's share of the pane is a fraction, so it
+  // holds when the pane itself is resized.
+  const MIN_SHARE = 0.15, MAX_SHARE = 0.9;
+  let tableShare = 0.65;
+  const applyShare = () => { tableHost.style.flexBasis = `${(tableShare * 100).toFixed(2)}%`; };
+  applyShare();
+
+  splitter.addEventListener("mousedown", (ev) => {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    const rect = root.getBoundingClientRect?.();
+    if (!rect?.height) return;
+    splitter.classList.add("dragging");
+    const move = (e) => {
+      const share = (e.clientY - rect.top) / rect.height;
+      tableShare = Math.min(MAX_SHARE, Math.max(MIN_SHARE, share));
+      applyShare();
+    };
+    const up = () => {
+      splitter.classList.remove("dragging");
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  });
 
   /* ── State ────────────────────────────────────────────────────────── */
 

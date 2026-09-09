@@ -1631,18 +1631,28 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-history-reload .mkui-icon { width: 13px; height: 13px; }
 
 /* The versions are an ordinary table; the panel under it says what
-   changed. Dragging the table's corner grip moves the divider. */
+   changed. The bar between them is dragged like a pane splitter — the
+   table's own `flex-basis` is what moves, so `flex-grow` must stay 0 or
+   the layout would recompute the height out from under the drag. */
 .mkui-history-table {
-  flex: 1 1 65%;
+  /* Shrinkable, so the panel's own floor bounds the drag rather than
+     being clipped by it; `flex-grow` stays 0 or the layout would
+     recompute the height out from under the splitter. */
+  flex: 0 1 65%;
   min-height: 60px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  resize: vertical;
-  border-bottom: 1px solid var(--mkui-border);
 }
+.mkui-history-split {
+  flex: 0 0 var(--mkui-splitter);
+  background: var(--mkui-border);
+  cursor: row-resize;
+  transition: background 80ms ease;
+}
+.mkui-history-split:hover, .mkui-history-split.dragging { background: var(--mkui-accent); }
 .mkui-history-panel {
-  flex: 1 1 35%;
+  flex: 1 1 0;
   min-height: 60px;
   overflow: auto;
 }

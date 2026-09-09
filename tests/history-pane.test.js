@@ -34,6 +34,7 @@ function mockEl(tag) {
     addEventListener(e, fn) { (el._ev[e] ??= []).push(fn); },
     removeEventListener() {},
     dispatchEvent(ev) { for (const fn of el._ev[ev.type] ?? []) fn(ev); return true; },
+    getBoundingClientRect: () => el._rect ?? { top: 0, left: 0, width: 400, height: 500 },
     closest(sel) {
       for (let n = el; n; n = n._parent) {
         const hit = n._closest?.(sel);
@@ -61,6 +62,13 @@ globalThis.document = {
   removeEventListener() {},
 };
 globalThis.window = globalThis;
+const winEv = {};
+globalThis.addEventListener = (e, fn) => { (winEv[e] ??= []).push(fn); };
+globalThis.removeEventListener = (e, fn) => {
+  const a = winEv[e]; const i = a?.indexOf(fn) ?? -1;
+  if (i >= 0) a.splice(i, 1);
+};
+const fireWindow = (type, ev) => { for (const fn of [...(winEv[type] ?? [])]) fn(ev); };
 
 let clipboard = [];
 globalThis.ClipboardItem = class { constructor(parts) { this.parts = parts; } };
@@ -625,4 +633,46 @@ test("the default selection happens once, and never over the user's", async () =
 test("a record with no cursor opens on the newest recorded", async () => {
   const { host } = await makePane({ rows: [{ id: "O1" }] });   // no version on the row
   assert.equal(pairText(host), "v2 → v3");
+});
+
+/* ── The splitter ─────────────────────────────────────────────────────── */
+
+const splitterOf = (host) => find(host, "mkui-history-split");
+const tableShare = (host) => find(host, "mkui-history-table").style.flexBasis;
+
+test("the divider drags the table's share of the pane", async () => {
+  const { host } = await makePane({ rows: [liveRow()] });
+  const sp = splitterOf(host);
+  assert.ok(sp, "there is a bar between the table and the panel");
+  assert.equal(tableShare(host), "65.00%");
+
+  // The pane is 500 tall from y=0 (the mock's rect): drag to y=200.
+  sp._ev.mousedown[0]({ button: 0, clientY: 300, preventDefault() {} });
+  assert.ok(sp.classList.contains("dragging"));
+  fireWindow("mousemove", { clientY: 200 });
+  assert.equal(tableShare(host), "40.00%");
+  fireWindow("mouseup", {});
+  assert.ok(!sp.classList.contains("dragging"));
+  fireWindow("mousemove", { clientY: 400 });
+  assert.equal(tableShare(host), "40.00%", "and lets go");
+});
+
+test("the divider will not collapse either side", async () => {
+  const { host } = await makePane({ rows: [liveRow()] });
+  const sp = splitterOf(host);
+  sp._ev.mousedown[0]({ button: 0, clientY: 300, preventDefault() {} });
+  fireWindow("mousemove", { clientY: -100 });
+  assert.equal(tableShare(host), "15.00%");
+  fireWindow("mousemove", { clientY: 5000 });
+  assert.equal(tableShare(host), "90.00%");
+  fireWindow("mouseup", {});
+});
+
+test("a right-click on the divider starts nothing", async () => {
+  const { host } = await makePane({ rows: [liveRow()] });
+  const sp = splitterOf(host);
+  sp._ev.mousedown[0]({ button: 2, clientY: 300, preventDefault() {} });
+  assert.ok(!sp.classList.contains("dragging"));
+  fireWindow("mousemove", { clientY: 100 });
+  assert.equal(tableShare(host), "65.00%");
 });
