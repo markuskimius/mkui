@@ -255,7 +255,7 @@ test("the versions are a table over the feed, narrowed to the record", async () 
   assert.equal(t.spec.service, "order_history");
   assert.equal(t.spec.protocol, "query");
   assert.equal(t.spec.filter, "id == 'O1'", "server-side, so the table holds one record's versions");
-  assert.equal(t.spec.sort, "-_mkio_version", "newest first");
+  assert.equal(t.spec.sort, "_mkio_version", "oldest first: the chain in the order it happened");
   assert.deepEqual(t.spec.columns, ["_mkio_version", "_mkio_op", "_mkio_user", "_mkio_ref", "id", "qty", "status"],
     "mkio's own columns first, then the record's as the source table has them");
   assert.equal(headText(host), "orders O1");

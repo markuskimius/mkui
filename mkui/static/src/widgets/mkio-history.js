@@ -212,7 +212,7 @@ registerPaneType("mkio-history", async (spec, app, host) => {
       columns: historyColumns(h),
       labels: { ...labels },
       display: displaySpecs,
-      sort: `-${MKIO_FIELDS.version}`,
+      sort: MKIO_FIELDS.version,   // oldest first: the chain in the order it happened
       rowColumn: false,
     }, app, tableHost);
     watchTable();
