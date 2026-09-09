@@ -191,7 +191,7 @@ mkio server and verifies its identity. Connection is two-phase:
     "name": "order-book",
     "version": "1.0",
     "protocol": "1.0",
-    "mkio": "0.2",
+    "mkio": "0.3",
     "expr": "1"
   },
   "connected":    { "status.message": "Connected", "status.background": null },
@@ -206,6 +206,15 @@ language version — mkui vendors version `1`) are checked by exact match;
 to the server's `_mkio` service). When `expect` is absent, the `_mkio`
 query still runs to confirm it is an mkio server and to populate
 `mkio.server.*` state paths (name, version, protocol, mkio).
+
+Semver matching is stricter below 1.0, where the minor number carries the
+breaking changes: `"0.3"` accepts 0.3.x and rejects 0.4.0, so pinning
+`mkio` at a pre-1.0 version means every minor release of the library
+invalidates the pin. A stale pin is quiet — the app connects, the
+`incompatible` map is applied, and the statusbar reads "Wrong server"
+while nothing is wrong with the server. Leave `mkio` out unless the app
+truly depends on the library's version, and pin `name` and `version`,
+which are your own, instead.
 
 The same reply says what the server can do, which lands in
 `mkio.server.services` (service name → protocol),

@@ -46,7 +46,7 @@ Paths are under `mkui/static/src/` unless they start with `mkui/`.
 
 - `mkui serve [dir] [-p PORT]` — serve a project via mkio
 - `node --test tests/*.test.js` — JS unit tests (`version.test.js` pins the four version strings)
-- `python -m pytest tests/test_cli.py` — CLI tests; `python -m build && twine upload dist/*` releases
+- `python -m pytest tests/` — CLI, control and example-config tests (`test_examples.py` checks each `[mkio.expect]` against its server); `python -m build && twine upload dist/*` releases
 - `examples/history`: `python -m mkui serve .` + `python seed.py` — versioned tables end to end
 
 ## Config format
@@ -76,9 +76,9 @@ When `config.mkio.url` is present, `<mkui-app>` calls `ensureMkio` with `onConne
 
 Connection is two-phase: **connect** then **verify**. On open, `mkio.connected` goes `true` and `config.mkio.connected` applies; an async `_mkio` reqrep then queries identity — a pass sets `mkio.verified`, a failure leaves it false and applies `config.mkio.incompatible`. Reruns on reconnect.
 
-Capabilities ride the same reply: `capture` writes `mkio.server.services`/`.versioned`/`.historySuffix` only when it carries them (an old server, or the pre-login reply under auth, leaves them alone). Under auth `_verify` never runs: `_probe` re-reads after login, and on each reconnect once authenticated.
+Capabilities ride the same reply: `capture` writes `mkio.server.services`/`.versioned`/`.historySuffix` only when it carries them (an old server, or the pre-login reply under auth, leaves them be). Under auth `_verify` never runs: `_probe` re-reads after login, and on each reconnect once authenticated.
 
-`config.mkio.expect` is optional (the README has its keys): the query runs either way to fill `mkio.server.*`, timing out per `config.mkio.timeout` (5s). The `connected` / `disconnected` / `incompatible` state maps are `"state.path": value` objects applied per lifecycle event.
+`config.mkio.expect` is optional (the README has its keys): the query runs either way to fill `mkio.server.*`, timing out per `config.mkio.timeout` (5s). An `expect.mkio` pin goes stale on every mkio minor release (semver is exact-minor below 1.0), the app then quietly reading "Wrong server" (`tests/test_examples.py`). The `connected` / `disconnected` / `incompatible` state maps are `"state.path": value` objects applied per lifecycle event.
 
 ## Authentication
 
@@ -126,7 +126,7 @@ Tree rows: `tree = { child, parent }` (names or equal-length lists) nests rows: 
 
 Find: `_editActions.find` (Ctrl/Cmd+F, `edit.find`) opens `.mkui-table-find` (`findOpen`), `.mkui-find-toggle`s for regex and case. `compileFind` builds one RegExp (invalid → `.mkui-find-error`); `scanFind` fills `findMatches` (header first, then `view` × `visibleColumns()` on shown text) in rAF chunks (`FIND_CHUNK`). `findScanRev` = the `viewRev` scanned: `render` schedules a `FIND_DATA_MS` rescan on drift, `applyVisible` rescans at once, `findPos` surviving by identity. `findGo(dir)` steps and wraps, else starts at the cursor; `showMatch` = cursor move + scroll (`.mkui-cell-match`, `.mkui-th-match`/`-current`). Hooks `findNext`/`findPrev` (`findStep`: Ctrl/Cmd+G / +Shift+G, F3; closed → reopen on the last query, then step); Escape closes, after `clearSelection`. Closed on pane close/open, not in layouts.
 
-Sort & filter chips: the table's DOM is a flex column — `.mkui-table-toolbar`, then `.mkui-table-find` and `.mkui-table-asof` while either is open, `.mkui-table-scroll`, and progress or the paging bar. The toolbar is there only while it has buttons, extras or chips (`syncToolbar`); buttons first, `.mkui-table-chips` last. `renderChips` (from `updateHeaderState`) builds a `.mkui-chip-group` per kind (sort, filter, link) led by a `.mkui-chip-lead` with the clear button. A chip holds `.mkui-chip-main` and `.mkui-chip-x`; a filter chip leads with a `.mkui-chip-check` (`makeFilterCheck`, `makeChip`'s `lead`) switching that filter off, and alt-click on the group's lead is `toggleAllFilters`. (`tests/styles.test.js`)
+Sort & filter chips: the table's DOM is a flex column — toolbar, the find and as-of bars while open, the scroll area, then progress or the paging bar. The toolbar is in the DOM only while it has buttons, extras or chips (`syncToolbar`); buttons first, `.mkui-table-chips` last. `renderChips` (from `updateHeaderState`) builds a `.mkui-chip-group` per kind (sort, filter, link) led by a `.mkui-chip-lead` with the clear button; a filter chip's leading `.mkui-chip-check` switches that filter off, alt-click on the lead is `toggleAllFilters`. (`tests/styles.test.js`)
 
 Range filters: numeric and all-time columns get a **Values | Range** switch; typing applies debounced, Enter at once, either dropping the preset. A filter is `{ kind: "values" | "range", … }`, described by `describeFilter`. Numeric `hi` is inclusive; time `hi` is *exclusive*, covering the whole unit typed. Preset bounds resolve against the clock (memoised per second in `rangeBounds`); `syncPresetTimer` re-applies the view every 30s while one is active. Inference in `colStats`: `numeric` first, then `temporal`/`timeKind` (`bumpTemporal`: every non-empty value an mkio ref, ISO-8601, or bare `HH:MM[:SS[.f]]`); nothing else is guessed — `types = { col = … }` declares `parse`, `unit`, `tz` (lib/timeparse.js).
 
@@ -166,7 +166,7 @@ Snapshot clearing: query/subpub `applySnapshot` clears rows, DOM and selection f
 
 `mkio-history` (pane type; `source` = the table it follows, for its `history` block, `labels`, `display`): an embedded `mkio-table` over `history.feed`, filtered server-side to the record (`recordFilter`; `_mkio_version` ascending, mkio's columns then the source table's), and a panel under it. `ensureTable` builds it once, `_source.set` re-aims it per record — which is what keeps the user's columns, sort and filters — and the pane reads `_data` (rows = the chain, `on` = they changed) and `_select` (what the panel is about: one version against its predecessor, a range between its ends, else `defaultVersion`, the cursor, selected once per record so the table marks it). Key from `history.key`, else an `_mkio` `{table}` request; `state` fills a cursor the row does not carry. The table's hooks land on this pane's element, so `edit.copy` and find are the versions'. Its view controls (Diff | Blame | unchanged) live in the table's toolbar via `_toolbar` (`placeControls`/`syncControls`); Copy sits in the panel header, with what it copies. `showPaneHistory(paneId, keys)` registers `_history:<src>` once and re-points it (`table.history`). (`tests/history-pane.test.js`)
 
-An undo flashes `mkui-flash-undo`: a replace whose `_mkio_version` *fell*. An increase stays an update — a redo and a fresh edit both raise the counter, and the row cannot say which.
+An undo flashes `mkui-flash-undo`: a replace whose `_mkio_version` *fell*; an increase stays an update, since a redo and a fresh edit both raise it.
 
 As of: `history.asOf` (`{ service, param = "as_of" }`, query tables only) shows the table as at a ref — each record's newest version recorded by then. `applyAsOf` requests it, stamps `idKey` on the rows from the key columns (a reqrep reply carries none), `unsub()`s, `applySnapshot`s. While `asOfRef` is set every button is shut, the apply* paths drop live changes and `sub()` refuses; Live re-subscribes.
 

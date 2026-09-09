@@ -417,11 +417,16 @@ url = "ws://localhost:8080/ws"
 # it too, so the subscription always succeeds.
 control = "_mkui"
 
+# What this app requires of the server it connects to; a mismatch applies
+# `incompatible` below. Below 1.0 semver matching is exact-minor, so the
+# `mkio` pin has to be bumped with every minor release of the library —
+# tests/test_examples.py fails when it goes stale, rather than letting the
+# statusbar quietly read "Wrong server".
 [mkio.expect]
 name = "order-book"
 version = "1.0"
 protocol = "1.0"
-mkio = "0.2"
+mkio = "0.3"
 expr = "1"
 
 [mkio.connected]
