@@ -1666,9 +1666,34 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 }
 .mkui-history-pair { font-family: var(--mkui-font-mono); }
 .mkui-history-count { color: var(--mkui-fg-mute); font-size: 11px; flex: 1; }
+/* Copy, at the right of the panel's own header: a quiet icon-and-label
+   until it is wanted, like the reload in the head above — full button
+   chrome would outweigh the one line of text it shares the strip with. */
+.mkui-history-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--mkui-fg-mute);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 1px 6px;
+  align-self: center;
+}
+.mkui-history-copy .mkui-icon { width: 12px; height: 12px; }
+.mkui-history-copy:hover {
+  color: var(--mkui-fg);
+  border-color: var(--mkui-border);
+  background: var(--mkui-bg-alt);
+}
+.mkui-history-copy:disabled { opacity: 0.4; cursor: default; }
+.mkui-history-copy:disabled:hover { color: var(--mkui-fg-mute); border-color: transparent; background: none; }
+
 /* An on/off toggle: the toolbar's button, wearing the same pressed look
-   the find strip's toggles take when they are on. (Copy needs nothing of
-   its own — it is an action, so it is just a button.) */
+   the find strip's toggles take when they are on. */
 .mkui-history-toggle.active {
   color: var(--mkui-accent);
   border-color: var(--mkui-accent);

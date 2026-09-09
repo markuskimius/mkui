@@ -683,19 +683,18 @@ test("a right-click on the divider starts nothing", async () => {
 
 /* ── Where the controls live ──────────────────────────────────────────── */
 
-test("the controls sit in the versions table's toolbar, not the panel", async () => {
+test("the view controls sit in the versions table's toolbar; copy sits with what it copies", async () => {
   const { host, paneEl, table } = await makePane({ rows: [liveRow()] });
   const extras = paneEl._toolbar.extras();
-  const names = extras._ch.map((n) => n.className);
-  assert.deepEqual(names, [
+  assert.deepEqual(extras._ch.map((n) => n.className), [
     "mkui-history-views",                              // one-of-two: a segmented control
     "mkui-btn mkui-toolbar-btn mkui-history-toggle",   // on/off: the toolbar's button, pressed when on
-    "mkui-btn mkui-toolbar-btn mkui-history-copy",     // an action: just a button
   ]);
   assert.ok(table().synced >= 1, "the toolbar is told, since an empty one is not in the DOM");
-  // The panel keeps only what it is showing.
+  // Copy acts on the panel, so it lives in the panel's own header.
   const head = find(host, "mkui-history-diffhead");
-  assert.deepEqual(head._ch.map((n) => n.className), ["mkui-history-pair", "mkui-history-count"]);
+  assert.deepEqual(head._ch.map((n) => n.className),
+    ["mkui-history-pair", "mkui-history-count", "mkui-history-copy"]);
 });
 
 test("the controls are placed once, however many times the panel renders", async () => {
@@ -719,7 +718,7 @@ test("the unchanged toggle is for the diff, and only when there is something unc
 
 test("copy is off until there are versions to copy", async () => {
   const { host } = await makePane({ rows: [], chain: null });
-  assert.ok(find(host, "mkui-history-copy") == null, "no table, no controls");
+  assert.ok(find(host, "mkui-history-copy") == null, "no versions, no panel header to hang it from");
   const on = await makePane({ rows: [liveRow()] });
   assert.equal(find(on.host, "mkui-history-copy").disabled, false);
 });

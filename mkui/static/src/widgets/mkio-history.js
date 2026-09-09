@@ -458,9 +458,12 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     showUnchanged = !showUnchanged;
     renderPanel();
   });
-  const copyBtn = el("mkui-btn mkui-toolbar-btn mkui-history-copy", "button");
-  copyBtn.textContent = "Copy";
-  copyBtn.title = "Copy this panel as a grid";
+  // Copy sits with what it copies — the panel's own header — rather than
+  // in the toolbar over the table, which is a different grid entirely.
+  const copyBtn = el("mkui-history-copy", "button");
+  copyBtn.appendChild(icon("copy"));
+  copyBtn.appendChild(document.createTextNode("Copy"));
+  copyBtn.title = "Copy what this panel shows, as a grid";
   copyBtn.addEventListener("mousedown", (ev) => { if (ev.button === 0) copyPanel(); });
 
   // Into the table's toolbar once it exists; the pane's own strip until
@@ -470,7 +473,7 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     const slot = paneEl?._toolbar;
     if (controlsPlaced || !slot) return;
     controlsPlaced = true;
-    slot.extras().append(views, unchangedBtn, copyBtn);
+    slot.extras().append(views, unchangedBtn);
     slot.sync();
   }
 
@@ -481,7 +484,7 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     pair.textContent = what;
     const n = el("mkui-history-count");
     n.textContent = count;
-    dhead.append(pair, n);
+    dhead.append(pair, n, copyBtn);
     panel.appendChild(dhead);
     return dhead;
   }
