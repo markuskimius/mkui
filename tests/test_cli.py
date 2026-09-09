@@ -452,3 +452,95 @@ class ExampleConfigsTest(unittest.TestCase):
         self.assertIn("mkui_layouts", server["tables"])
         for name in ("mkui_layouts", "mkui_layouts_list", "mkui_layouts_get"):
             self.assertIn(name, server["services"])
+
+
+class TestExampleConfigs(unittest.TestCase):
+    """The shipped examples are documentation people run, so they have to
+    parse and hang together. A multi-line inline table, or a pane naming a
+    service the server never defines, is a broken example nobody notices
+    until they try it."""
+
+    EXAMPLES = Path(__file__).resolve().parent.parent / "mkui" / "static" / "examples"
+
+    def _examples(self):
+        for server in sorted(self.EXAMPLES.glob("*/server.toml")):
+            yield server.parent
+
+    def test_there_are_examples_to_check(self):
+        self.assertGreaterEqual(len(list(self._examples())), 1)
+
+    def test_configs_parse(self):
+        # TOML inline tables must fit on one line; the parser is the judge.
+        for ex in self._examples():
+            with self.subTest(example=ex.name):
+                with open(ex / "server.toml", "rb") as f:
+                    tomllib.load(f)
+                client = ex / "config" / "client.toml"
+                if client.exists():
+                    with open(client, "rb") as f:
+                        tomllib.load(f)
+
+    def test_panes_name_services_the_server_defines(self):
+        for ex in self._examples():
+            client = ex / "config" / "client.toml"
+            if not client.exists():
+                continue
+            with self.subTest(example=ex.name):
+                with open(ex / "server.toml", "rb") as f:
+                    server = tomllib.load(f)
+                with open(client, "rb") as f:
+                    cfg = tomllib.load(f)
+                services = set(server.get("services", {}))
+                for pane_id, pane in cfg.get("panes", {}).items():
+                    if pane.get("service"):
+                        self.assertIn(pane["service"], services,
+                                      f"{ex.name}: pane '{pane_id}'")
+                    for key in ("versions", "state", "feed", "asOf"):
+                        named = (pane.get("history") or {}).get(key)
+                        if isinstance(named, str) and named:
+                            self.assertIn(named, services,
+                                          f"{ex.name}: {pane_id}.history.{key}")
+                    for key in ("undo", "redo"):
+                        step = (pane.get("history") or {}).get(key)
+                        name = step.get("service") if isinstance(step, dict) else step
+                        if isinstance(name, str) and name:
+                            self.assertIn(name, services,
+                                          f"{ex.name}: {pane_id}.history.{key}")
+
+    def test_frames_name_panes_the_config_defines(self):
+        for ex in self._examples():
+            client = ex / "config" / "client.toml"
+            if not client.exists():
+                continue
+            with self.subTest(example=ex.name):
+                with open(client, "rb") as f:
+                    cfg = tomllib.load(f)
+                panes = set(cfg.get("panes", {}))
+
+                def walk(node):
+                    if isinstance(node, str):
+                        self.assertIn(node, panes, f"{ex.name}: frame names '{node}'")
+                    elif isinstance(node, dict):
+                        for child in node.get("children", []):
+                            walk(child)
+
+                for frame in cfg.get("frames", []):
+                    walk(frame.get("layout"))
+
+    def test_history_blocks_name_a_versioned_table(self):
+        for ex in self._examples():
+            client = ex / "config" / "client.toml"
+            if not client.exists():
+                continue
+            with self.subTest(example=ex.name):
+                with open(ex / "server.toml", "rb") as f:
+                    server = tomllib.load(f)
+                with open(client, "rb") as f:
+                    cfg = tomllib.load(f)
+                versioned = {name for name, t in server.get("tables", {}).items()
+                             if t.get("versioned")}
+                for pane_id, pane in cfg.get("panes", {}).items():
+                    table = (pane.get("history") or {}).get("table")
+                    if table:
+                        self.assertIn(table, versioned,
+                                      f"{ex.name}: {pane_id}.history.table")

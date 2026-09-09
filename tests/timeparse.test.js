@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   detectTimeKind, parseTime, strptime, kindForFormat, kindForSpec,
   inputToBound, boundToInput, inputTypeForKind, presetBounds, tzOffset,
+  refToDate, dateToRef,
 } from "../mkui/static/src/lib/timeparse.js";
 
 const T = Date.UTC(2026, 7, 29, 9, 30, 0) / 1000; // 2026-08-29T09:30:00Z
@@ -129,4 +130,33 @@ test("presets resolve relative to now", () => {
   const tod = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() + 0.5;
   assert.ok(Math.abs(h.hi - tod) < 1e-6 && Math.abs(h.lo - Math.max(0, tod - 3600)) < 1e-6);
   assert.equal(presetBounds("nope", "datetime", now), null);
+});
+
+/* ── mkio refs ────────────────────────────────────────────────────────── */
+// A ref is what mkio stamps on every record and every recorded version:
+// `YYYYMMDD HH:MM:SS.ffffffffffff`, always UTC. These two turn one into a
+// Date to show, and a Date into a cutoff to send.
+
+test("refToDate reads a ref as UTC", () => {
+  const d = refToDate("20260908 16:47:06.039064000000");
+  assert.equal(d.toISOString(), "2026-09-08T16:47:06.000Z");
+  assert.equal(refToDate("20260908 16:47:06").toISOString(), "2026-09-08T16:47:06.000Z",
+    "the sub-second field is optional");
+});
+
+test("refToDate refuses anything that is not a ref", () => {
+  for (const bad of ["2026-09-08T16:47:06Z", "16:47:06", "", "nope", null, undefined, 42])
+    assert.equal(refToDate(bad), null, String(bad));
+});
+
+test("dateToRef writes one back, zeroed below the second", () => {
+  const d = new Date(Date.UTC(2026, 8, 8, 16, 47, 6, 500));
+  assert.equal(dateToRef(d), "20260908 16:47:06.000000000000");
+  assert.equal(dateToRef(new Date(Date.UTC(2026, 0, 2, 3, 4, 5))), "20260102 03:04:05.000000000000",
+    "every field is padded, so refs sort lexicographically");
+});
+
+test("a ref round-trips through a Date", () => {
+  const ref = "20260908 16:47:06.000000000000";
+  assert.equal(dateToRef(refToDate(ref)), ref);
 });

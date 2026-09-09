@@ -8557,3 +8557,29 @@ test("history: the hook reports the table's columns for a pane built over it", a
   lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", id: "1", _mkio_version: 1, name: "a" }]);
   assert.deepEqual(host._paneEl._history.columns(), ["id", "_mkio_version", "name"]);
 });
+
+test("_toolbar takes an embedding pane's controls, and keeps the toolbar up for them", async () => {
+  const { host } = await createTable({ protocol: "query", columns: ["name"] });
+  assert.equal(host._ch.find(c => String(c.className).includes("mkui-table-toolbar")), undefined,
+    "a plain table has no toolbar");
+  const slot = host._paneEl._toolbar;
+  const btn = mockEl("button");
+  btn.className = "someone-elses";
+  slot.extras().appendChild(btn);
+  slot.sync();
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
+  assert.ok(toolbar, "controls alone bring it in");
+  const extras = toolbar._ch.find(c => String(c.className).includes("mkui-table-extras"));
+  assert.deepEqual(extras._ch, [btn]);
+  assert.equal(toolbar._ch.at(-1).className, "mkui-table-chips", "extras precede the chips");
+});
+
+test("_toolbar's slot is made only when it is asked for", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "status"] });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  host._paneEl._filters.set({ status: ["open"] });   // a chip, so the toolbar shows
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
+  assert.equal(toolbar._ch.length, 1, "no empty box in a table nobody embeds");
+  assert.equal(toolbar._ch[0].className, "mkui-table-chips");
+});

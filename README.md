@@ -9,6 +9,13 @@ workspace and dockable panes inside each frame. Designed to pair with
 [mkio](https://pypi.org/project/mkio/) — the same project's TOML-driven microservice backend —
 but works against any backend (or none at all).
 
+Tables are live, selectable, filterable and copyable; where mkio
+[versions](https://pypi.org/project/mkio/) a table, mkui reads the record
+history that comes with it — every version of a record as a table of its
+own, what changed between any two of them, who last set each field, undo
+and redo with a confirmation that says what will change, and the table as
+it stood at a moment.
+
 ## Model
 
 ```
@@ -784,7 +791,7 @@ python seed.py      # (optional) populates sample orders in a loop
 # http://localhost:8080/
 ```
 
-The history example needs mkio too, and shows what a versioned table gives you:
+The history example needs [mkio](https://pypi.org/project/mkio/) 0.3.0 or later — versioned tables are what it is about — and shows what one gives you:
 
 ```
 cd mkui/static/examples/history

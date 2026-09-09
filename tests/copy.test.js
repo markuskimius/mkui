@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { tsvQuote, gridToTSV, gridToHTML, escapeHTML }
+import { tsvQuote, gridToTSV, gridToHTML, escapeHTML, writeGrid, makeCopyStatus, HTML_COPY_MAX_ROWS }
   from "../mkui/static/src/lib/copy.js";
 
 // ── TSV quoting ─────────────────────────────────────────────────────
@@ -72,4 +72,133 @@ test("tabs and newlines survive as-is in HTML cells", () => {
   assert.equal(
     gridToHTML([["a\tb\nc"]]),
     "<table><tr><td>a\tb\nc</td></tr></table>");
+});
+
+/* ── Writing to the clipboard ─────────────────────────────────────────── */
+// Both flavors when the browser can take them, plain text when it cannot,
+// and an honest answer either way — a caller says "Copied" on the result,
+// not on the attempt.
+
+function fakeClipboard({ write, writeText } = {}) {
+  const calls = [];
+  const clip = {
+    calls,
+    write: write === null ? undefined : async (items) => {
+      calls.push(["write", items[0]]);
+      if (write === "throw") throw new Error("denied");
+    },
+    writeText: writeText === null ? undefined : async (text) => {
+      calls.push(["writeText", text]);
+      if (writeText === "throw") throw new Error("denied");
+    },
+  };
+  globalThis.navigator = { clipboard: clip };
+  globalThis.ClipboardItem = class { constructor(parts) { this.parts = parts; } };
+  globalThis.Blob = class { constructor(parts, opts) { this.text = parts.join(""); this.type = opts?.type; } };
+  return clip;
+}
+
+const GRID = [["", "a"], ["x", "1"]];
+
+test("writeGrid puts both flavors on the clipboard and reports success", async () => {
+  const clip = fakeClipboard();
+  assert.equal(await writeGrid(GRID, { headerRows: 1 }), true);
+  assert.equal(clip.calls.length, 1);
+  const [how, item] = clip.calls[0];
+  assert.equal(how, "write");
+  assert.equal(item.parts["text/plain"].text, "\ta\r\nx\t1");
+  assert.equal(item.parts["text/plain"].type, "text/plain");
+  assert.match(item.parts["text/html"].text, /<th>a<\/th>/, "headerRows reaches the HTML flavor");
+});
+
+test("writeGrid falls back to plain text when the rich write is refused", async () => {
+  const clip = fakeClipboard({ write: "throw" });
+  assert.equal(await writeGrid(GRID), true);
+  assert.deepEqual(clip.calls.map(c => c[0]), ["write", "writeText"]);
+  assert.equal(clip.calls[1][1], "\ta\r\nx\t1");
+});
+
+test("writeGrid uses plain text where ClipboardItem is missing", async () => {
+  const clip = fakeClipboard();
+  delete globalThis.ClipboardItem;
+  assert.equal(await writeGrid(GRID), true);
+  assert.deepEqual(clip.calls.map(c => c[0]), ["writeText"]);
+});
+
+test("writeGrid says false when nothing lands, and when there is no clipboard", async () => {
+  fakeClipboard({ write: "throw", writeText: "throw" });
+  assert.equal(await writeGrid(GRID), false);
+  globalThis.navigator = {};
+  assert.equal(await writeGrid(GRID), false);
+});
+
+test("a grid past the HTML cap goes as plain text alone", async () => {
+  const clip = fakeClipboard();
+  // Sparse, so the row count is real without a million strings in memory.
+  const grid = new Array(HTML_COPY_MAX_ROWS + 1);
+  grid[0] = ["a"];
+  await writeGrid(grid);
+  assert.deepEqual(clip.calls.map(c => c[0]), ["writeText"], "the HTML flavor is what costs memory");
+});
+
+/* ── Announcing it ────────────────────────────────────────────────────── */
+
+function fakeState(init = {}) {
+  const store = new Map(Object.entries(init));
+  return { get: (k) => store.get(k), set: (k, v) => store.set(k, v) };
+}
+
+test("makeCopyStatus says so, then puts back what was there", () => {
+  const timers = [];
+  const realTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn) => { timers.push(fn); return timers.length; };
+  try {
+    const state = fakeState({ "status.message": "Connected" });
+    const say = makeCopyStatus(state);
+    say("Copied 3 rows");
+    assert.equal(state.get("status.message"), "Copied 3 rows");
+    timers.pop()();
+    assert.equal(state.get("status.message"), "Connected");
+  } finally {
+    globalThis.setTimeout = realTimeout;
+  }
+});
+
+test("makeCopyStatus keeps the original across back-to-back copies", () => {
+  const timers = [];
+  const realTimeout = globalThis.setTimeout, realClear = globalThis.clearTimeout;
+  globalThis.setTimeout = (fn) => { timers.push(fn); return timers.length; };
+  globalThis.clearTimeout = () => {};
+  try {
+    const state = fakeState({ "status.message": "Connected" });
+    const say = makeCopyStatus(state);
+    say("Copied 1 row");
+    say("Copied 2 rows");
+    assert.equal(state.get("status.message"), "Copied 2 rows");
+    timers.pop()();
+    assert.equal(state.get("status.message"), "Connected", "not the first copy's message");
+  } finally {
+    globalThis.setTimeout = realTimeout;
+    globalThis.clearTimeout = realClear;
+  }
+});
+
+test("makeCopyStatus leaves a message someone else set alone", () => {
+  const timers = [];
+  const realTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn) => { timers.push(fn); return timers.length; };
+  try {
+    const state = fakeState({ "status.message": "Connected" });
+    makeCopyStatus(state)("Copied 1 row");
+    state.set("status.message", "Disconnected");   // the connection speaks
+    timers.pop()();
+    assert.equal(state.get("status.message"), "Disconnected", "the revert defers to it");
+  } finally {
+    globalThis.setTimeout = realTimeout;
+  }
+});
+
+test("makeCopyStatus without a state store is a no-op", () => {
+  assert.doesNotThrow(() => makeCopyStatus(null)("Copied"));
+  assert.doesNotThrow(() => makeCopyStatus({})("Copied"));
 });
