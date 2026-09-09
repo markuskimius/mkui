@@ -292,6 +292,15 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
   syncToolbar();
 
+  // Where the table points: the spec's `filter` (query) and `topic`
+  // (subpub) as they stand. Changeable at runtime through `_source`, so a
+  // pane that embeds a table can re-aim it — the history pane narrows one
+  // history service to a record at a time without rebuilding the table,
+  // which is what keeps the user's columns, sort and filters across
+  // records.
+  let liveFilter = spec.filter ?? null;
+  let liveTopic = spec.topic ?? null;
+
   const rows = new Map();          // key -> row, all data
   const rowEls = new Map();        // key -> tr, rendered slice only
   let baseOrder = [];              // keys in display (insertion) order
@@ -1805,6 +1814,21 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function onSelectionChange(fn) {
     selectionListeners.add(fn);
     return () => selectionListeners.delete(fn);
+  }
+
+  // Panes built around this table (mkio-history), told when its rows
+  // change rather than when its selection does.
+  const dataListeners = new Set();
+  let dataNotifyQueued = false;
+  function notifyData() {
+    if (!dataListeners.size || dataNotifyQueued) return;
+    dataNotifyQueued = true;
+    queueMicrotask(() => {
+      dataNotifyQueued = false;
+      for (const fn of dataListeners) {
+        try { fn(); } catch (e) { console.warn(`[mkio-table] data listener failed: ${e.message}`); }
+      }
+    });
   }
 
   function notifySelection() {
@@ -5576,6 +5600,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (snap.length <= chunkSize) {
       ingest(snap.length);
       maybeRestoreScroll();
+      notifyData();
       return;
     }
 
@@ -5591,6 +5616,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       } else {
         progress.style.display = "none";
         maybeRestoreScroll();
+        notifyData();
       }
     }
     renderChunk();
@@ -5605,6 +5631,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     maybeInitWidths(); // lock header widths before the row renders
     insertRow(row);
     render();
+    notifyData();
     const tr = rowEls.get(row[idKey]);
     if (tr) flash(tr, "mkui-flash-in");
     // A new child under a selected row joins its broadcast.
@@ -5660,6 +5687,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (gated) refreshButtons();
     // The published row may be the one that just went away.
     publishSelection();
+    notifyData();
   }
 
   function applyReplace(row) {
@@ -5756,6 +5784,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     // A live update to the published row replaces the object it points at,
     // so followers see the new values instead of a snapshot.
     if (lastPublishedRow === prev) publishRow(row);
+    notifyData();
   }
 
   /* ── Subscription ─────────────────────────────────────────────────── */
@@ -5857,7 +5886,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       clearData();
       clearSelection();
     }
-    const opts = { subid, topic: spec.topic, filter: spec.filter, ...callbacks };
+    const opts = { subid, topic: liveTopic, filter: liveFilter, ...callbacks };
     if (protocol === "query" && maxcount) opts.maxcount = maxcount;
     if (resuming) opts.ref = lastRef;
     client.subscribe(spec.service, protocol, opts);
@@ -5921,6 +5950,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
           for (const row of pageRows) insertRow(row);
           growSuspended = false;
           render();
+          notifyData();
           firstRef = pageRows[0]._mkio_ref;
           lastRef = pageRows[pageRows.length - 1]._mkio_ref;
         } else if (before && prevPageLoadRef != null) {
@@ -6150,6 +6180,32 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         expanded: () => [...expanded].filter(hasKids),
       };
     }
+    // Source hook: re-aim the table at another slice of its service.
+    // `set({ filter })` re-subscribes, so the rows are the server's answer
+    // for the new slice rather than a client-side narrowing of the old.
+    paneEl._source = {
+      set(patch = {}) {
+        if ("filter" in patch) liveFilter = patch.filter || null;
+        if ("topic" in patch) liveTopic = patch.topic ?? null;
+        const was = subscribed;
+        unsub();
+        lastRef = null;              // a different slice starts over
+        clearData();
+        clearSelection();
+        if (was) sub();              // else the visibility observer will
+      },
+      get: () => ({ filter: liveFilter, topic: liveTopic }),
+    };
+    // Data hook: the rows a pane built around this table needs — all of
+    // them, the filtered view, the ones the selection implies — and a
+    // subscription for when they change. `on` coalesces to one call per
+    // task, so a streaming insert does not run a follower per row.
+    paneEl._data = {
+      rows: () => baseOrder.map((k) => rows.get(k)).filter(Boolean),
+      view: () => view.map((k) => rows.get(k)).filter(Boolean),
+      selected: getSelectedRows,
+      on: (fn) => { dataListeners.add(fn); return () => dataListeners.delete(fn); },
+    };
     // Selection hook: `workspace.selectPane` and `table.select` select rows
     // by identity (see selectRows); `get` reports the selection back.
     paneEl._select = { set: selectRows, get: getSelection, on: onSelectionChange };
@@ -6159,6 +6215,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (historySpec) paneEl._history = {
       spec: historySpec, rows: getSelectedRows,
       step: handleHistoryStep, can: (dir) => canStep(dir, getSelectedRows()),
+      // What this table shows, for a pane building one over its history.
+      columns: () => (columns ? dataColumns() : []),
     };
     paneEl.addEventListener("mkui-pane-close", () => {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }

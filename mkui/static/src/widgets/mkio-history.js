@@ -1,19 +1,27 @@
-// The `mkio-history` pane type: one record's recorded versions, and what
-// changed between any two of them.
+// The `mkio-history` pane type: one record's recorded versions as an
+// ordinary table, with a panel under it for what changed.
 //
 // mkio 0.3.0 keeps every version of a `versioned = true` table's rows in a
 // companion history table, and the live row's `_mkio_version` is a cursor
-// into that chain (lib/history.js). This pane reads the chain through the
-// `versions` service the application configured — mkio advertises no
-// history table and writes no service for one — and shows it as a
-// timeline beside a field-by-field diff.
+// into that chain (lib/history.js). Those versions are rows like any
+// other, so this pane shows them in an `mkio-table` — sorting, filtering,
+// the column picker, find, copy and selection all come with it — pointed
+// at the `history.feed` service and narrowed, server-side, to one record.
+// Re-aiming that table (`_source`) rather than rebuilding it is what keeps
+// the columns, sort and filters the user set as they walk from record to
+// record.
+//
+// Under the table sits the panel: **Diff** (what changed between two
+// versions) and **Blame** (which version last set each field), driven by
+// the table's own selection — one version diffs against its predecessor, a
+// range diffs its ends, and nothing selected reads the newest change.
 //
 // The pane follows a table pane (`source`): it reads that pane's `history`
 // block, its labels and display templates, and the record its selection
 // implies, re-reading whenever the selection moves. `workspace
 // .showPaneHistory` opens one, and the `table.history` action fires it.
 
-import { registerPaneType } from "../core.js";
+import { registerPaneType, getPaneType } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
 import { compileTemplate, expr } from "../lib/expressions.js";
 import { icon } from "../lib/icons.js";
@@ -21,7 +29,8 @@ import { isRich, richText, renderRich } from "../lib/rich.js";
 import { gridToTSV, gridToHTML } from "../lib/copy.js";
 import { refToDate } from "../lib/timeparse.js";
 import {
-  parseHistorySpec, parseChain, cursorOf, diffVersions, blame, pkFromSchema, MKIO_LABELS,
+  parseHistorySpec, parseChain, cursorOf, diffVersions, blame, pkFromSchema,
+  MKIO_FIELDS, MKIO_LABELS,
 } from "../lib/history.js";
 
 const el = (cls, tag = "div") => {
@@ -45,6 +54,16 @@ function fmtWhen(ref) {
 }
 
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+// A value as an mkio filter expression writes it. Numbers go bare and
+// anything else as a quoted string — the only thing this ever builds is
+// the key of the record whose history is on show.
+function exprLiteral(v) {
+  if (v == null) return "NULL";
+  if (typeof v === "number") return String(v);
+  if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
+  return `'${String(v).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+}
 
 registerPaneType("mkio-history", async (spec, app, host) => {
   const wsUrl = app.config?.mkio?.url;
@@ -70,11 +89,15 @@ registerPaneType("mkio-history", async (spec, app, host) => {
   const hspec = () => ownSpec ?? srcHook()?.spec ?? null;
 
   // Presentation follows the table: the same labels, and the same display
-  // templates, so a status reads in the diff as it reads in the cell.
+  // templates, so a status reads in the panel as it reads in the cell.
   const labels = { ...(srcSpec.labels ?? {}), ...(spec.labels ?? {}) };
   const label = (col) => labels[col] ?? MKIO_LABELS[col] ?? col;
+  const displaySpecs = {
+    [MKIO_FIELDS.ref]: `\${REF_TIME(value, fmt: '%Y-%m-%d %H:%M:%S', tz: 'local')}`,
+    ...(srcSpec.display ?? {}), ...(spec.display ?? {}),
+  };
   const displayExprs = {};
-  for (const [c, src] of Object.entries(spec.display ?? srcSpec.display ?? {})) {
+  for (const [c, src] of Object.entries(displaySpecs)) {
     try { displayExprs[c] = compileTemplate(String(src)); }
     catch (e) { console.warn(`[mkio-history] bad display template for ${c}: ${e.message}`); }
   }
@@ -115,33 +138,86 @@ registerPaneType("mkio-history", async (spec, app, host) => {
   reload.title = "Re-read this record's versions";
   head.append(title, sub, reload);
 
-  const body = el("mkui-history-body");
-  const list = el("mkui-history-list");
-  const diff = el("mkui-history-diff");
-  body.append(list, diff);
-  root.append(head, body);
+  const tableHost = el("mkui-history-table");
+  const panel = el("mkui-history-panel");
+  root.append(head, tableHost, panel);
   host.textContent = "";
   host.appendChild(root);
 
   /* ── State ────────────────────────────────────────────────────────── */
 
-  let record = null;      // { key, version, row } — the record on show
-  let chain = null;       // parseChain result
-  let cursor = null;      // cursorOf result
-  let selVersion = null;  // the version being viewed
-  let baseVersion = null; // what it is compared against (null = its predecessor)
+  let record = null;      // { key, row, version, of } — the record on show
+  let chain = null;       // parseChain over the table's rows
+  let cursor = null;      // cursorOf result, when the cursor is known
   let showUnchanged = false;
-  let panel = "diff";     // "diff" | "blame"
+  let view = "diff";      // "diff" | "blame" — a preference, not per record
   let keyCols = null;     // resolved primary key columns
-  let loadGen = 0;        // cancels a load whose record changed under it
+  let loadGen = 0, stateGen = 0;
   let client = null;
+  let built = false;      // the embedded table exists
+  let autoSelected = false;  // the cursor's row has had its one selection
+  let building = null;    // ...or is on its way: two loads must not race
+                          // one another into building two of them
 
   const status = (msg, cls = "") => {
-    diff.textContent = "";
+    panel.textContent = "";
     const n = el(`mkui-history-empty ${cls}`.trim());
     n.textContent = msg;
-    diff.appendChild(n);
+    panel.appendChild(n);
   };
+
+  // The embedded table installs its hooks on the pane element this pane
+  // lives in, so they are this pane's hooks too: `edit.copy` and Ctrl/Cmd+F
+  // reach the versions, and a saved layout keeps their columns and filters.
+  const dataHook = () => (built ? paneEl?._data ?? null : null);
+  const sourceHook = () => (built ? paneEl?._source ?? null : null);
+
+  /* ── The versions table ───────────────────────────────────────────── */
+
+  // Its columns: mkio's own first — the version, what wrote it, who and
+  // when — then the record's, as the source table has them. They are named
+  // rather than inferred because `_mkio_*` columns show only when a config
+  // asks for them.
+  function historyColumns(h) {
+    const meta = [MKIO_FIELDS.version, MKIO_FIELDS.op, MKIO_FIELDS.user, MKIO_FIELDS.ref];
+    const src = h?.columns ?? srcHook()?.columns?.() ?? srcSpec.columns ?? null;
+    if (src && !src.length) return null;
+    if (!src) return null;                    // nothing known: let the data say
+    return [...meta, ...src.filter((c) => !meta.includes(c))];
+  }
+
+  // One record's slice of the feed, server-side: the history service is a
+  // query over the whole history table, and this narrows it to the key.
+  const recordFilter = (key) =>
+    Object.entries(key).map(([c, v]) => `${c} == ${exprLiteral(v)}`).join(" && ");
+
+  // Awaited: the table installs its hooks as its factory settles, and
+  // this pane reads its rows and selection through them. Built once — a
+  // pane opened and pointed at a record in the same breath loads twice,
+  // and two tables would leave the pane reading the hooks of the one it
+  // is not showing.
+  function ensureTable(h, key) {
+    if (!building) building = buildTable(h, key).then((ok) => (built = ok));
+    return building;
+  }
+
+  async function buildTable(h, key) {
+    const factory = getPaneType("mkio-table");
+    if (!factory) return false;
+    await factory({
+      type: "mkio-table",
+      service: h.feed,
+      protocol: "query",
+      filter: recordFilter(key),
+      columns: historyColumns(h),
+      labels: { ...labels },
+      display: displaySpecs,
+      sort: `-${MKIO_FIELDS.version}`,
+      rowColumn: false,
+    }, app, tableHost);
+    watchTable();
+    return true;
+  }
 
   /* ── Reading the chain ────────────────────────────────────────────── */
 
@@ -160,24 +236,24 @@ registerPaneType("mkio-history", async (spec, app, host) => {
 
   const rowsOf = (reply) => reply?.rows ?? (reply?.row ? [reply.row] : []);
 
-  // Everything the pane knows about one record: its versions, and where the
-  // live row sits among them. The cursor is the base row's `_mkio_version`
-  // when the table's service passes it through; a `state` service answers
-  // for one that doesn't (and for a record whose row is gone entirely).
+  // Point the table at the record on show. The first call builds it; the
+  // rest re-aim it, which is what keeps the view the user set.
   async function load() {
     const gen = ++loadGen;
     const h = hspec();
-    if (!h?.versions) {
+    if (!h?.feed) {
       title.textContent = "History";
       sub.textContent = "";
-      status(h ? "No `versions` service is configured for this table." : "This table has no `history` block.", "mkui-history-config");
-      list.textContent = "";
+      status(h
+        ? "No `feed` service is configured: the versions are read from a query service over this table's history table."
+        : "This table has no `history` block.", "mkui-history-config");
       return;
     }
     if (!record) {
       title.textContent = "History";
       sub.textContent = "";
-      list.textContent = "";
+      chain = null;
+      cursor = null;
       status("Select a row to see its history.");
       return;
     }
@@ -204,44 +280,41 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     record.key = key;
     renderHead();
 
-    let reply;
-    try {
-      reply = await client.request(h.versions, key);
-    } catch (e) {
-      status(`Could not read '${h.versions}': ${e.message}`, "mkui-history-error");
-      return;
-    }
+    if (!built) await ensureTable(h, key);
+    else sourceHook()?.set({ filter: recordFilter(key) });
     if (gen !== loadGen) return;
-    if (reply?.type === "error") {
-      status(`'${h.versions}' refused: ${reply.message}`, "mkui-history-error");
-      return;
-    }
+    // The rows arrive on the table's subscription; every change to them
+    // comes back through `readChain`.
+    readChain();
+  }
 
-    chain = parseChain(rowsOf(reply), { fields: h.fields });
-
+  // The chain is whatever the table holds: every version of this record,
+  // whatever the user has sorted or filtered on top of it.
+  function readChain() {
+    const h = hspec();
+    chain = parseChain(dataHook()?.rows() ?? [], { fields: h?.fields });
     // The live row's version is the cursor. Without one — a service that
-    // drops `_mkio_version`, or a row undone out of existence — ask the
-    // `state` service if there is one; a null `current` from it is an
-    // answer (the row is gone, cursor 0), not a missing one. Failing that
-    // the chain shows with no cursor rather than a guessed one.
-    let current = record.version;
-    let known = current != null;
-    if (!known && h.state) {
-      try {
-        const st = rowsOf(await client.request(h.state, key))[0];
-        if (gen !== loadGen) return;
-        if (st && "current" in st) { current = st.current ?? 0; known = true; }
-      } catch (e) {
-        console.warn(`[mkio-history] '${h.state}' failed: ${e.message}`);
-      }
-    }
-    cursor = known ? cursorOf(chain, current) : null;
-
-    // Open on the version the row is at, else the newest recorded.
-    selVersion = cursor?.current && chain.byVersion.has(cursor.current)
-      ? cursor.current : chain.top || null;
-    baseVersion = null;
+    // drops `_mkio_version`, or a row undone out of existence — the `state`
+    // service answers, and a null `current` from it is an answer (the row
+    // is gone, cursor 0) rather than a missing one.
+    const current = record?.version;
+    if (current != null) cursor = cursorOf(chain, current);
+    else if (h?.state && record?.key) askState(h, record.key);
+    selectDefault();
     render();
+  }
+
+  async function askState(h, key) {
+    const gen = ++stateGen;
+    try {
+      const st = rowsOf(await client.request(h.state, key))[0];
+      if (gen !== stateGen || !st || !("current" in st) || !chain) return;
+      cursor = cursorOf(chain, st.current ?? 0);
+      selectDefault();
+      render();
+    } catch (e) {
+      console.warn(`[mkio-history] '${h.state}' failed: ${e.message}`);
+    }
   }
 
   /* ── Rendering ────────────────────────────────────────────────────── */
@@ -256,7 +329,7 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     if (cursor) {
       parts.push(cursor.current === 0 ? "removed" : `v${cursor.current} of ${cursor.top}`);
       if (cursor.ahead) parts.push(`${plural(cursor.ahead, "version")} ahead`);
-    } else if (chain) {
+    } else if (chain?.top) {
       parts.push(plural(chain.top, "version"));
     }
     if (chain?.gaps.length) parts.push("archived versions missing");
@@ -269,79 +342,65 @@ registerPaneType("mkio-history", async (spec, app, host) => {
 
   function render() {
     renderHead();
-    renderList();
     renderPanel();
   }
 
-  function renderList() {
-    list.textContent = "";
-    if (!chain) return;
-    // Newest first: the version a reader is looking for is usually a recent
-    // one, and the redo branch sits above the cursor as the model draws it.
-    const desc = [...chain.versions].reverse();
-    let prev = null;
-    for (const entry of desc) {
-      if (prev && prev.version > entry.version + 1) {
-        const gap = el("mkui-history-gap");
-        gap.textContent = `${plural(prev.version - entry.version - 1, "version")} archived`;
-        list.appendChild(gap);
-      }
-      prev = entry;
-
-      const row = el("mkui-history-ver");
-      row.dataset.version = String(entry.version);
-      if (cursor && entry.version === cursor.current) row.classList.add("current");
-      if (cursor && entry.version > cursor.current) row.classList.add("ahead");
-      if (entry.version === selVersion) row.classList.add("sel");
-      if (entry.version === baseVersion) row.classList.add("base");
-
-      const num = el("mkui-history-vnum");
-      num.textContent = `v${entry.version}`;
-      const op = el("mkui-history-op");
-      op.textContent = entry.op ?? "";
-      if (entry.op) op.dataset.op = String(entry.op);
-      const user = el("mkui-history-user");
-      user.textContent = entry.user ?? "";
-      const when = el("mkui-history-when");
-      when.textContent = fmtWhen(entry.ref);
-      when.title = entry.ref ?? "";
-      row.append(num, op, user, when);
-      if (cursor && entry.version === cursor.current) row.title = "The version this row is on";
-      else if (cursor && entry.version > cursor.current) row.title = "Redo: reachable, until the next edit discards it";
-
-      row.addEventListener("mousedown", (ev) => {
-        if (ev.button !== 0) return;
-        // Ctrl/cmd-click pins the other side of the comparison, so any two
-        // versions can be diffed; clicking it again releases it.
-        if (ev.ctrlKey || ev.metaKey) {
-          baseVersion = baseVersion === entry.version ? null : entry.version;
-        } else {
-          selVersion = entry.version;
-          if (baseVersion === entry.version) baseVersion = null;
-        }
-        render();
-      });
-      list.appendChild(row);
+  // The versions the panel is about: the table's selection — one row
+  // against its predecessor, a range between its ends — and the newest
+  // recorded when nothing is picked, which is the change just made.
+  function picked() {
+    if (!chain?.versions.length) return [];
+    const field = hspec()?.fields?.version ?? MKIO_FIELDS.version;
+    const vs = [];
+    for (const row of dataHook()?.selected?.() ?? []) {
+      const raw = row?.[field] ?? row?.version;
+      const v = typeof raw === "number" ? raw : parseInt(raw, 10);
+      if (Number.isFinite(v) && chain.byVersion.has(v) && !vs.includes(v)) vs.push(v);
     }
+    // Nothing picked: the version the record is *on*, which for a row
+    // sitting below its top is not the newest recorded — that one is the
+    // redo branch, and showing it would read as the record's present.
+    if (!vs.length) return [defaultVersion()];
+    vs.sort((a, b) => a - b);
+    return vs.length === 1 ? [vs[0]] : [vs[0], vs[vs.length - 1]];
   }
 
-  // The two versions on show: the selected one, against the pinned base or
-  // else its own predecessor (nothing, at the first recorded version).
+  // The pair on show: the ends of the picked range, or a single version
+  // against the one before it.
   function diffPair() {
-    if (!chain || selVersion == null) return [null, null, null, null];
-    const to = chain.byVersion.get(selVersion) ?? null;
-    if (baseVersion != null && baseVersion !== selVersion) {
-      const a = chain.byVersion.get(baseVersion) ?? null;
-      // Always read low → high, whichever was clicked first.
-      return baseVersion < selVersion ? [a, to, baseVersion, selVersion] : [to, a, selVersion, baseVersion];
-    }
+    const vs = picked();
+    if (!vs.length) return [null, null, null, null];
+    if (vs.length === 2) return [chain.byVersion.get(vs[0]), chain.byVersion.get(vs[1]), vs[0], vs[1]];
+    const to = chain.byVersion.get(vs[0]) ?? null;
     let from = null;
-    for (const v of chain.versions) if (v.version < selVersion) from = v;
-    return [from, to, from?.version ?? null, selVersion];
+    for (const v of chain.versions) if (v.version < vs[0]) from = v;
+    return [from, to, from?.version ?? null, vs[0]];
   }
 
-  // The panel header, shared by both views: what is on show, how much of
-  // it, the Diff | Blame switch, and whatever else the view offers.
+  const defaultVersion = () => {
+    const cur = cursor?.current;
+    return cur && chain.byVersion.has(cur) ? cur : chain.top;
+  };
+
+  // The version the record is on marks itself by being selected: the table
+  // draws the selection, and the panel opens on the record as it stands.
+  // Once per record, and never over a selection the user made.
+  function selectDefault() {
+    if (autoSelected || !chain?.versions.length) return;
+    const key = chain.byVersion.get(defaultVersion())?.row?._mkio_row;
+    if (key == null || !paneEl?._select) return;
+    if ((dataHook()?.selected?.() ?? []).length) { autoSelected = true; return; }
+    autoSelected = true;
+    paneEl._select.set([key]);
+  }
+
+  const atVersion = () => {
+    const vs = picked();
+    return vs.length ? vs[vs.length - 1] : null;
+  };
+
+  // The panel header: what is on show, how much of it, the Diff | Blame
+  // switch, whatever else the view offers, and copy.
   function panelHead(what, count, extra = null) {
     const dhead = el("mkui-history-diffhead");
     const pair = el("mkui-history-pair");
@@ -349,48 +408,53 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     const n = el("mkui-history-count");
     n.textContent = count;
     const views = el("mkui-history-views");
-    for (const [name, text, title] of [
+    for (const [name, text, tip] of [
       ["diff", "Diff", "What changed between two versions"],
       ["blame", "Blame", "Which version last set each field, and who"],
     ]) {
       const b = el("mkui-history-view", "button");
-      if (panel === name) b.classList.add("active");
+      if (view === name) b.classList.add("active");
       b.textContent = text;
-      b.title = title;
+      b.title = tip;
       b.addEventListener("mousedown", (ev) => {
-        if (ev.button !== 0 || panel === name) return;
-        panel = name;
+        if (ev.button !== 0 || view === name) return;
+        view = name;
         renderPanel();
       });
       views.appendChild(b);
     }
     dhead.append(pair, n, views);
     if (extra) dhead.appendChild(extra);
-    diff.appendChild(dhead);
+    const copy = el("mkui-history-copy", "button");
+    copy.textContent = "Copy";
+    copy.title = "Copy this panel as a grid";
+    copy.addEventListener("mousedown", (ev) => { if (ev.button === 0) copyPanel(); });
+    dhead.appendChild(copy);
+    panel.appendChild(dhead);
     return dhead;
   }
 
   function renderPanel() {
-    diff.textContent = "";
+    panel.textContent = "";
     if (!chain) return;
     if (!chain.versions.length) {
-      status("No versions are recorded for this record.");
+      status(record ? "No versions are recorded for this record." : "Select a row to see its history.");
       return;
     }
-    if (panel === "blame") renderBlame(); else renderDiff();
+    if (view === "blame") renderBlame(); else renderDiff();
   }
 
-  // Per-field provenance as at the selected version: the version that last
+  // Per-field provenance as at the version on show: which version last
   // gave each field the value it has there, and who wrote it. Clicking a
-  // line goes to that version, so blame is a way to navigate the chain and
-  // not only to read it.
+  // line selects that version in the table, so blame navigates the chain.
   function renderBlame() {
     const h = hspec();
+    const at = atVersion();
     const cols = h?.columns ?? chain.columns;
-    const at = chain.byVersion.get(selVersion) ?? null;
-    const who = blame(chain, { columns: cols, upto: selVersion });
+    const entry = chain.byVersion.get(at) ?? null;
+    const who = blame(chain, { columns: cols, upto: at });
     const known = cols.filter((c) => who[c]);
-    panelHead(`as at v${selVersion}`, `${known.length} of ${plural(cols.length, "field")} set`);
+    panelHead(`as at v${at}`, `${known.length} of ${plural(cols.length, "field")} set`);
 
     const fields = el("mkui-history-fields");
     for (const col of cols) {
@@ -401,10 +465,10 @@ registerPaneType("mkio-history", async (spec, app, host) => {
       name.textContent = label(col);
       name.title = col;
       const val = el("mkui-history-bvalue");
-      if (at && at.values[col] != null && at.values[col] !== "") {
-        const shownVal = shown(at.values, col);
-        if (shownVal.rich) renderRich(val, shownVal.rich);
-        else val.textContent = shownVal.text;
+      if (entry && entry.values[col] != null && entry.values[col] !== "") {
+        const s = shown(entry.values, col);
+        if (s.rich) renderRich(val, s.rich);
+        else val.textContent = s.text;
       } else {
         val.classList.add("mkui-history-blank");
         val.textContent = "—";
@@ -413,19 +477,14 @@ registerPaneType("mkio-history", async (spec, app, host) => {
       if (b) {
         src.textContent = [`v${b.version}`, b.user, fmtWhen(b.ref)].filter(Boolean).join(" · ");
         src.title = `${label(col)} last changed at v${b.version}${b.user ? ` by ${b.user}` : ""}`;
-        line.addEventListener("mousedown", (ev) => {
-          if (ev.button !== 0) return;
-          selVersion = b.version;
-          baseVersion = null;
-          render();
-        });
+        line.addEventListener("mousedown", (ev) => { if (ev.button === 0) goToVersion(b.version); });
       } else {
         src.textContent = "never set";
       }
       line.append(name, val, src);
       fields.appendChild(line);
     }
-    diff.appendChild(fields);
+    panel.appendChild(fields);
   }
 
   function renderDiff() {
@@ -462,7 +521,7 @@ registerPaneType("mkio-history", async (spec, app, host) => {
       line.appendChild(value(to, d.col, d.to, "to"));
       fields.appendChild(line);
     }
-    diff.appendChild(fields);
+    panel.appendChild(fields);
   }
 
   // One side of a field's change, rendered as the table would render it —
@@ -480,64 +539,30 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     return n;
   }
 
-  /* ── Following the table ──────────────────────────────────────────── */
-
-  // The record the source table's selection implies: its first selected
-  // row, with the version it currently sits on.
-  function readSelection() {
-    const hook = srcHook();
-    const rows = hook?.rows?.() ?? [];
-    if (!rows.length) return null;
-    const row = rows[0];
-    return { key: null, row, version: row?._mkio_version ?? null, of: rows.length };
+  // Select a version in the table by its identity, so the panel and the
+  // table agree on what is being looked at.
+  function goToVersion(v) {
+    const key = chain?.byVersion.get(v)?.row?._mkio_row;
+    if (key == null || !paneEl?._select) { renderPanel(); return; }
+    paneEl._select.set([key]);
   }
 
-  const sameRecord = (a, b) =>
-    a === b || (!!a && !!b && a.row === b.row && a.of === b.of);
-
-  function refresh(force = false) {
-    const next = readSelection();
-    if (!force && sameRecord(next, record)) return;
-    record = next;
-    chain = null;
-    cursor = null;
-    selVersion = null;
-    baseVersion = null;
-    load();
-  }
-
-  reload.addEventListener("mousedown", (ev) => { if (ev.button === 0) refresh(true); });
-
-  client = await ensureMkio(wsUrl);
-
-  // Follow the table: every selection change re-reads the record, so
-  // clicking down a table walks its records' histories.
-  let unfollow = null;
-  function follow() {
-    unfollow?.();
-    unfollow = srcId == null ? null : getWs()?.onPaneSelection?.(srcId, () => refresh()) ?? null;
-  }
-
-  if (paneEl) {
-    // Copy hook: Ctrl/Cmd+C and `edit.copy` take the diff as it is shown —
-    // a grid of field, before, after — in TSV and HTML, like a table's.
-    paneEl._editActions = { copy: () => copyDiff() };
-    paneEl.addEventListener("mkui-pane-open", () => { follow(); refresh(true); });
-    paneEl.addEventListener("mkui-pane-close", () => { unfollow?.(); unfollow = null; });
-  }
+  /* ── Copy ─────────────────────────────────────────────────────────── */
 
   // The panel as it is shown, as a grid: the diff's two columns, or
-  // blame's value and provenance.
+  // blame's value and provenance. (Ctrl/Cmd+C is the table's, and copies
+  // the version rows.)
   function copyGrid() {
     const h = hspec();
     const cols = h?.columns ?? chain.columns;
-    if (panel === "blame") {
-      const at = chain.byVersion.get(selVersion) ?? null;
-      const who = blame(chain, { columns: cols, upto: selVersion });
-      const grid = [["", `v${selVersion}`, "Version", "User", "When"]];
+    if (view === "blame") {
+      const at = atVersion();
+      const entry = chain.byVersion.get(at) ?? null;
+      const who = blame(chain, { columns: cols, upto: at });
+      const grid = [["", `v${at}`, "Version", "User", "When"]];
       for (const col of cols) {
         const b = who[col];
-        grid.push([label(col), at ? shown(at.values, col).text : "",
+        grid.push([label(col), entry ? shown(entry.values, col).text : "",
           b ? `v${b.version}` : "", b?.user ?? "", b ? fmtWhen(b.ref) : ""]);
       }
       return grid;
@@ -553,11 +578,10 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     return grid;
   }
 
-  function copyDiff() {
+  function copyPanel() {
     if (!chain || !chain.versions.length) return false;
     const grid = copyGrid();
-    const write = navigator?.clipboard?.write;
-    if (!write) return false;
+    if (!navigator?.clipboard?.write) return false;
     const item = new ClipboardItem({
       "text/plain": new Blob([gridToTSV(grid)], { type: "text/plain" }),
       "text/html": new Blob([gridToHTML(grid)], { type: "text/html" }),
@@ -565,6 +589,62 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     navigator.clipboard.write([item]).catch((e) => console.warn(`[mkio-history] copy failed: ${e.message}`));
     app.state.set("status.message", `Copied ${plural(grid.length - 1, "field")}`);
     return true;
+  }
+
+  /* ── Following the tables ─────────────────────────────────────────── */
+
+  // The record the source table's selection implies: its first selected
+  // row, with the version it currently sits on.
+  function readSelection() {
+    const rows = srcHook()?.rows?.() ?? [];
+    if (!rows.length) return null;
+    const row = rows[0];
+    return { key: null, row, version: row?.[MKIO_FIELDS.version] ?? null, of: rows.length };
+  }
+
+  const sameRecord = (a, b) =>
+    a === b || (!!a && !!b && a.row === b.row && a.of === b.of);
+
+  function refresh(force = false) {
+    const next = readSelection();
+    if (!force && sameRecord(next, record)) return;
+    record = next;
+    chain = null;
+    cursor = null;
+    autoSelected = false;
+    load();
+  }
+
+  reload.addEventListener("mousedown", (ev) => { if (ev.button === 0) refresh(true); });
+
+  client = await ensureMkio(wsUrl);
+
+  // Follow the source table: every selection change re-reads the record,
+  // so clicking down a table walks its records' histories. And follow the
+  // embedded one: its rows are the chain, its selection what the panel is
+  // about, and both change as versions arrive.
+  let unfollow = null, unwatch = null;
+  function follow() {
+    unfollow?.();
+    unfollow = srcId == null ? null : getWs()?.onPaneSelection?.(srcId, () => refresh()) ?? null;
+  }
+  // The embedded table's rows are the chain and its selection is what the
+  // panel is about, so the pane follows both. Armed once the table exists.
+  function watchTable() {
+    unwatch?.();
+    if (!paneEl) return;
+    const offData = paneEl._data?.on?.(() => readChain()) ?? null;
+    const offSel = paneEl._select?.on?.(() => renderPanel()) ?? null;
+    unwatch = () => { offData?.(); offSel?.(); };
+  }
+  function unfollowAll() {
+    unfollow?.(); unfollow = null;
+    unwatch?.(); unwatch = null;
+  }
+
+  if (paneEl) {
+    paneEl.addEventListener("mkui-pane-open", () => { follow(); watchTable(); refresh(true); });
+    paneEl.addEventListener("mkui-pane-close", unfollowAll);
   }
 
   follow();

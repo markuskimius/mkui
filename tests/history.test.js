@@ -417,3 +417,12 @@ test("parseHistorySpec: asOf takes a name or { service, param }", () => {
   assert.equal(parseHistorySpec({ asOf: 7 }, { warn }).asOf, null);
   assert.equal(warn.msgs.length, 1);
 });
+
+test("parseChain treats every `_mkio_` key as the framework's, not the record's", () => {
+  // A query service over a history table hands back `_mkio_row` too.
+  const chain = parseChain([
+    { _mkio_row: "O1-1", _mkio_version: 1, _mkio_op: "insert", _mkio_topic: "x", id: "O1", qty: 5 },
+  ]);
+  assert.deepEqual(chain.columns, ["id", "qty"]);
+  assert.equal(chain.byVersion.get(1).row._mkio_row, "O1-1", "the raw row still carries it");
+});

@@ -252,6 +252,10 @@ export function parseChain(rows, opts = {}) {
   for (const role of Object.keys(MKIO_FIELDS)) cand[role] = fieldCandidates(role, fields);
   const meta = new Set();
   for (const names of Object.values(cand)) for (const n of names) meta.add(n);
+  // mkio reserves the `_mkio_` prefix, so anything under it is the
+  // framework's — a query service over a history table also hands back
+  // `_mkio_row`, and that is identity, not a field of the record.
+  const isMeta = (k) => meta.has(k) || k.startsWith("_mkio_");
 
   const byVersion = new Map();
   const columns = [];
@@ -264,7 +268,7 @@ export function parseChain(rows, opts = {}) {
     if (!Number.isFinite(version) || version < 1) { dropped++; continue; }
     const values = {};
     for (const [k, v] of Object.entries(row)) {
-      if (meta.has(k)) continue;
+      if (isMeta(k)) continue;
       values[k] = v;
       if (!columns.includes(k)) columns.push(k);
     }

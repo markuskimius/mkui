@@ -1630,64 +1630,21 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-history-reload:hover { color: var(--mkui-fg); }
 .mkui-history-reload .mkui-icon { width: 13px; height: 13px; }
 
-.mkui-history-body { display: flex; flex: 1; min-height: 0; }
-.mkui-history-list {
-  width: 190px;
-  min-width: 120px;
-  overflow: auto;
-  border-right: 1px solid var(--mkui-border);
-  resize: horizontal;
-}
-.mkui-history-diff { flex: 1; min-width: 0; overflow: auto; }
-
-/* A version: number, op, who, when. The row the record currently sits on
-   is marked; the versions above it are the redo branch, which the next
-   edit discards — so they read as provisional rather than as history. */
-.mkui-history-ver {
+/* The versions are an ordinary table; the panel under it says what
+   changed. Dragging the table's corner grip moves the divider. */
+.mkui-history-table {
+  flex: 1 1 65%;
+  min-height: 60px;
   display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 3px 8px;
-  cursor: pointer;
-  border-left: 2px solid transparent;
-  white-space: nowrap;
-}
-.mkui-history-ver:hover { background: var(--mkui-bg-hover); }
-.mkui-history-ver.sel { background: var(--mkui-accent); color: var(--mkui-accent-fg); }
-.mkui-history-ver.sel .mkui-history-user,
-.mkui-history-ver.sel .mkui-history-when { color: inherit; opacity: 0.85; }
-.mkui-history-ver.current { border-left-color: var(--mkui-accent); }
-.mkui-history-ver.current .mkui-history-vnum { font-weight: 700; }
-.mkui-history-ver.sel.current { border-left-color: var(--mkui-focus); }
-.mkui-history-ver.ahead { opacity: 0.55; font-style: italic; }
-.mkui-history-ver.base { border-left-color: var(--mkui-fg-mute); }
-.mkui-history-vnum { font-family: var(--mkui-font-mono); }
-.mkui-history-op {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  opacity: 0.9;
-}
-.mkui-history-op[data-op="insert"] { color: #4caf50; }
-.mkui-history-op[data-op="baseline"] { color: var(--mkui-fg-mute); }
-.mkui-history-ver.sel .mkui-history-op { color: inherit; }
-.mkui-history-user {
-  color: var(--mkui-fg-mute);
-  flex: 1;
+  flex-direction: column;
   overflow: hidden;
-  text-overflow: ellipsis;
+  resize: vertical;
+  border-bottom: 1px solid var(--mkui-border);
 }
-.mkui-history-when { color: var(--mkui-fg-mute); font-size: 11px; }
-/* Versions `mkio archive` moved out to CSV: the chain has a hole there,
-   and undo cannot step across it. */
-.mkui-history-gap {
-  padding: 2px 8px;
-  color: var(--mkui-fg-mute);
-  font-size: 10px;
-  font-style: italic;
-  text-align: center;
-  border-top: 1px dashed var(--mkui-border);
-  border-bottom: 1px dashed var(--mkui-border);
+.mkui-history-panel {
+  flex: 1 1 35%;
+  min-height: 60px;
+  overflow: auto;
 }
 
 .mkui-history-diffhead {
@@ -1709,6 +1666,16 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 }
 .mkui-history-toggle:hover { text-decoration: underline; }
 .mkui-history-toggle:disabled { color: var(--mkui-fg-mute); cursor: default; text-decoration: none; }
+/* Copies the panel as a grid; Ctrl/Cmd+C is the table's above it. */
+.mkui-history-copy {
+  background: none;
+  border: none;
+  color: var(--mkui-accent);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+}
+.mkui-history-copy:hover { text-decoration: underline; }
 
 /* A field's change: name, before, after. Unchanged fields are hidden
    unless asked for, so what moved is what shows. */

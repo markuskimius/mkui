@@ -8485,3 +8485,75 @@ test("as of: closing the pane returns it to live", async () => {
   assert.ok(!host.classList.contains("mkui-table-historic"));
   assert.equal(asOfBar(host), undefined);
 });
+
+/* ── The source and data hooks ────────────────────────────────────────── */
+// A pane can build itself around a table (mkio-history does): re-aim it at
+// another slice of its service, read its rows, and hear when they change.
+
+test("_source re-aims the table at another slice, server-side", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name"], filter: "id == 1" });
+  triggerVisible(io);
+  assert.equal(lastSubscribe().opts.filter, "id == 1");
+  lastSubscribe().opts.onSnapshot(orderRows());
+  assert.equal(getTbody(host)._ch.length, 4);
+
+  host._paneEl._source.set({ filter: "id == 2" });
+  assert.deepEqual(host._paneEl._source.get(), { filter: "id == 2", topic: null });
+  assert.equal(lastSubscribe().opts.filter, "id == 2", "re-subscribed, not narrowed client-side");
+  assert.equal(getTbody(host)._ch.length, 0, "and holding nothing until the answer lands");
+  lastSubscribe().opts.onSnapshot(orderRows().slice(0, 1));
+  assert.equal(getTbody(host)._ch.length, 1);
+});
+
+test("_source before the pane is ever shown waits for the subscription", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name"] });
+  const before = fakeClient.calls.filter(c => c.type === "subscribe").length;
+  host._paneEl._source.set({ filter: "id == 7" });
+  assert.equal(fakeClient.calls.filter(c => c.type === "subscribe").length, before,
+    "nothing to re-subscribe yet");
+  triggerVisible(io);
+  assert.equal(lastSubscribe().opts.filter, "id == 7", "the first subscription takes it");
+});
+
+test("_data reads the rows, the view and the selection", async () => {
+  const { host, io } = await createTable({
+    protocol: "query", columns: ["name", "status"], rowColumn: true,
+    filters: { status: { exclude: ["closed"] } },
+  });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  const d = host._paneEl._data;
+  assert.equal(d.rows().length, 4);
+  assert.equal(d.view().length, 2, "the filtered view is what the table shows");
+  assert.deepEqual(d.selected(), []);
+  host._paneEl._select.set(["1"]);
+  assert.deepEqual(d.selected().map(r => r.name), ["a"]);
+});
+
+test("_data.on fires once per task when rows change, and stops when dropped", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name"] });
+  let n = 0;
+  const off = host._paneEl._data.on(() => n++);
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  await new Promise(r => setImmediate(r));
+  assert.equal(n, 1, "a snapshot of four rows is one notification, not four");
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "9", name: "z" });
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "9", name: "zz" });
+  await new Promise(r => setImmediate(r));
+  assert.equal(n, 2);
+  off();
+  lastSubscribe().opts.onUpdate("delete", { _mkio_row: "9" });
+  await new Promise(r => setImmediate(r));
+  assert.equal(n, 2);
+});
+
+test("history: the hook reports the table's columns for a pane built over it", async () => {
+  const { host, io } = await createTable({
+    protocol: "query", columns: ["id", "_mkio_version", "name"], rowColumn: true,
+    history: { table: "orders", key: "id", feed: "order_history" },
+  });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", id: "1", _mkio_version: 1, name: "a" }]);
+  assert.deepEqual(host._paneEl._history.columns(), ["id", "_mkio_version", "name"]);
+});
