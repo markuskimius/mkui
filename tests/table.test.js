@@ -8162,6 +8162,50 @@ test("redo: a `state` service says whether anything is recorded above the row", 
   assert.equal(stepBtn(host, "redo").disabled, false);
 });
 
+test("redo: a cursor moved by someone else drops the cached answer", async () => {
+  const { host } = await undoTable({ state: "order_state" }, {
+    replies: { order_state: { type: "reply", rows: [{ current: 3, top: 3 }] } },
+  });
+  const redoState = () => [stepBtn(host, "redo").disabled, stepBtn(host, "redo").title];
+  // Selecting row 1 caches { current: 3, top: 3 }: it is at the top, so shut.
+  host._paneEl._select.set(["1"]);
+  advanceTimers();
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(redoState(), [true, "Nothing is recorded above this version"]);
+  // Look away, and someone else undoes row 1 while it is not selected.
+  host._paneEl._select.set(["2"]);
+  fakeReplies.order_state = { type: "reply", rows: [{ current: 2, top: 3 }] };
+  lastSubscribe().opts.onUpdate(
+    "update", { _mkio_row: "1", id: "1", _mkio_version: 2, name: "a", status: "open" },
+    { cause: "undo" });
+  // Coming back to it re-asks rather than repeating what it cached: the
+  // record has stepped down, so there is now a version above it to redo.
+  host._paneEl._select.set(["1"]);
+  advanceTimers();
+  await new Promise(r => setImmediate(r));
+  assert.equal(fakeClient.calls.filter(c => c.type === "request").length, 2,
+    "the stale entry no longer short-circuits the probe");
+  assert.equal(stepBtn(host, "redo").disabled, false);
+});
+
+test("redo: an ordinary edit elsewhere leaves the cached answer alone", async () => {
+  const { host } = await undoTable({ state: "order_state" }, {
+    replies: { order_state: { type: "reply", rows: [{ current: 3, top: 3 }] } },
+  });
+  host._paneEl._select.set(["1"]);
+  advanceTimers();
+  await new Promise(r => setImmediate(r));
+  host._paneEl._select.set(["2"]);
+  // No cause: an ordinary write records a new version, it does not move a
+  // cursor, so the probe's answer still stands and is not worth re-asking.
+  lastSubscribe().opts.onUpdate(
+    "update", { _mkio_row: "1", id: "1", _mkio_version: 4, name: "a", status: "settled" });
+  host._paneEl._select.set(["1"]);
+  advanceTimers();
+  await new Promise(r => setImmediate(r));
+  assert.equal(fakeClient.calls.filter(c => c.type === "request").length, 1);
+});
+
 test("redo: a `state` service that says the row is at the top keeps it shut", async () => {
   const { host } = await undoTable({ state: "order_state" }, {
     replies: { order_state: { type: "reply", rows: [{ current: 3, top: 3 }] } },
@@ -8304,6 +8348,88 @@ test("undo: a table with no version counter flashes updates as it always did", a
   lastSubscribe().opts.onUpdate("update", { _mkio_row: "1", name: "a", status: "open", qty: "99", ts: "" });
   const td = getTbody(host)._ch[0]._ch.find(c => c.dataset?.col === "qty");
   assert.ok([...td.classList._s].includes("mkui-flash-update"));
+});
+
+test("undo: mkio's cause tells a redo from the edit it looks exactly like", async () => {
+  const { host, io } = await createTable({
+    protocol: "query", columns: ["id", "_mkio_version", "status"], rowColumn: true,
+  });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", id: "1", _mkio_version: 2, status: "open" }]);
+  const cellClasses = () => {
+    const td = getTbody(host)._ch[0]._ch.find(c => c.dataset?.col === "status");
+    return [...td.classList._s];
+  };
+  // A redo raises the counter by one, exactly as a fresh edit does — the
+  // inference cannot separate them, and the cause is the only thing that can.
+  lastSubscribe().opts.onUpdate(
+    "update", { _mkio_row: "1", id: "1", _mkio_version: 3, status: "filled" }, { cause: "redo" });
+  assert.ok(cellClasses().includes("mkui-flash-redo"));
+  assert.ok(!cellClasses().includes("mkui-flash-update"));
+  // The same shape with no cause is an edit and still reads as one.
+  lastSubscribe().opts.onUpdate(
+    "update", { _mkio_row: "1", id: "1", _mkio_version: 4, status: "settled" }, { cause: null });
+  assert.ok(cellClasses().includes("mkui-flash-update"));
+  assert.ok(!cellClasses().includes("mkui-flash-redo"));
+});
+
+test("undo: a named undo lands even when the row carries no version counter", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "qty"], rowColumn: true });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  lastSubscribe().opts.onUpdate(
+    "update", { _mkio_row: "1", name: "a", status: "open", qty: "99", ts: "" }, { cause: "undo" });
+  const td = getTbody(host)._ch[0]._ch.find(c => c.dataset?.col === "qty");
+  assert.ok([...td.classList._s].includes("mkui-flash-undo"),
+    "the counter is projected away here, so only the cause can say what moved");
+});
+
+test("undo: a cursor move that adds or removes a row is flashed as one", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "qty"], rowColumn: true });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  const flashed = (cls) =>
+    getTbody(host)._ch.find((tr) => [...tr.classList._s].includes(cls));
+  // Redoing an insert puts a record back: it arrives as an insert.
+  lastSubscribe().opts.onUpdate(
+    "insert", { _mkio_row: "9", name: "z", status: "open", qty: "1", ts: "" }, { cause: "redo" });
+  assert.ok(flashed("mkui-flash-redo"), "an arriving row wears the redo colour");
+  assert.ok(!flashed("mkui-flash-in"));
+  // Undoing version 1 takes the record away. The row still has to fade out,
+  // so the cursor colour comes in the `-out` shape rather than the plain one.
+  lastSubscribe().opts.onUpdate("delete", { _mkio_row: "1", name: "a" }, { cause: "undo" });
+  assert.ok(flashed("mkui-flash-undo-out"), "a leaving row still fades, in the undo colour");
+  assert.ok(!flashed("mkui-flash-out"));
+});
+
+test("undo: a redo that puts back an undone record arrives as a replace", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "qty"], rowColumn: true });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  const flashed = (cls) =>
+    getTbody(host)._ch.find((tr) => [...tr.classList._s].includes(cls));
+  // Undoing version 1 took the record out of the table.
+  lastSubscribe().opts.onUpdate("delete", { _mkio_row: "1", name: "a" }, { cause: "undo" });
+  assert.ok(flashed("mkui-flash-undo-out"));
+  // The redo is an update for a row the table no longer holds, so
+  // applyReplace falls through to applyInsert — and must carry the cause
+  // with it, or the record comes back reading as a fresh insert.
+  lastSubscribe().opts.onUpdate(
+    "update", { _mkio_row: "1", name: "a", status: "open", qty: "50", ts: "" }, { cause: "redo" });
+  assert.ok(flashed("mkui-flash-redo"), "the resurrected row wears the redo colour");
+  assert.ok(!flashed("mkui-flash-in"));
+});
+
+test("undo: an ordinary insert and delete are untouched by the cause plumbing", async () => {
+  const { host, io } = await createTable({ protocol: "query", columns: ["name", "qty"], rowColumn: true });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(orderRows());
+  const flashed = (cls) =>
+    getTbody(host)._ch.find((tr) => [...tr.classList._s].includes(cls));
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "9", name: "z", status: "open", qty: "1", ts: "" });
+  assert.ok(flashed("mkui-flash-in"));
+  lastSubscribe().opts.onUpdate("delete", { _mkio_row: "1", name: "a" });
+  assert.ok(flashed("mkui-flash-out"));
 });
 
 test("a custom action's args resolve against the selection", async () => {

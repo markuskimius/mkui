@@ -5538,11 +5538,29 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return tr;
   }
 
+  const FLASH_CLASSES = [
+    "mkui-flash-in", "mkui-flash-out", "mkui-flash-update",
+    "mkui-flash-undo", "mkui-flash-redo",
+    "mkui-flash-undo-out", "mkui-flash-redo-out",
+  ];
+
   function flash(el, cls) {
-    el.classList.remove("mkui-flash-in", "mkui-flash-out", "mkui-flash-update", "mkui-flash-undo");
+    el.classList.remove(...FLASH_CLASSES);
     void el.offsetWidth;
     el.classList.add(cls);
     el.addEventListener("animationend", () => el.classList.remove(cls), { once: true });
+  }
+
+  // Which flash a live change deserves. mkio 0.5 says outright whether one
+  // came from a version cursor move — `cause` is "undo" or "redo" — and a
+  // record moving under you because someone stepped it along its versions
+  // is a different event from an edit, so each direction gets its own
+  // colour, wherever the step lands it: an ordinary change, a row arriving
+  // (undoing a delete, redoing an insert) or one leaving (undoing version
+  // 1), the last needing the fading `-out` shape so it still fades away.
+  function causeFlash(cause, fallback) {
+    if (cause !== "undo" && cause !== "redo") return fallback;
+    return `mkui-flash-${cause}${fallback === "mkui-flash-out" ? "-out" : ""}`;
   }
 
   /* ── Snapshot ingestion (chunked for large datasets) ─────────────── */
@@ -5598,7 +5616,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     renderChunk();
   }
 
-  function applyInsert(row) {
+  function applyInsert(row, cause = null) {
     if (asOfRef) return;   // a historic view takes no live changes
     if (!columns) {
       columns = inferColumns(row);
@@ -5609,12 +5627,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     render();
     notifyData();
     const tr = rowEls.get(row[idKey]);
-    if (tr) flash(tr, "mkui-flash-in");
+    if (tr) flash(tr, causeFlash(cause, "mkui-flash-in"));
     // A new child under a selected row joins its broadcast.
     if (tree && hasBroadcast() && inBroadcast(row[idKey])) broadcastSelection();
   }
 
-  function applyDelete(row) {
+  function applyDelete(row, cause = null) {
     if (asOfRef) return;   // a historic view takes no live changes
     const key = row[idKey];
     const prev = rows.get(key);
@@ -5645,7 +5663,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       // Fade out in place; render() no longer tracks this element, so it
       // is removed for real when the animation ends.
       rowEls.delete(key);
-      flash(tr, "mkui-flash-out");
+      flash(tr, causeFlash(cause, "mkui-flash-out"));
       tr.addEventListener("animationend", () => tr.remove(), { once: true });
     }
     render();
@@ -5666,12 +5684,14 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     notifyData();
   }
 
-  function applyReplace(row) {
+  function applyReplace(row, cause = null) {
     if (asOfRef) return;   // a historic view takes no live changes
     const key = row[idKey];
     const prev = rows.get(key);
     if (!prev) {
-      applyInsert(row);
+      // A redo can put back a record an undo took away, and it arrives as
+      // a replace of a row the table no longer holds.
+      applyInsert(row, cause);
       return;
     }
     bumpStats(row);
@@ -5720,14 +5740,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     const tr = rowEls.get(key);
     if (tr) {
-      // A record that steps *back* along its versions was undone, not
-      // edited — mkio's cursor moved down — and a row changing under you
-      // because someone undid something is a different event from one
-      // being edited, so it gets its own colour. An increase stays an
-      // ordinary update: a redo and a fresh edit both raise the counter by
-      // one, and nothing on the row says which it was.
+      // What moved this record: mkio says so outright when it was a
+      // cursor move. Failing that (a server before 0.5, or a projection
+      // that drops the counter) fall back to the old inference — a record
+      // that steps *back* along its versions was undone, not edited. That
+      // reading only ever caught half of it: a redo and a fresh edit both
+      // raise the counter by one, so an unattributed increase stays an
+      // ordinary update.
       const was = versionOf(prev), now = versionOf(row);
-      const cls = was != null && now != null && now < was ? "mkui-flash-undo" : "mkui-flash-update";
+      const fell = was != null && now != null && now < was;
+      const cls = causeFlash(cause, fell ? "mkui-flash-undo" : "mkui-flash-update");
       const changedCols = new Set(changed.map(([c]) => c));
       for (const c of visibleColumns()) {
         // Cells whose value changed re-render; display cells also re-render
@@ -5801,11 +5823,26 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (follow) scrollToTail();
       else maybeRestoreScroll();
     },
-    onUpdate: (op, row) => {
+    // mkio 0.5 hands live changes a third argument, `{ cause, ref,
+    // service, subid }`; `cause` is "undo"/"redo" for a version cursor
+    // move and absent for an ordinary write. Deltas carry none — no mkio
+    // service emits them — so every attributable change comes through here.
+    onUpdate: (op, row, info) => {
       const follow = shouldFollowTail();
-      if (op === "insert") applyInsert(row);
-      else if (op === "delete") applyDelete(row);
-      else applyReplace(row);
+      const cause = info?.cause ?? null;
+      // A named cursor move invalidates what the `state` probe cached for
+      // this record — whether it changed in place, arrived (a redone
+      // insert) or left (an undo at version 1), and whether or not it is
+      // selected. Only the selected path clears it otherwise, and
+      // `runProbe` will not re-ask while an entry stands: a record stepped
+      // by someone else while the user was looking elsewhere would go on
+      // answering "nothing is recorded above this version" for the rest of
+      // the pane's life. Dropping it is enough — the next selection
+      // schedules a probe, which now has nothing cached to short-circuit on.
+      if (cause) cursorCache.delete(row[idKey]);
+      if (op === "insert") applyInsert(row, cause);
+      else if (op === "delete") applyDelete(row, cause);
+      else applyReplace(row, cause);
       if (protocol === "stream" && row._mkio_ref) lastRef = row._mkio_ref;
       if (follow) scrollToTail();
       else maybeRestoreScroll();

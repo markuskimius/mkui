@@ -1789,13 +1789,30 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 }
 .mkui-history-step .mkui-icon { width: 13px; height: 13px; }
 
-/* A record stepping back along its recorded versions — someone undid it —
-   reads differently from an edit: amber rather than the accent. */
-@keyframes mkui-flash-undo {
-  0%   { background: #b5730f; }
+/* A record stepping along its recorded versions — someone undid or redid
+   it — reads differently from an edit: its own colour rather than the
+   accent, amber going back and violet coming forward. Two shapes, because
+   a cursor move can also bring a row into the table or take one out of it:
+   the plain one for a cell or an arriving row, the `-out` one fading the
+   way mkui-flash-out does so a leaving row still leaves. The colour rides
+   a custom property so each direction is one declaration. */
+@keyframes mkui-flash-cursor {
+  0%   { background: var(--mkui-flash-cursor); }
   100% { background: transparent; }
 }
-.mkui-flash-undo { animation: mkui-flash-undo 600ms ease forwards; }
+@keyframes mkui-flash-cursor-out {
+  0%   { background: var(--mkui-flash-cursor); opacity: 1; }
+  30%  { background: var(--mkui-flash-cursor); opacity: 1; }
+  100% { background: transparent; opacity: 0; }
+}
+.mkui-flash-undo,
+.mkui-flash-undo-out { --mkui-flash-cursor: #b5730f; }
+.mkui-flash-redo,
+.mkui-flash-redo-out { --mkui-flash-cursor: #7d5ba6; }
+.mkui-flash-undo,
+.mkui-flash-redo     { animation: mkui-flash-cursor 600ms ease forwards; }
+.mkui-flash-undo-out,
+.mkui-flash-redo-out { animation: mkui-flash-cursor-out 600ms ease forwards; }
 
 /* ─── As of: the table at a moment ──────────────────────────────────── */
 /* A bar between the toolbar and the table while a historic view is armed.

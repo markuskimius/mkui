@@ -402,6 +402,59 @@ test("menu shortcuts read as hints: muted, flipping with item hover", () => {
     "var(--mkui-accent-fg)");
 });
 
+test("every flash class the table can apply is styled", () => {
+  // The JS picks a flash class by name (`causeFlash` builds the cursor-move
+  // ones by concatenation), so a class it can apply with no rule behind it
+  // fails silently: no colour, and — worse for the `-out` shapes — no
+  // animationend, which is what removes a deleted row from the DOM.
+  const tableJs = readFileSync(
+    fileURLToPath(new URL("../mkui/static/src/widgets/mkio-table.js", import.meta.url)), "utf8");
+  const listed = tableJs.match(/const FLASH_CLASSES = \[([^\]]*)\]/);
+  assert.ok(listed, "FLASH_CLASSES must stay a literal list the test can read");
+  const names = [...listed[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(names.length >= 7, `expected every flash class, got ${names.join(", ")}`);
+  for (const n of names)
+    assert.match(css, new RegExp(`\\.${n}\\s*[,{]`), `${n} is applied by the table but never styled`);
+});
+
+test("a cursor move flashes its own colour, and still lets a leaving row leave", () => {
+  // Undo and redo share two keyframe shapes and differ only by the colour
+  // they hand them, so the directions must not collapse into one another.
+  // These classes are deliberately spread over two grouped rules — one
+  // handing out the colour, one the animation — so read every block whose
+  // selector list names the class rather than just the first.
+  const valueFor = (cls, prop) => {
+    const re = new RegExp(`([^{}]*)\\{([^}]*)\\}`, "g");
+    for (const [, sel, body] of css.matchAll(re)) {
+      if (!new RegExp(`\\${cls}\\s*[,{\\s]|\\${cls}$`).test(sel.trim())) continue;
+      const m = body.match(new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, "m"));
+      if (m) return m[1].trim();
+    }
+    assert.fail(`${cls} is missing declaration: ${prop}`);
+  };
+  const undo = valueFor(".mkui-flash-undo-out", "--mkui-flash-cursor");
+  const redo = valueFor(".mkui-flash-redo-out", "--mkui-flash-cursor");
+  assert.notEqual(undo, redo, "an undo and a redo must not read as the same event");
+  assert.equal(valueFor(".mkui-flash-undo", "--mkui-flash-cursor"), undo,
+    "a direction keeps one colour across both shapes");
+  for (const cls of [".mkui-flash-undo-out", ".mkui-flash-redo-out"])
+    assert.match(valueFor(cls, "animation"), /mkui-flash-cursor-out/, `${cls} takes the fading shape`);
+  for (const cls of [".mkui-flash-undo", ".mkui-flash-redo"])
+    assert.match(valueFor(cls, "animation"), /mkui-flash-cursor\s/, `${cls} takes the plain shape`);
+
+  const block = (kf) => {
+    const i = css.indexOf(`@keyframes ${kf}`);
+    assert.ok(i >= 0, `${kf} keyframes must exist`);
+    return css.slice(i, css.indexOf("\n}", i) + 2);
+  };
+  // The `-out` shape carries the row away: a deleted row is removed on
+  // animationend, and until then it must not sit at full opacity.
+  assert.match(block("mkui-flash-cursor-out"), /100%\s*\{[^}]*opacity:\s*0/);
+  // The plain shape is for cells and arriving rows, which stay put.
+  assert.ok(!/opacity/.test(block("mkui-flash-cursor")),
+    "the plain shape must not fade the element it flashes");
+});
+
 test("copy flash fades to each element's own resting background", () => {
   // The keyframes must start at the accent and declare NO end frame: the
   // animation then interpolates to the element's computed background (the
