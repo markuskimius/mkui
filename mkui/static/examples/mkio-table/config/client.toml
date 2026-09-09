@@ -10,15 +10,6 @@ background = "#b8b8b8"
 # ─── Menubar ──────────────────────────────────────────────────────────
 
 [[menubar]]
-label = "Edit"
-items = [
-  { label = "Copy", action = "edit.copy", shortcut = "mod+C" },
-  { sep = true },
-  { label = "Select All", action = "edit.selectAll", shortcut = "mod+A" },
-  { label = "Find…", action = "edit.find", shortcut = "mod+F" },
-]
-
-[[menubar]]
 label = "Orders"
 items = [
   { label = "All Orders", action = "pane.show", args = "all-orders" },
@@ -28,21 +19,12 @@ items = [
 ]
 
 [[menubar]]
-label = "Record"
+label = "Edit"
 items = [
-  # The version timeline for whatever All Orders has selected: the chain
-  # as a table, with a diff and a blame view under it. One history pane
-  # per table, re-pointed as the selection moves rather than re-opened.
-  { label = "History…", action = "table.history", args = { pane = "all-orders" } },
-  # `keys` names the record instead, so a menu item can be a deep link.
-  { label = "History of order 1", action = "table.history", args = { pane = "all-orders", keys = ["1"] } },
+  { label = "Copy", action = "edit.copy", shortcut = "mod+C" },
   { sep = true },
-  # The steps the All Orders toolbar's Undo and Redo take, on the focused
-  # pane. Deliberately without a shortcut: this writes to shared state.
-  { label = "Undo record", action = "edit.undo" },
-  { label = "Redo record", action = "edit.redo" },
-  { sep = true },
-  { label = "Audit Tape", action = "pane.show", args = "audit-tape" },
+  { label = "Select All", action = "edit.selectAll", shortcut = "mod+A" },
+  { label = "Find…", action = "edit.find", shortcut = "mod+F" },
 ]
 
 [[menubar]]
@@ -71,6 +53,24 @@ items = [
   { label = "Order Tree: expand all", action = "table.expand", args = { pane = "order-tree", depth = "all" } },
   { label = "Order Tree: children only", action = "table.expand", args = { pane = "order-tree", depth = 1 } },
   { label = "Order Tree: collapse all", action = "table.expand", args = { pane = "order-tree" } },
+]
+
+[[menubar]]
+label = "Record"
+items = [
+  # The version timeline for whatever All Orders has selected: the chain
+  # as a table, with a diff and a blame view under it. One history pane
+  # per table, re-pointed as the selection moves rather than re-opened.
+  { label = "History…", action = "table.history", args = { pane = "all-orders" } },
+  # `keys` names the record instead, so a menu item can be a deep link.
+  { label = "History of order 1", action = "table.history", args = { pane = "all-orders", keys = ["1"] } },
+  { sep = true },
+  # The steps the All Orders toolbar's Undo and Redo take, on the focused
+  # pane. Deliberately without a shortcut: this writes to shared state.
+  { label = "Undo record", action = "edit.undo" },
+  { label = "Redo record", action = "edit.redo" },
+  { sep = true },
+  { label = "Audit Tape", action = "pane.show", args = "audit-tape" },
 ]
 
 [[menubar]]

@@ -23,6 +23,7 @@ inert — so they are caught by reading the two files against each other.
 
 import asyncio
 import json
+import re
 import time
 import unittest
 from pathlib import Path
@@ -235,6 +236,52 @@ class TestClientServerWiring(unittest.TestCase):
                     control, DEFAULT_NAME,
                     f"{name}: `mkui serve` installs the control service as {DEFAULT_NAME!r}",
                 )
+
+
+SRC = Path(__file__).resolve().parent.parent / "mkui" / "static" / "src"
+
+# `app.quit` is the one action `fireAction` handles itself (core.js); every
+# other built-in is registered by name, so the source is the list.
+QUIT = "app.quit"
+
+
+def registered_actions(root):
+    """Every name passed to `registerAction("<name>", …)` under a JS tree."""
+    names = set()
+    for path in sorted(root.rglob("*.js")):
+        names |= set(re.findall(r'registerAction\(\s*"([^"]+)"', path.read_text()))
+    return names
+
+
+BUILTIN_ACTIONS = registered_actions(SRC) | {QUIT}
+
+
+def example_actions(name):
+    """Built-ins plus whatever this example's own JS registers."""
+    return BUILTIN_ACTIONS | registered_actions(EXAMPLES / name / "static")
+
+
+def menus(client):
+    return client.get("menubar", []) or []
+
+
+def button_actions(client):
+    """(pane id, button, action name) for every `type = "action"` button."""
+    out = []
+    for pid, spec in panes(client).items():
+        for btn in (spec.get("buttons") if isinstance(spec, dict) else None) or []:
+            act = btn.get("action")
+            if isinstance(act, dict) and act.get("type") == "action":
+                out.append((pid, btn, act.get("name")))
+    return out
+
+
+def opened_panes(client):
+    """The panes the config's frames open at startup."""
+    out = set()
+    for frame in client.get("frames", []) or []:
+        out |= set(layout_panes(frame.get("layout")))
+    return out
 
 
 class TestPaneWiring(unittest.TestCase):
@@ -454,6 +501,136 @@ class TestHistoryWiring(unittest.TestCase):
                 self.assertNotIn("order_versions_typo", declared)
                 pid, hist = history_blocks(client)[0]
                 self.assertIn(hist.get("versions"), declared)
+
+
+
+class TestMenubarWiring(unittest.TestCase):
+    """What a menu item promises about the app behind it.
+
+    A menubar fails quietly in exactly the way the rest of this file is about:
+    `fireAction` warns to a console nobody is reading and the item does
+    nothing, so a renamed action, a `layout.*` item in an app with no
+    `[layouts]` block, or a pane that no menu can reach all look like a menu
+    that is simply broken. Reading the config against the source that
+    registers the actions catches them here instead.
+    """
+
+    def test_at_least_one_example_has_a_menubar(self):
+        """Guards the rest of this class against passing vacuously."""
+        self.assertTrue(
+            [e for e in examples() if menus(e[2])],
+            "no example declares a menubar any more",
+        )
+
+    def test_the_builtin_action_list_was_actually_found(self):
+        """The negative control for the scrape: it is a regex over the source."""
+        for name in ("pane.show", "window.grid", "edit.copy", "table.history"):
+            self.assertIn(name, BUILTIN_ACTIONS, f"{name!r} is no longer registered")
+        self.assertNotIn("table.nope", BUILTIN_ACTIONS)
+
+    def test_every_menu_action_is_one_the_app_registers(self):
+        seen = 0
+        for name, _server, client in examples():
+            known = example_actions(name)
+            for item in menu_items(client):
+                action = item.get("action")
+                if action is None:
+                    continue
+                seen += 1
+                with self.subTest(example=name, item=item.get("label")):
+                    self.assertIn(
+                        action, known,
+                        f"{name}: menu item {item.get('label')!r} fires "
+                        f"{action!r}, which nothing registers",
+                    )
+        self.assertTrue(seen, "no menu item fires an action any more")
+
+    def test_every_button_action_is_one_the_app_registers(self):
+        for name, _server, client in examples():
+            known = example_actions(name)
+            for pid, btn, action in button_actions(client):
+                with self.subTest(example=name, pane=pid, button=btn.get("label")):
+                    self.assertIn(
+                        action, known,
+                        f"{name}: {pid}'s {btn.get('label')!r} button fires "
+                        f"{action!r}, which nothing registers",
+                    )
+
+    def test_layout_items_require_a_layouts_block(self):
+        """`layout.*` and `layouts = true` are inert without `[layouts]`."""
+        for name, _server, client in examples():
+            has_layouts = bool(client.get("layouts"))
+            for item in menu_items(client):
+                wants = (item.get("action") or "").startswith("layout.") or item.get("layouts")
+                if not wants:
+                    continue
+                with self.subTest(example=name, item=item.get("label")):
+                    self.assertTrue(
+                        has_layouts,
+                        f"{name}: menu item {item.get('label')!r} saves or "
+                        f"restores layouts, but the config has no [layouts] block",
+                    )
+
+    def test_an_expanding_item_carries_nothing_of_its_own(self):
+        """`windows` / `layouts` items are replaced wholesale when the menu
+        opens, so an `action` or `items` on one is silently dropped."""
+        seen = 0
+        for name, _server, client in examples():
+            for item in menu_items(client):
+                kinds = [k for k in ("windows", "layouts") if item.get(k)]
+                if not kinds:
+                    continue
+                seen += 1
+                with self.subTest(example=name, item=item.get("label"), kind=kinds[0]):
+                    self.assertEqual(len(kinds), 1, "an item expands one way")
+                    self.assertIsNone(
+                        item.get("action"),
+                        f"{name}: {kinds[0]} item also names an action",
+                    )
+                    self.assertIsNone(
+                        item.get("items"),
+                        f"{name}: {kinds[0]} item also names its own submenu",
+                    )
+        self.assertTrue(seen, "no menu item expands any more")
+
+    def test_every_menubar_lists_the_open_panes(self):
+        """A frame raised behind another, or a pane sharing a frame's tab bar,
+        is reachable only through the `windows = true` expansion."""
+        for name, _server, client in examples():
+            with self.subTest(example=name):
+                self.assertTrue(
+                    any(it.get("windows") for it in menu_items(client)),
+                    f"{name}: no menu expands into the open panes "
+                    f"({{ windows = true }}), so a buried pane cannot be raised",
+                )
+
+    def test_a_parked_pane_has_a_menu_item_of_its_own(self):
+        """`windows = true` lists *open* panes, so one no frame opens needs an
+        explicit `pane.show` or nothing can ever open it."""
+        for name, _server, client in examples():
+            shown = {
+                it.get("args") for it in menu_items(client)
+                if it.get("action") == "pane.show" and isinstance(it.get("args"), str)
+            }
+            # A history pane is opened by `table.history`, not by id.
+            for pid in sorted(set(panes(client)) - opened_panes(client)):
+                with self.subTest(example=name, pane=pid):
+                    self.assertIn(
+                        pid, shown,
+                        f"{name}: pane {pid!r} is in no frame and in no menu, "
+                        f"so nothing can open it",
+                    )
+
+    def test_menu_labels_are_unique(self):
+        """Two dropdowns with one name is a config mistake, not a feature."""
+        for name, _server, client in examples():
+            labels = [m.get("label") for m in menus(client)]
+            with self.subTest(example=name):
+                self.assertEqual(
+                    len(labels), len(set(labels)),
+                    f"{name}: duplicate menubar labels {labels}",
+                )
+                self.assertTrue(all(labels), f"{name}: a menu has no label")
 
 
 if __name__ == "__main__":

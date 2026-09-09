@@ -889,5 +889,7 @@ tests/
   test_control.py        ControlService: push actions to browsers (unittest)
   test_examples.py       Each example config against its server: the
                          [mkio.expect] pins, pane services, history
-                         blocks, menu and frame pane ids (unittest)
+                         blocks, menu and frame pane ids, and every
+                         menu and button action against the ones the
+                         app registers (unittest)
 ```

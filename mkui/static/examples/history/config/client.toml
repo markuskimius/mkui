@@ -26,6 +26,14 @@ items = [
 ]
 
 [[menubar]]
+label = "Edit"
+items = [
+  { label = "Copy", action = "edit.copy", shortcut = "mod+C" },
+  { label = "Select All", action = "edit.selectAll", shortcut = "mod+A" },
+  { label = "Find…", action = "edit.find", shortcut = "mod+F" },
+]
+
+[[menubar]]
 label = "View"
 items = [
   { label = "Tape: inserts only", action = "table.filter", args = { pane = "tape", filters = { _mkio_op = ["insert"] } } },
@@ -37,11 +45,15 @@ items = [
 ]
 
 [[menubar]]
-label = "Edit"
+label = "Window"
 items = [
-  { label = "Copy", action = "edit.copy", shortcut = "mod+C" },
-  { label = "Select All", action = "edit.selectAll", shortcut = "mod+A" },
-  { label = "Find…", action = "edit.find", shortcut = "mod+F" },
+  { label = "Tile Horizontally", action = "window.tileH" },
+  { label = "Tile Vertically", action = "window.tileV" },
+  { label = "Grid", action = "window.grid" },
+  { label = "Cascade", action = "window.cascade" },
+  { sep = true },
+  # One item per open pane, rebuilt each time the menu opens.
+  { windows = true },
 ]
 
 # ─── The live table ───────────────────────────────────────────────────
