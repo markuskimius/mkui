@@ -249,7 +249,8 @@ test("showPaneHistory registers one history pane per table and shows it", () => 
   ws._panes.set("a", { title: "Orders" });
   assert.equal(ws.showPaneHistory("a"), true);
   assert.deepEqual(log[0], ["register", "_history:a", {
-    type: "mkio-history", source: "a", title: "History — Orders",
+    // Plain: the record it lands on names the tab from here.
+    type: "mkio-history", source: "a", title: "History",
   }]);
   assert.deepEqual(log[1], ["show", "_history:a"]);
 
@@ -259,6 +260,108 @@ test("showPaneHistory registers one history pane per table and shows it", () => 
   log.length = 0;
   ws.showPaneHistory("a");
   assert.deepEqual(log, [["show", "_history:a"], ["refresh"]]);
+});
+
+/* ── Detail windows ───────────────────────────────────────────────────── */
+
+// A pane with a `_record` hook, as `attachRecord` installs it.
+function recordPane(log, id, spec = { listening: true, retain: false }) {
+  let record = null;
+  return {
+    dataset: { id },
+    _record: {
+      get: () => record,
+      set: (key) => { record = key ? { key, row: key, of: 1, from: "manual" } : null; log.push(["set", id, key]); },
+      follow: (s, o) => { log.push(["follow", id, s, o]); spec = { ...spec, ...(s ?? {}) }; return true; },
+      config: () => spec,
+      on: (fn) => { log.push(["on", id]); return () => log.push(["off", id]); },
+      refresh: () => log.push(["refresh", id]),
+    },
+  };
+}
+
+test("the record API reaches the pane's hook, and says when there is none", () => {
+  const log = [];
+  const ws = makeWorkspace(log);
+  ws._panes.set("detail", {});
+  ws._paneEls.set("detail", recordPane(log, "detail"));
+
+  assert.equal(ws.setPaneRecord("detail", { id: 4711 }), true);
+  assert.deepEqual(ws.getPaneRecord("detail").key, { id: 4711 });
+  assert.equal(ws.setPaneRecordSource("detail", { listen: { order_id: "id" } }, { merge: true }), true);
+  assert.deepEqual(ws.getPaneRecordSource("detail"), { listening: true, retain: false, listen: { order_id: "id" } });
+  assert.equal(typeof ws.onPaneRecord("detail", () => {}), "function");
+
+  // A table has no record to show, and says so rather than throwing.
+  assert.equal(ws.setPaneRecord("a", { id: 1 }), false);
+  assert.equal(ws.getPaneRecord("a"), null);
+  assert.equal(ws.getPaneRecordSource("a"), null);
+  assert.equal(ws.onPaneRecord("a", () => {}), null);
+});
+
+test("paneRows reads the rows a pane's selection implies, history hook first", () => {
+  const ws = makeWorkspace([]);
+  const rows = [{ id: 1 }];
+  ws._paneEls.set("h", { _history: { rows: () => rows }, _data: { selected: () => [] } });
+  ws._paneEls.set("t", { _data: { selected: () => rows } });
+  ws._paneEls.set("bare", {});
+  assert.deepEqual(ws.paneRows("h"), rows, "a table with a history block knows which rows are records");
+  assert.deepEqual(ws.paneRows("t"), rows);
+  assert.deepEqual(ws.paneRows("bare"), []);
+  assert.deepEqual(ws.paneRows("never-opened"), [], "an unopened pane has no selection to speak of");
+});
+
+test("showPaneRecord raises the window and hands it the table's row", () => {
+  const log = [];
+  const ws = makeWorkspace(log);
+  const row = { id: 5, symbol: "AAPL" };
+  ws._panes.set("detail", {});
+  ws._paneEls.set("orders", { _data: { selected: () => [row] } });
+  ws._paneEls.set("detail", recordPane(log, "detail"));
+  ws.showPane = (id) => log.push(["show", id]);
+
+  assert.equal(ws.showPaneRecord("detail", { from: "orders" }), true);
+  assert.deepEqual(log, [["show", "detail"], ["set", "detail", row]],
+    "every field goes, so the pane picks whichever columns are its key");
+  assert.equal(ws.showPaneRecord(null), false, "a detail window has to be named");
+});
+
+test("showPaneRecord waits for a pane whose factory is still settling", async () => {
+  const log = [];
+  const ws = makeWorkspace(log);
+  ws._panes.set("detail", {});
+  ws._paneEls.set("orders", { _data: { selected: () => [{ id: 5 }] } });
+  let resolve;
+  const el = { dataset: { id: "detail" }, _ready: new Promise((r) => { resolve = r; }) };
+  ws._paneEls.set("detail", el);
+  ws.showPane = () => {};
+  assert.equal(ws.showPaneRecord("detail", { from: "orders" }), true);
+  Object.assign(el, recordPane(log, "detail"));
+  resolve();
+  await el._ready;
+  await Promise.resolve();
+  assert.deepEqual(log.at(-1), ["set", "detail", { id: 5 }]);
+});
+
+test("a detail window names its own tab, until the user names it", () => {
+  const ws = makeWorkspace([]);
+  const rendered = [];
+  ws._retitle = (id) => rendered.push(id);
+  ws._panes.set("detail", { title: "Order" });
+
+  assert.equal(ws.setPaneAutoTitle("detail", "4711"), true);
+  assert.equal(ws._panes.get("detail").title, "Order — 4711");
+  assert.equal(ws.setPaneAutoTitle("detail", "4711"), false, "the same record does not re-render the tab");
+  // The suffix never accumulates: the configured title is remembered.
+  ws.setPaneAutoTitle("detail", "4712");
+  assert.equal(ws._panes.get("detail").title, "Order — 4712");
+  ws.setPaneAutoTitle("detail", "");
+  assert.equal(ws._panes.get("detail").title, "Order", "an empty window goes back to its plain name");
+
+  ws.renamePane("detail", "My order");
+  assert.equal(ws.setPaneAutoTitle("detail", "4713"), false, "the name the user typed is theirs");
+  assert.equal(ws._panes.get("detail").title, "My order");
+  assert.equal(ws.setPaneAutoTitle("never-registered", "x"), false);
 });
 
 test("showPaneHistory declines a pane with no history to read", () => {

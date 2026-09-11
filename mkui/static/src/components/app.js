@@ -97,6 +97,20 @@ class MkuiApp extends HTMLElement {
     // history pane for the selected record of a table with a `history`
     // block; `keys` selects those rows first, so a link can name a record.
     this._app.registerAction("table.history",   (app, a = {}) => ws.showPaneHistory(a.pane ?? null, a.keys ?? null));
+    // Detail windows. `record.show` puts one record on show: `args =
+    // { pane, key = { col: value } }`, or no `key` to empty it.
+    this._app.registerAction("record.show",     (app, a = {}) => ws.setPaneRecord(a.pane ?? null, a.key ?? null));
+    // `record.follow` says where a window gets its records: `args =
+    // { pane, listen | follow | state | key, retain, listening, merge }`,
+    // the same shape as the pane's `record` block. No source at all
+    // leaves the window following nothing.
+    this._app.registerAction("record.follow",   (app, a = {}) => {
+      const { pane = null, merge, record, ...flat } = a;
+      return ws.setPaneRecordSource(pane, record ?? (Object.keys(flat).length ? flat : null), { merge: merge === true });
+    });
+    // Send a table's selected record to a detail window: `args =
+    // { pane, from }` — `from` the table, else the focused pane.
+    this._app.registerAction("table.record",    (app, a = {}) => ws.showPaneRecord(a.pane ?? null, { from: a.from ?? null }));
 
     const hasAuth = !!config.auth;
     const st = this._app.state;

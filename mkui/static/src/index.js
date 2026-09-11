@@ -7,6 +7,7 @@ import "./widgets/text.js";
 import "./widgets/button.js";
 import "./widgets/mkio-table.js";
 import "./widgets/mkio-history.js";
+import "./widgets/mkio-record.js";
 
 export {
   VERSION, version,
@@ -16,6 +17,9 @@ export {
   getWidget, getPaneType,
 } from "./core.js";
 export { ensureMkio } from "./mkio-bridge.js";
+// The record subject: what a custom detail pane needs to follow the link
+// hub the way the built-in ones do (see lib/subject.js).
+export { attachRecord, RecordFollower, parseRecordSpec, recordFilter } from "./lib/subject.js";
 
 // Convenience global for non-module <script> users.
 import * as Mkui from "./core.js";

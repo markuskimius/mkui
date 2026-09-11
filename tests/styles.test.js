@@ -660,3 +660,26 @@ test("switched-off filters: the chip dims, the header icon dims last, the checkb
   assert.equal(declaration(".mkui-filter-applied", "display"), "inline-flex");
   assert.equal(declaration(".mkui-filter-applied:hover", "text-decoration"), "none");
 });
+
+test("a detail window's styled value takes its background from the cell variable", () => {
+  // `mkio-record` shares `mkio-table`'s styler (lib/styles.js), which never
+  // writes a background inline — it sets --mkui-cell-bg and the marker
+  // class, so a theme (and any tint layered over it) stays in charge.
+  assert.equal(declaration(".mkui-record-fvalue.mkui-cell-styled", "background"),
+    "var(--mkui-cell-bg)");
+});
+
+test("the subject strip's toolbar sits outside the scrolling field list", () => {
+  // The pin must never scroll away: a window frozen on a record with no
+  // visible way to unfreeze it is a trap.
+  assert.ok(/flex\s*:\s*0 0 auto/.test(rule(".mkui-record-toolbar")),
+    "the toolbar keeps its height");
+  assert.ok(/overflow\s*:\s*auto/.test(rule(".mkui-record-body")),
+    "only the field list scrolls");
+});
+
+test("a pinned window's pin reads as pressed, like any toolbar toggle", () => {
+  assert.equal(declaration(".mkui-record-pin.active", "border-color"), "var(--mkui-accent)");
+  // And its chip dims exactly as a paused link chip does.
+  assert.ok(css.includes(".mkui-chip-record"), "the subject chip is a chip");
+});

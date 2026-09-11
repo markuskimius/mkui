@@ -203,6 +203,12 @@ function makeWorkspace(opts = {}) {
       ? { spec: opts.history ?? HISTORY, rows: () => rows,
           columns: () => opts.srcColumns ?? ["id", "qty", "status"] } : null),
     onPaneSelection: (id, fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+    // What a `record.follow` pane reads: the rows the table's selection
+    // implies.
+    paneRows: (id) => (id === "orders" ? rows : []),
+    // The tab is where the record's name lives now.
+    setPaneAutoTitle(id, text) { this.tab = text; return true; },
+    tab: null,
     // Test controls: change the table's selection and notify followers.
     select(next) { rows = next; for (const fn of listeners) fn(); },
     listeners,
@@ -216,6 +222,7 @@ async function makePane(opts = {}) {
   stub = null;
   const host = mockEl("div");
   const paneEl = mockEl("mkui-pane");
+  paneEl.dataset.id = "history";   // as the workspace stamps it
   const ws = makeWorkspace(opts);
   host._closest = (sel) => (sel === "mkui-workspace" ? ws : sel === "mkui-pane" ? paneEl : null);
   const state = makeState();
@@ -247,8 +254,10 @@ const fields = (host) => findAll(host, "mkui-history-field").map((f) => [
   find(f, "mkui-history-from").textContent,
   find(f, "mkui-history-to").textContent,
 ]);
-const headText = (host) => find(host, "mkui-history-title").textContent;
-const subText = (host) => find(host, "mkui-history-sub").textContent;
+const atText = (host) => find(host, "mkui-history-at")?.textContent ?? null;
+const chipText = (host) => find(host, "mkui-chip-record")?.textContent ?? null;
+const chipOff = (host) => !!find(host, "mkui-chip-record")?.classList.contains("mkui-chip-off");
+const pinBtn = (host) => find(host, "mkui-record-pin");
 const pairText = (host) => find(host, "mkui-history-pair")?.textContent ?? null;
 const emptyText = (host) => find(host, "mkui-history-empty")?.textContent ?? null;
 const click = (node, ev = {}) => {
@@ -280,7 +289,7 @@ test("a table with no `history` block at all says that", async () => {
 /* ── The version list ─────────────────────────────────────────────────── */
 
 test("the versions are a table over the feed, narrowed to the record", async () => {
-  const { host, table } = await makePane({ rows: [liveRow()] });
+  const { host, table, ws } = await makePane({ rows: [liveRow()] });
   const t = table();
   assert.equal(t.spec.service, "order_history");
   assert.equal(t.spec.protocol, "query");
@@ -288,7 +297,7 @@ test("the versions are a table over the feed, narrowed to the record", async () 
   assert.equal(t.spec.sort, "_mkio_version", "oldest first: the chain in the order it happened");
   assert.deepEqual(t.spec.columns, ["_mkio_version", "_mkio_op", "_mkio_user", "_mkio_ref", "id", "qty", "status"],
     "mkio's own columns first, then the record's as the source table has them");
-  assert.equal(headText(host), "orders O1");
+  assert.equal(ws.tab, "O1", "the record names the tab, not a head");
   assert.deepEqual(requests, [], "the chain is the table's rows, not a second read");
 });
 
@@ -307,10 +316,9 @@ test("a composite key filters on every column", async () => {
   assert.equal(table().spec.filter, "book == 'A' && id == 2");
 });
 
-test("the head says where the row sits and what is left above it", async () => {
+test("the panel says where in its chain the record stands", async () => {
   const { host } = await makePane({ rows: [liveRow(2)] });   // undone once
-  assert.match(subText(host), /v2 of 3/);
-  assert.match(subText(host), /1 version ahead/);
+  assert.match(atText(host), /v2 of 3/);
 });
 
 test("a record undone out of existence reads as removed", async () => {
@@ -319,15 +327,7 @@ test("a record undone out of existence reads as removed", async () => {
     rows: [{ id: "O1" }],
     replies: { order_state: { type: "reply", rows: [{ current: null, top: 3 }] } },
   });
-  assert.match(subText(host), /removed/);
-});
-
-test("archived versions are called out in the head", async () => {
-  const { host } = await makePane({
-    rows: [liveRow(6)],
-    chain: [hrow(1, "insert", "a", { qty: 1 }), hrow(5, "update", "a", { qty: 5 }), hrow(6, "update", "a", { qty: 6 })],
-  });
-  assert.match(subText(host), /archived versions missing/);
+  assert.match(atText(host), /removed/);
 });
 
 /* ── The diff ─────────────────────────────────────────────────────────── */
@@ -424,11 +424,11 @@ test("a display template that will not compile leaves the value plain", async ()
 
 test("the pane follows the table's selection, re-aiming the same table", async () => {
   const { host, ws, table } = await makePane({ rows: [liveRow()] });
-  assert.equal(headText(host), "orders O1");
+  assert.equal(ws.tab, "O1");
   const before = table();
   ws.select([{ id: "O2", qty: 9, _mkio_version: 1 }]);
   await flush();
-  assert.equal(headText(host), "orders O2");
+  assert.equal(ws.tab, "O2");
   assert.equal(table(), before, "the table is re-aimed, not rebuilt: its columns and filters stay");
   assert.deepEqual(table().sources, ["id == 'O1'", "id == 'O2'"]);
   assert.match(emptyText(host), /No versions are recorded/, "and it holds nothing until the rows land");
@@ -453,10 +453,10 @@ test("clearing the selection empties the pane", async () => {
   assert.match(emptyText(host), /Select a row/);
 });
 
-test("with several rows selected the first is shown, and the pane says so", async () => {
-  const { host } = await makePane({ rows: [liveRow(), { id: "O2", _mkio_version: 1 }] });
-  assert.equal(headText(host), "orders O1");
-  assert.match(subText(host), /first of 2 selected/);
+test("with several rows selected the first is shown, and the chip says so", async () => {
+  const { host, ws } = await makePane({ rows: [liveRow(), { id: "O2", _mkio_version: 1 }] });
+  assert.equal(ws.tab, "O1");
+  assert.match(find(host, "mkui-chip-record").title, /2 records/);
 });
 
 /* ── Keys and errors ──────────────────────────────────────────────────── */
@@ -500,7 +500,7 @@ test("a `state` service that refuses is a warning, not a dead pane", async () =>
       replies: { order_state: { type: "error", message: "not permitted" } },
     });
     assert.equal(pairText(host), "v2 → v3", "the chain still reads");
-    assert.match(subText(host), /3 versions/, "the cursor is simply unknown");
+    assert.match(atText(host), /3 versions/, "the cursor is simply unknown");
   } finally {
     console.warn = orig;
   }
@@ -705,6 +705,7 @@ test("the view controls sit in the versions table's toolbar; copy sits with what
   const { host, paneEl, table } = await makePane({ rows: [liveRow()] });
   const extras = paneEl._toolbar.extras();
   assert.deepEqual(extras._ch.map((n) => n.className), [
+    "mkui-record-subject",                             // the pin and the subject chip lead
     "mkui-history-views",                              // one-of-two: a segmented control
     "mkui-btn mkui-toolbar-btn mkui-history-toggle",   // on/off: the toolbar's button, pressed when on
   ]);
@@ -712,7 +713,7 @@ test("the view controls sit in the versions table's toolbar; copy sits with what
   // Copy acts on the panel, so it lives in the panel's own header.
   const head = find(host, "mkui-history-diffhead");
   assert.deepEqual(head._ch.map((n) => n.className),
-    ["mkui-history-pair", "mkui-history-count", "mkui-history-copy"]);
+    ["mkui-history-pair", "mkui-history-count", "mkui-history-at", "mkui-history-copy"]);
 });
 
 test("the controls are placed once, however many times the panel renders", async () => {

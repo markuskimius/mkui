@@ -16,6 +16,7 @@ them::
     async def on_started():
         await control.link("executions", listen={"order_id": "parent_order_id"})
         await control.link("orders", broadcast={"order_id": "id"})
+        await control.record("order_detail", listen={"order_id": "id"})
         await control.send("table.filter", {"pane": "orders", "filters": {"status": ["open"]}})
 
     app.on_startup(on_started)
@@ -167,6 +168,62 @@ class ControlService(Service):
             link["listening"] = listening
         args["link"] = link
         return await self.send("table.link", args, user=user)
+
+    async def record(
+        self,
+        pane: str | None,
+        key: dict[str, Any] | None = None,
+        *,
+        listen: dict[str, Any] | None = None,
+        follow: str | None = None,
+        state: str | None = None,
+        pin: bool | None = None,
+        retain: bool | None = None,
+        title: str | None = None,
+        merge: bool = True,
+        user: str | None = None,
+    ) -> int:
+        """Drive a detail window — ``mkio-record``, ``mkio-history``, or any
+        pane an application built on ``attachRecord``.
+
+        With ``key`` it fires ``record.show``: that record, now::
+
+            await control.record("order_detail", {"id": 4711})
+
+        Otherwise it fires ``record.follow``, saying where the window gets
+        its records — ``listen`` (a map of broadcast name to key column,
+        putting the window on the link hub), ``follow`` (a pane whose
+        selection it tracks), or ``state`` (a state path a row is
+        published to). ``pin=True`` freezes the window on the record it
+        holds, ``retain`` keeps the last record when the source clears,
+        and ``title`` is the template naming its tab. Under ``merge`` (the
+        default) only what is given changes. ``pane=None`` targets the
+        focused pane.
+        """
+        if key is not None:
+            args: dict[str, Any] = {"key": key}
+            if pane is not None:
+                args["pane"] = pane
+            return await self.send("record.show", args, user=user)
+
+        args = {"merge": merge}
+        if pane is not None:
+            args["pane"] = pane
+        record: dict[str, Any] = {}
+        if listen is not None:
+            record["listen"] = listen
+        if follow is not None:
+            record["follow"] = follow
+        if state is not None:
+            record["state"] = state
+        if retain is not None:
+            record["retain"] = retain
+        if pin is not None:
+            record["listening"] = not pin
+        if title is not None:
+            record["title"] = title
+        args["record"] = record
+        return await self.send("record.follow", args, user=user)
 
 
 def install(app: Any, name: str = DEFAULT_NAME, config: dict[str, Any] | None = None) -> ControlService:

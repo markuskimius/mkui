@@ -268,6 +268,71 @@ class MkuiWorkspace extends HTMLElement {
     return this._paneHook(paneId, "_history", false);
   }
 
+  // The rows a pane's selection implies — what a detail window follows
+  // when its `record.follow` names this pane. A table with a `history`
+  // block answers through that hook (it knows which rows are records);
+  // any other table answers with its selected rows. Never builds a pane:
+  // an unopened one has no selection to speak of.
+  paneRows(paneId) {
+    const el = paneId == null ? this.activePaneEl() : this._paneEls.get(paneId);
+    if (!el) return [];
+    return el._history?.rows?.() ?? el._data?.selected?.() ?? [];
+  }
+
+  // The record a detail pane is about: `key` maps its key columns to
+  // values, `null` empties it. Returns whether a pane took it.
+  setPaneRecord(paneId, key) {
+    const hook = this._paneHook(paneId, "_record", true);
+    if (!hook) return false;
+    hook.set(key);
+    return true;
+  }
+
+  // `{ key, row, of, from }` — the record on show and where it came from
+  // — or null without a record hook.
+  getPaneRecord(paneId) {
+    return this._paneHook(paneId, "_record", false)?.get() ?? null;
+  }
+
+  // Where a detail pane gets its subject: the shape its `record` block
+  // takes (`{ follow | listen | state | key, retain, listening, title }`).
+  // Under `merge` only the keys given change. Returns whether a pane
+  // took it.
+  setPaneRecordSource(paneId, spec, opts = {}) {
+    const hook = this._paneHook(paneId, "_record", true);
+    if (!hook) return false;
+    return hook.follow(spec, opts) !== false;
+  }
+
+  // The same shape back, or null without a record hook.
+  getPaneRecordSource(paneId) {
+    return this._paneHook(paneId, "_record", false)?.config() ?? null;
+  }
+
+  // Subscribe to a pane's record: `fn` runs on every change, and the
+  // returned function unsubscribes. null when the pane has no record.
+  onPaneRecord(paneId, fn) {
+    return this._paneHook(paneId, "_record", false)?.on?.(fn) ?? null;
+  }
+
+  // Send a table's selected record to a detail pane: raise it, then hand
+  // it the row (every field, so the pane picks whichever columns are its
+  // key). `from` names the table, else the focused pane answers. This is
+  // the `table.record` action — the way to fill a detail window that
+  // listens for nothing.
+  showPaneRecord(paneId, opts = {}) {
+    if (paneId == null) return false;
+    const row = this.paneRows(opts.from ?? null)[0] ?? null;
+    this.showPane(paneId);
+    const el = this._paneEls.get(paneId);
+    // A pane built just now installs its hook as its factory settles.
+    if (el && !el._record && el._ready) {
+      el._ready.then(() => el._record?.set(row));
+      return true;
+    }
+    return this.setPaneRecord(paneId, row);
+  }
+
   // Open (or raise) the history pane for a table pane's selected record:
   // one history pane per table, so firing it again re-points the one that
   // is open rather than piling up windows. `keys` selects those rows in
@@ -281,8 +346,11 @@ class MkuiWorkspace extends HTMLElement {
 
     const id = `_history:${srcId}`;
     if (!this._panes.has(id)) {
-      const title = this._panes.get(srcId)?.title ?? srcId;
-      this.registerPane(id, { type: "mkio-history", source: srcId, title: `History — ${title}` });
+      // Just "History": the record it lands on names the tab from there
+      // (`setPaneAutoTitle`), and "History — 4711" is what tells two of
+      // these apart — the table's name would only push the record's off
+      // the end of a crowded tab bar.
+      this.registerPane(id, { type: "mkio-history", source: srcId, title: "History" });
     }
     this.showPane(id);
     // An open pane re-reads the selection; a pane built just now reads it
@@ -552,6 +620,10 @@ class MkuiWorkspace extends HTMLElement {
       if (el._sort) st.sort = el._sort.get();
       if (el._columns) st.visible = el._columns.get();
       if (el._link) st.link = el._link.get();
+      // A detail window's subject configuration — where it gets its
+      // records, and whether it is pinned. Never the record itself: that
+      // comes back from the live broadcast, as a link's filters do.
+      if (el._record) st.record = el._record.config();
       if (Object.keys(st).length) panes[id] = structuredClone(st);
     }
     const focused = frames.some(f => f.id === this._focusedId) ? this._focusedId : null;
@@ -621,12 +693,13 @@ class MkuiWorkspace extends HTMLElement {
       if ("sort" in st) el._sort?.set(st.sort);
       if ("visible" in st) el._columns?.set(st.visible);
       if ("link" in st) el._link?.set(st.link);
+      if ("record" in st) el._record?.follow(st.record);
     };
     for (const [id, st] of Object.entries(clean.panes)) {
       const el = this._paneEls.get(id);
       if (!el) continue;
       const gen = el._viewGen = (el._viewGen ?? 0) + 1;
-      if (el._filters || el._sort || el._columns || el._link || !el._ready) applyView(el, st);
+      if (el._filters || el._sort || el._columns || el._link || el._record || !el._ready) applyView(el, st);
       else el._ready.then(() => { if (el._viewGen === gen) applyView(el, st); });
     }
 
@@ -686,8 +759,31 @@ class MkuiWorkspace extends HTMLElement {
 
   renamePane(id, title) {
     const spec = this._panes.get(id);
-    if (spec) spec.title = title;
-    else this._panes.set(id, { title });
+    // A name the user typed is theirs: `titled` stops a detail pane
+    // retitling its own tab from the record it lands on.
+    if (spec) { spec.title = title; spec.titled = true; }
+    else this._panes.set(id, { title, titled: true });
+    this._retitle(id);
+  }
+
+  // The tab a detail pane writes as it moves from record to record —
+  // "History — 4711". `text` hangs off the pane's configured title, which
+  // is remembered the first time so the suffix never accumulates; an
+  // empty `text` puts the plain title back. A pane the user renamed
+  // keeps their name. Returns whether the tab changed.
+  setPaneAutoTitle(id, text) {
+    const spec = this._panes.get(id);
+    if (!spec || spec.titled) return false;
+    if (spec.baseTitle === undefined) spec.baseTitle = spec.title ?? null;
+    const base = spec.baseTitle ?? id;
+    const next = text ? `${base} — ${text}` : base;
+    if (spec.title === next) return false;
+    spec.title = next;
+    this._retitle(id);
+    return true;
+  }
+
+  _retitle(id) {
     for (const el of this._frameEls.values()) {
       const tree = el.getTree();
       if (tree && findPane(tree, id)) el._renderInternal();

@@ -2,6 +2,8 @@ import { registerPaneType } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
 import { resolveExpr, resolveObject, evalExpr, compileExpr, compileTemplate, expr } from "../lib/expressions.js";
 import { icon } from "../lib/icons.js";
+import { makeChip, makeGroup, linkIcon, linkDirWord, armedClear } from "../lib/chips.js";
+import { compileStyler, applyStyle, makeRunner } from "../lib/styles.js";
 import { writeGrid, makeCopyStatus } from "../lib/copy.js";
 import { isRich, richText, richToHTML, renderRich } from "../lib/rich.js";
 import {
@@ -570,16 +572,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return new expr.Scope({ row: row ?? null, state: stateRoot() }, parent, false);
   }
 
-  function runCompiled(c, scope, label) {
-    try { return c.evaluate(scope); }
-    catch (e) {
-      if (!warnedExprs.has(label)) {
-        warnedExprs.add(label);
-        console.warn(`[mkio-table] expression error in ${label}: ${e.message}`);
-      }
-      return null;
-    }
-  }
+  const runCompiled = makeRunner((m) => console.warn(`[mkio-table] ${m}`), warnedExprs);
 
   function cellValue(row, col) {
     const c = valueExprs[col];
@@ -670,83 +663,14 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // string values may be ${...} templates. Cell expressions see the cell
   // scope with `value` = cellValue (the derived value); row expressions see
   // the row scope; button stylers the button scope (see updateButtonStates).
-  const STYLE_KEYS = ["color", "background", "bold", "italic", "underline", "strike", "caps", "class", "css"];
-
-  function compileRules(rules, label) {
-    const compiled = rules.map((rule, i) => {
-      let test = null;
-      if (rule.when != null) {
-        try { test = compileExpr(String(rule.when)); }
-        catch (e) {
-          console.warn(`[mkio-table] bad style rule in ${label}: ${e.message}`);
-          test = { evaluate: () => false };
-        }
-      }
-      const style = {};
-      const dynamic = [];
-      const dynamicCss = []; // [prop, CompiledTemplate] inside `css`
-      const tmpl = (v) => {
-        try { return compileTemplate(v); }
-        catch (e) { console.warn(`[mkio-table] bad style template in ${label}: ${e.message}`); return null; }
-      };
-      for (const k of STYLE_KEYS) {
-        if (!(k in rule)) continue;
-        const v = rule[k];
-        if (typeof v === "string" && v.includes("${")) {
-          const t = tmpl(v);
-          if (t) dynamic.push([k, t]);
-        } else if (k === "css" && v && typeof v === "object") {
-          const css = {};
-          for (const [prop, pv] of Object.entries(v)) {
-            if (typeof pv === "string" && pv.includes("${")) { const t = tmpl(pv); if (t) dynamicCss.push([prop, t]); }
-            else css[prop] = pv;
-          }
-          style.css = css;
-        } else style[k] = v;
-      }
-      return { test, style, dynamic, dynamicCss, label: `${label}[${i}]` };
-    });
-    return (scope) => {
-      for (const r of compiled) {
-        if (r.test && !expr.truthy(runCompiled(r.test, scope, r.label))) continue;
-        if (!r.dynamic.length && !r.dynamicCss.length) return r.style;
-        const out = { ...r.style };
-        for (const [k, t] of r.dynamic) {
-          const v = runCompiled(t, scope, r.label);
-          if (v == null || v === "") continue;
-          out[k] = typeof v === "object" ? v : String(v);
-        }
-        if (r.dynamicCss.length) {
-          out.css = { ...(out.css ?? {}) };
-          for (const [prop, t] of r.dynamicCss) {
-            const v = runCompiled(t, scope, r.label);
-            if (v != null && v !== "") out.css[prop] = String(v);
-          }
-        }
-        return out;
-      }
-      return null;
-    };
-  }
-
-  function compileStyler(spec_, label) {
-    if (Array.isArray(spec_)) return compileRules(spec_, label);
-    if (spec_ && typeof spec_ === "object") return compileRules([spec_], label);
-    let c;
-    try { c = compileExpr(String(spec_)); }
-    catch (e) {
-      console.warn(`[mkio-table] bad styler expression in ${label}: ${e.message}`);
-      return () => null;
-    }
-    return (scope) => {
-      const v = runCompiled(c, scope, label);
-      return v && typeof v === "object" && !Array.isArray(v) ? v : null;
-    };
-  }
+  // (lib/styles.js compiles and applies them; this pane says which scope
+  // each one sees.)
+  const styler = (spec_, label) =>
+    compileStyler(spec_, label, { warn: (m) => console.warn(`[mkio-table] ${m}`), run: runCompiled });
 
   const cellStylers = {}; // col -> (value, row, col) => style | null
   for (const [c, s] of Object.entries(spec.styles ?? {})) {
-    const fn = compileStyler(s, `styles.${c}`);
+    const fn = styler(s, `styles.${c}`);
     cellStylers[c] = (value, row, col) => {
       const scope = cellScope(row, col, true);
       scope.vars.value = value;
@@ -754,44 +678,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     };
   }
   const rowStyler = spec.rowStyle == null ? null // (row) => style | null
-    : (() => { const fn = compileStyler(spec.rowStyle, "rowStyle"); return (row) => fn(rowScope(row)); })();
+    : (() => { const fn = styler(spec.rowStyle, "rowStyle"); return (row) => fn(rowScope(row)); })();
   const hasStylers = rowStyler != null || Object.keys(cellStylers).length > 0;
-
-  // Apply a style result to a cell/row element, first clearing whatever
-  // the previous one set. Backgrounds ride a custom property + marker
-  // class so the stylesheet stays in charge of precedence — selection
-  // tints blend with (rather than vanish under) a styled background.
-  function applyStyle(el, style, bgProp, bgClass) {
-    const prev = el._mkuiStyle;
-    if (!prev && !style) return;
-    if (prev) {
-      el.style.color = "";
-      el.style.fontWeight = "";
-      el.style.fontStyle = "";
-      el.style.textDecoration = "";
-      el.style.textTransform = "";
-      el.style.removeProperty(bgProp);
-      el.classList.remove(bgClass);
-      if (prev.class) el.classList.remove(...String(prev.class).split(/\s+/));
-      if (prev.css) for (const k of Object.keys(prev.css)) el.style.removeProperty(k);
-    }
-    el._mkuiStyle = style ?? null;
-    if (!style) return;
-    if (style.color) el.style.color = style.color;
-    if (style.bold) el.style.fontWeight = "bold";
-    if (style.italic) el.style.fontStyle = "italic";
-    const deco = [style.underline && "underline", style.strike && "line-through"]
-      .filter(Boolean).join(" ");
-    if (deco) el.style.textDecoration = deco;
-    if (style.caps) el.style.textTransform = "uppercase";
-    if (style.background) {
-      el.style.setProperty(bgProp, style.background);
-      el.classList.add(bgClass);
-    }
-    if (style.class) el.classList.add(...String(style.class).split(/\s+/));
-    if (style.css)
-      for (const [k, v] of Object.entries(style.css)) el.style.setProperty(k, v);
-  }
 
   function styleCellStyler(td, row, col) {
     const fn = cellStylers[col];
@@ -2787,7 +2675,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (ok && en.when != null) ok = expr.truthy(evalExpr(String(en.when), buttonScope()));
       el.disabled = !ok;
       if (b.styler === undefined)
-        b.styler = bs.style == null || bs.style === "" ? null : compileStyler(bs.style, `buttons[${i}].style`);
+        b.styler = bs.style == null || bs.style === "" ? null : styler(bs.style, `buttons[${i}].style`);
       if (b.styler) {
         // Rules see `enabled` too, so a style can follow the gate.
         const sc = buttonScope();
@@ -4518,30 +4406,6 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // The group's alt-click: all off while any is on, else all back on.
   const toggleAllFilters = () => setFiltersOn([...filters.keys()], !anyFilterOn());
 
-  function makeChip(cls, col, text, title, onClick, onClear, lead = null) {
-    const chip = document.createElement("span");
-    chip.className = "mkui-chip " + cls;
-    chip.dataset.col = col;
-    chip.title = title;
-    if (lead) chip.appendChild(lead);
-    const main = document.createElement("button");
-    main.className = "mkui-chip-main";
-    main.type = "button";
-    const label = document.createElement("span");
-    label.className = "mkui-chip-text";
-    label.textContent = text;
-    main.appendChild(label);
-    main.addEventListener("click", onClick);
-    const x = document.createElement("button");
-    x.className = "mkui-chip-x";
-    x.type = "button";
-    x.title = "Remove";
-    x.appendChild(icon("close"));
-    x.addEventListener("click", (e) => { e.stopPropagation(); onClear(); });
-    chip.append(main, x);
-    return { chip, main };
-  }
-
   // A filter chip's on/off control: a checkbox, the same word for "in or
   // out" the values list and the column picker already use, and its own
   // hit target so the chip body still opens the dropdown.
@@ -4554,30 +4418,6 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     cb.addEventListener("click", (e) => e.stopPropagation());
     cb.addEventListener("change", () => setFiltersOn([key], cb.checked));
     return cb;
-  }
-
-  function makeGroup(cls, iconName, title, onClear, chips) {
-    const group = document.createElement("span");
-    group.className = "mkui-chip-group " + cls;
-    // The icon travels with the first chip so a wrapped line never starts
-    // with an orphaned icon (see .mkui-chip-lead).
-    const lead = document.createElement("span");
-    lead.className = "mkui-chip-lead";
-    const btn = document.createElement("button");
-    btn.className = "mkui-chip-icon";
-    btn.type = "button";
-    btn.title = title;
-    // The group's icon with an × badge in its corner: it is a clear
-    // button, not a state indicator like the header's tinted icon.
-    const badge = document.createElement("span");
-    badge.className = "mkui-chip-icon-x";
-    badge.appendChild(icon("close"));
-    btn.append(icon(iconName), badge);
-    btn.addEventListener("click", onClear);
-    lead.append(btn, chips[0]);
-    group.appendChild(lead);
-    for (const c of chips.slice(1)) group.appendChild(c);
-    return group;
   }
 
   function renderChips() {
@@ -4639,10 +4479,6 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // at once. The names ride in the chip (a count past three, all of them
   // in the tooltip); adding or renaming one is the column's own business,
   // in its header dropdown.
-  const LINK_REMOVE_ARM_MS = 4000;
-  const linkDirWord = (dir) => dir === "broadcast" ? "Broadcast" : "Listen";
-  const linkIcon = (dir) => icon(dir === "broadcast" ? "radio" : "ear");
-
   function makeLinkChip(dir, names) {
     const on = dir === "broadcast" ? link.broadcasting : link.listening;
     const list = names.length > 3 ? `${names.length} names` : names.join(", ");
@@ -4650,23 +4486,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       ? `${n} ← ${label(link.broadcast[n])}`
       : `${label(link.listen[n].column)} ← ${n}`).join("\n");
     const title = `${linkDirWord(dir)}ing ${on ? "on" : "off"} — click to turn ${on ? "off" : "on"}\n${detail}`;
-    let armTimer = null;
-    const { chip, main } = makeChip(`mkui-chip-link mkui-chip-${dir}`, "", `${linkDirWord(dir)}: ${list}`, title,
+    let clear = () => {};
+    const { chip } = makeChip(`mkui-chip-link mkui-chip-${dir}`, "", `${linkDirWord(dir)}: ${list}`, title,
       () => setLink({ [dir + "ing"]: !on }, { merge: true }),
-      () => {
-        if (names.length > 1 && !chip.classList.contains("mkui-chip-arm")) {
-          chip.classList.add("mkui-chip-arm");
-          chip.title = `Click × again to remove ${names.length} links`;
-          armTimer = setTimeout(() => { chip.classList.remove("mkui-chip-arm"); chip.title = title; }, LINK_REMOVE_ARM_MS);
-          return;
-        }
-        if (armTimer) clearTimeout(armTimer);
-        const drop = {};
-        for (const n of names) drop[n] = null;
-        setLink({ [dir]: drop }, { merge: true });
-      });
+      () => clear(), null, linkIcon(dir));
+    clear = armedClear(chip, names.length, `${names.length} links`, title, () => {
+      const drop = {};
+      for (const n of names) drop[n] = null;
+      setLink({ [dir]: drop }, { merge: true });
+    });
     chip.classList.toggle("mkui-chip-off", !on);
-    main.insertBefore(linkIcon(dir), main.firstChild);
     return chip;
   }
 

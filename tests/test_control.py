@@ -99,6 +99,35 @@ class TestControlService(unittest.TestCase):
         run(svc.link(None, merge=False))
         self.assertEqual(ws.sent[-1]["row"]["args"], {"merge": False, "link": {}}, "no pane: the focused one; merge off with nothing: clears")
 
+    def test_record_shows_one_record_or_says_where_to_get_them(self):
+        svc = make()
+        svc.name = "_mkui"
+        ws = FakeWS()
+        run(svc.on_subscribe(ws, {"subid": "s"}))
+        ws.sent.clear()
+
+        run(svc.record("detail", {"id": 4711}))
+        self.assertEqual(ws.sent[-1]["row"], {
+            "action": "record.show",
+            "args": {"key": {"id": 4711}, "pane": "detail"},
+        })
+
+        run(svc.record("detail", listen={"order_id": "id"}, retain=True))
+        self.assertEqual(ws.sent[-1]["row"], {
+            "action": "record.follow",
+            "args": {"merge": True, "pane": "detail",
+                     "record": {"listen": {"order_id": "id"}, "retain": True}},
+        })
+
+        # The pin is the user-facing word; `listening` is the switch.
+        run(svc.record("detail", pin=True))
+        self.assertEqual(ws.sent[-1]["row"]["args"]["record"], {"listening": False})
+
+        run(svc.record(None, follow="orders", merge=False))
+        self.assertEqual(ws.sent[-1]["row"]["args"],
+                         {"merge": False, "record": {"follow": "orders"}},
+                         "no pane: the focused one")
+
     def test_install_registers_and_binds_late(self):
         calls = []
 

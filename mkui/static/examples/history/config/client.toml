@@ -19,6 +19,9 @@ items = [
   # `keys` selects the record first, so a menu item can name the one it
   # means: a deep link to a record's history.
   { label = "History of order 1", action = "table.history", args = { pane = "orders", keys = ["1"] } },
+  # Push the Orders table's selected record into the detail window, for
+  # when you want to look at one without waiting for a broadcast.
+  { label = "Show details", action = "table.record", args = { pane = "detail", from = "orders" } },
   { sep = true },
   # The same steps the toolbar's Undo and Redo take, on the focused pane.
   { label = "Undo record", action = "edit.undo" },
@@ -42,6 +45,11 @@ items = [
   { sep = true },
   { label = "Orders: show every record", action = "table.link", args = { pane = "orders", listening = false, merge = true } },
   { label = "Orders: follow the tape again", action = "table.link", args = { pane = "orders", listening = true, merge = true } },
+  { sep = true },
+  # The detail window's subject: pin it where it is, or let it follow the
+  # broadcast again. The same switch its toolbar pin throws.
+  { label = "Detail: pin to this record", action = "record.follow", args = { pane = "detail", listening = false, merge = true } },
+  { label = "Detail: follow the tape again", action = "record.follow", args = { pane = "detail", listening = true, merge = true } },
 ]
 
 [[menubar]]
@@ -90,6 +98,34 @@ undo     = { service = "orders", op = "undo" }
 redo     = { service = "orders", op = "redo" }
 asOf     = "order_as_of"     # the table as it stood at a moment
 
+# ─── One record ───────────────────────────────────────────────────────
+# A detail window. It is not told which record twice: the audit tape
+# broadcasts `order_id`, and this listens for it — the same name the
+# Orders table filters by. Click a change on the tape and the table
+# narrows, this window fills, and the tab takes the record's name.
+#
+# `source` lends the Orders table's labels, display templates and key, so
+# a status reads here exactly as it reads in the cell.
+
+[panes.detail]
+title = "Order"
+type = "mkio-record"
+service = "all_orders"
+source = "orders"
+fields = ["id", "side", "symbol", "qty", "price", "status", "_mkio_version"]
+groups = [
+  { label = "Instruction", columns = ["id", "side", "symbol", "qty", "price"] },
+  { label = "Progress", columns = ["status", "_mkio_version"] },
+]
+labels = { _mkio_version = "Version" }
+
+[panes.detail.record]
+listen = { order_id = "id" }
+# The tape's selection clears as you filter it; the window keeps the last
+# record rather than emptying.
+retain = true
+title = "${symbol} #${id}"
+
 # ─── The audit tape ───────────────────────────────────────────────────
 # An ordinary query pane over the history table: every recorded version,
 # newest first, arriving live as changes land. `_mkio_op`, `_mkio_user`
@@ -136,6 +172,14 @@ y = 0.53
 w = 0.56
 h = 0.44
 layout = { type = "tabs", active = 0, children = ["tape"] }
+
+[[frames]]
+id = "detail"
+x = 0.60
+y = 0.03
+w = 0.38
+h = 0.48
+layout = { type = "tabs", active = 0, children = ["detail"] }
 
 # ─── Connection ───────────────────────────────────────────────────────
 

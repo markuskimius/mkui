@@ -1589,6 +1589,119 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   padding: 6px 0;
 }
 
+/* ── The record a window is about (lib/subject.js) ─────────────────── */
+/* The pin and the subject chip: a detail window's one persistent control,
+   leading its toolbar. The pin pressed means the window is frozen on the
+   record it holds — deliveries go on arriving and are ignored — so it
+   wears the same pressed chrome as any other toolbar toggle. */
+.mkui-record-subject {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.mkui-record-pin.active {
+  background: color-mix(in srgb, var(--mkui-accent) 18%, var(--mkui-bg-alt));
+  border-color: var(--mkui-accent);
+  color: var(--mkui-fg);
+}
+.mkui-record-pin.active:hover { background: color-mix(in srgb, var(--mkui-accent) 25%, var(--mkui-bg-alt)); }
+.mkui-record-pin .mkui-icon { width: 12px; height: 12px; }
+/* The strip a window shows before it has a toolbar to ride: an empty
+   window, which is exactly when its subject is worth seeing. */
+.mkui-record-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--mkui-border);
+  background: var(--mkui-bg-alt);
+}
+/* A subject chip reads as a link chip, because it is one: the same pill,
+   the same dimmed-when-off. */
+.mkui-chip-record .mkui-chip-main { color: var(--mkui-fg); }
+.mkui-chip-record .mkui-icon { width: 11px; height: 11px; }
+
+/* ── One record (mkio-record) ──────────────────────────────────────── */
+/* A label/value list, its toolbar outside the scroll area so the subject
+   controls stay put while the fields scroll. */
+.mkui-pane-content:has(.mkui-record) { padding: 0; }
+.mkui-record {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font-size: 12px;
+  color: var(--mkui-fg);
+}
+.mkui-record-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--mkui-border);
+  background: var(--mkui-bg-alt);
+  flex: 0 0 auto;
+}
+.mkui-record-extras { display: flex; align-items: center; gap: 6px; }
+/* Icon and label on one line, as the history panel's Copy has them; it
+   sits at the far end of the strip, away from the subject controls. */
+.mkui-record-copy {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.mkui-record-copy .mkui-icon { width: 12px; height: 12px; }
+.mkui-record-body { flex: 1 1 0; overflow: auto; padding: 4px 0; }
+.mkui-record-field {
+  display: grid;
+  grid-template-columns: minmax(6em, 12em) 1fr;
+  gap: 8px;
+  padding: 3px 8px;
+  align-items: baseline;
+}
+.mkui-record-field:hover { background: var(--mkui-bg-hover); }
+.mkui-record-fname {
+  color: var(--mkui-fg-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Values wrap rather than clip: a detail window is where the long ones
+   are read, and its own background rides the same custom property a
+   styled cell does, so a theme paints them alike. */
+.mkui-record-fvalue { overflow-wrap: anywhere; }
+.mkui-record-fvalue.mkui-cell-styled { background: var(--mkui-cell-bg); border-radius: 2px; padding: 0 3px; }
+.mkui-record-blank { color: var(--mkui-fg-mute); }
+.mkui-record-group + .mkui-record-group { margin-top: 2px; }
+.mkui-record-group-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 3px 8px;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--mkui-border);
+  color: var(--mkui-fg-mute);
+  font: inherit;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  text-align: left;
+}
+.mkui-record-group-head:hover { color: var(--mkui-fg); }
+.mkui-record-group-head .mkui-icon { width: 11px; height: 11px; transition: transform 80ms ease; }
+.mkui-record-group.collapsed .mkui-record-group-head .mkui-icon { transform: rotate(-90deg); }
+.mkui-record-empty {
+  padding: 10px 12px;
+  color: var(--mkui-fg-mute);
+  font-style: italic;
+}
+.mkui-record-empty.mkui-record-config { font-style: normal; color: var(--mkui-warn, var(--mkui-fg-mute)); }
+
 /* ── Record history (mkio-history) ─────────────────────────────────── */
 /* One record's recorded versions on the left, the diff between two of
    them on the right. The pane is a flex column so the list and the diff
@@ -1601,34 +1714,6 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   font-size: 12px;
   color: var(--mkui-fg);
 }
-.mkui-history-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--mkui-border);
-  background: var(--mkui-bg-alt);
-}
-.mkui-history-title { font-weight: 600; white-space: nowrap; }
-.mkui-history-sub {
-  color: var(--mkui-fg-mute);
-  font-size: 11px;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mkui-history-reload {
-  background: none;
-  border: none;
-  color: var(--mkui-fg-mute);
-  cursor: pointer;
-  padding: 0;
-  display: flex;
-  align-self: center;
-}
-.mkui-history-reload:hover { color: var(--mkui-fg); }
-.mkui-history-reload .mkui-icon { width: 13px; height: 13px; }
 
 /* The versions are an ordinary table; the panel under it says what
    changed. The bar between them is dragged like a pane splitter — the
@@ -1666,6 +1751,15 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 }
 .mkui-history-pair { font-family: var(--mkui-font-mono); }
 .mkui-history-count { color: var(--mkui-fg-mute); font-size: 11px; flex: 1; }
+/* Where the record stands in its chain — "v3 of 7" — at the quiet end of
+   the panel's header, since it is a fact about the chain the panel is
+   reading rather than about the diff on show. */
+.mkui-history-at {
+  color: var(--mkui-fg-mute);
+  font-size: 11px;
+  font-family: var(--mkui-font-mono);
+  white-space: nowrap;
+}
 /* Copy, at the right of the panel's own header: a quiet icon-and-label
    until it is wanted, like the reload in the head above — full button
    chrome would outweigh the one line of text it shares the strip with. */

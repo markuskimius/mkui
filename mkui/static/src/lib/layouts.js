@@ -8,7 +8,7 @@
 //   { version: 1,
 //     frames: [{ id, title, x, y, w, h, layout: <tree> }, ...],   // z-order
 //     focused: <frame id> | null,
-//     panes: { <pane id>: { filters, sort, visible } } }           // open panes
+//     panes: { <pane id>: { filters, sort, visible, link, record } } }  // open panes
 //
 // Frame rects are workspace fractions, so a layout saved on one monitor
 // lays out proportionally on another; every restored rect still passes
@@ -100,6 +100,7 @@ export function sanitizeLayout(raw, known) {
       if ("sort" in st) out.sort = st.sort ?? null;
       if ("visible" in st) out.visible = st.visible ?? null;
       if ("link" in st) out.link = isObj(st.link) ? st.link : null;
+      if ("record" in st) out.record = isObj(st.record) ? st.record : null;
       panes[id] = out;
     }
   }
