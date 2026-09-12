@@ -508,7 +508,6 @@ control = "_mkui"
 name = "order-book"
 version = "1.0"
 protocol = "1.0"
-mkio = "0.5"
 expr = "1"
 
 [mkio.connected]
