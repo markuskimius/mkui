@@ -757,3 +757,109 @@ test("a compute or option expression that errors degrades to empty and warns onc
   assert.equal(warns.filter((w) => w.includes('"a +"')).length, 1);
   assert.equal(warns.filter((w) => w.includes('"NOPE("')).length, 1);
 });
+
+/* ── Temporal fields ─────────────────────────────────────────────────── */
+// The pickers are native; the dialog owns the conversion between what the
+// picker shows (the browser's wall clock) and what is submitted (canonical
+// UTC), so a server never has to guess the browser's zone.
+
+const localInput = (iso) => {
+  const d = new Date(iso);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
+
+test("a datetime field submits the picked local time as a UTC instant", async () => {
+  const d = openForm({ fields: [{ name: "at", type: "datetime" }] });
+  assert.equal(d.f("at").input.type, "datetime-local");
+  d.type("at", localInput("2026-09-12T21:00:00Z"));
+  assert.deepEqual(await d.submit(), { at: "2026-09-12T21:00:00Z" });
+});
+
+test("a datetime default shows in local time and round-trips untouched", async () => {
+  const d = openForm({ fields: [{ name: "at", type: "datetime", value: "2026-09-12T21:00:00Z" }] });
+  assert.equal(d.f("at").input.value, localInput("2026-09-12T21:00:00Z"));
+  assert.deepEqual(await d.submit(), { at: "2026-09-12T21:00:00Z" });
+});
+
+test("parse reads a default in another format, a list trying each in turn", async () => {
+  const parse = ["%Y%m%d-%H:%M:%S.%f", "%Y%m%d-%H:%M:%S"];
+  const d = openForm({ fields: [
+    { name: "a", type: "datetime", parse, value: "20260912-21:00:00.123" },
+    { name: "b", type: "datetime", parse, value: "20260912-21:00:00" },
+    { name: "c", type: "datetime", parse, value: "not a time" },
+  ] });
+  assert.equal(d.f("a").input.value, localInput("2026-09-12T21:00:00Z"));
+  assert.equal(d.f("b").input.value, localInput("2026-09-12T21:00:00Z"));
+  assert.equal(d.f("c").input.value, "");
+  assert.deepEqual(await d.submit(), { a: "2026-09-12T21:00:00.123Z", b: "2026-09-12T21:00:00Z", c: "" });
+});
+
+test("a date field is a calendar date, parsed and submitted without a zone", async () => {
+  const d = openForm({ fields: [
+    { name: "on", type: "date", parse: "%Y%m%d", value: "20260912" },
+    { name: "blank", type: "date" },
+  ] });
+  assert.equal(d.f("on").input.type, "date");
+  assert.equal(d.f("on").input.value, "2026-09-12");
+  d.type("blank", "2026-12-31");
+  assert.deepEqual(await d.submit(), { on: "2026-09-12", blank: "2026-12-31" });
+});
+
+test("a time field submits HH:MM:SS and an empty picker submits nothing", async () => {
+  const d = openForm({ fields: [{ name: "t", type: "time", value: "09:30" }, { name: "u", type: "time" }] });
+  assert.equal(d.f("t").input.value, "09:30:00");
+  d.type("t", "16:00");
+  assert.deepEqual(await d.submit(), { t: "16:00:00", u: "" });
+});
+
+// An optional-time field is a date picker beside a time picker under one
+// name; the shim finds no direct input, so the pair is read from the field.
+const pairOf = (d, n) => {
+  const pair = d.f(n).el._ch.find((x) => x.className === "mkui-dialog-datetime");
+  return { date: pair._ch[0], time: pair._ch[1] };
+};
+
+test("an optional-time datetime submits a bare date until a time is picked", async () => {
+  const d = openForm({ fields: [{ name: "at", type: "datetime", time: "optional", step: 1 }] });
+  const { date, time } = pairOf(d, "at");
+  assert.equal(date.type, "date");
+  assert.equal(time.type, "time");
+  assert.equal(String(time.step), "1", "step belongs to the time picker");
+  assert.equal(String(date.step), "");
+  date.value = "2026-09-12"; date.fire("input");
+  time.value = "21:00"; time.fire("input");
+  time.value = ""; time.fire("input");
+  assert.deepEqual(await d.submit(), { at: "2026-09-12" });
+});
+
+test("an optional-time datetime with both parts submits a UTC instant", async () => {
+  const d = openForm({ fields: [{ name: "at", type: "datetime", time: "optional" }] });
+  const { date, time } = pairOf(d, "at");
+  const [ld, lt] = localInput("2026-09-12T21:00:00Z").split("T");
+  date.value = ld; date.fire("input");
+  time.value = lt; time.fire("input");
+  assert.deepEqual(await d.submit(), { at: "2026-09-12T21:00:00Z" });
+});
+
+test("an optional-time default prefills a date alone or a date and local time", async () => {
+  const parse = ["%Y%m%d-%H:%M:%S.%f", "%Y%m%d-%H:%M:%S", "%Y%m%d"];
+  const d = openForm({ fields: [
+    { name: "a", type: "datetime", time: "optional", parse, value: "20260912" },
+    { name: "b", type: "datetime", time: "optional", parse, value: "20260912-21:00:00.000" },
+    { name: "c", type: "datetime", time: "optional", value: "2026-09-12" },
+    { name: "e", type: "datetime", time: "optional", value: "" },
+  ] });
+  const [ld, lt] = localInput("2026-09-12T21:00:00Z").split("T");
+  assert.deepEqual([pairOf(d, "a").date.value, pairOf(d, "a").time.value], ["2026-09-12", ""]);
+  assert.deepEqual([pairOf(d, "b").date.value, pairOf(d, "b").time.value], [ld, lt]);
+  assert.deepEqual([pairOf(d, "c").date.value, pairOf(d, "c").time.value], ["2026-09-12", ""]);
+  assert.deepEqual([pairOf(d, "e").date.value, pairOf(d, "e").time.value], ["", ""]);
+  assert.deepEqual(await d.submit(), { a: "2026-09-12", b: "2026-09-12T21:00:00Z", c: "2026-09-12", e: "" });
+});
+
+test("a plain datetime never degrades to a date: a bare-date default is midnight UTC", async () => {
+  const d = openForm({ fields: [{ name: "at", type: "datetime", value: "2026-09-12" }] });
+  assert.equal(d.f("at").input.value, localInput("2026-09-12T00:00:00Z"));
+  assert.deepEqual(await d.submit(), { at: "2026-09-12T00:00:00Z" });
+});

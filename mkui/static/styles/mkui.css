@@ -1503,6 +1503,8 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   gap: 6px;
 }
 .mkui-dialog-row > .mkui-dialog-field { flex: 1; min-width: 0; }
+.mkui-dialog-datetime { display: flex; gap: 6px; }
+.mkui-dialog-datetime > input { flex: 1; min-width: 0; }
 
 .mkui-dialog-field {
   margin-bottom: 6px;

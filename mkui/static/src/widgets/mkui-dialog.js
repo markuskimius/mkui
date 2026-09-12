@@ -1,7 +1,77 @@
 import { resolveExpr, resolveObject, evalExpr, expr } from "../lib/expressions.js";
 import { icon } from "../lib/icons.js";
+import { strptime, parseTime, inputToBound, boundToInput, inputTypeForKind, kindForFormat, detectTimeKind } from "../lib/timeparse.js";
 
 let dialogSeq = 0;
+
+// Temporal fields render as the browser's native pickers. What they hold
+// and submit is canonical: a `date` is `YYYY-MM-DD`, a `time` `HH:MM:SS`,
+// and a `datetime` an ISO-8601 UTC instant (`YYYY-MM-DDTHH:MM:SS[.fff]Z`) —
+// the picker shows the browser's local wall clock, and only the browser
+// knows that zone, so the conversion happens here rather than on a server.
+// An incoming value (a default, a compute, a reset) is an ISO string or
+// mkio ref (naive = UTC, as everywhere in mkui), or, with `parse`, one of
+// those strftime formats read in `tz`. A `datetime` with `time: "optional"`
+// is a date picker beside a time picker: with the time blank it holds and
+// submits the bare date, so one field can mean "this day" or "this instant".
+const TEMPORAL = { date: "date", time: "time", datetime: "datetime" };
+
+const optionalTime = (field) => field.type === "datetime" && field.time === "optional";
+
+// `{ secs, kind }` for an incoming value, or null.
+function temporalParse(field, v) {
+  if (v === null || v === undefined || v === "") return null;
+  const s = String(v).trim();
+  const fmts = field.parse == null ? [] : [].concat(field.parse);
+  for (const fmt of fmts) {
+    const secs = strptime(s, fmt, field.tz);
+    if (secs !== null) return { secs, kind: kindForFormat(fmt) };
+  }
+  const secs = parseTime(s);
+  return secs === null ? null : { secs, kind: detectTimeKind(s) ?? TEMPORAL[field.type] };
+}
+
+// The canonical string for a kind: a date, a clock time, or a UTC instant.
+function canonicalTemporal(kind, secs) {
+  if (secs === null || secs === undefined || !Number.isFinite(secs)) return "";
+  if (kind !== "datetime") return boundToInput(secs, kind);
+  const ms = Math.round((secs - Math.floor(secs)) * 1000);
+  const whole = Math.floor(secs) + (ms === 1000 ? 1 : 0);
+  const frac = ms === 0 || ms === 1000 ? "" : "." + String(ms).padStart(3, "0");
+  return boundToInput(whole, "datetime") + frac + "Z";
+}
+
+// What a field holds for a parsed value: its own kind, except that an
+// optional-time field keeps a bare date as one.
+function temporalValue(field, parsed) {
+  if (!parsed) return "";
+  const kind = optionalTime(field) && parsed.kind === "date" ? "date" : TEMPORAL[field.type];
+  return canonicalTemporal(kind, parsed.secs);
+}
+
+// Picker string(s) for a parsed value: `{ date, time }` for the optional
+// pair, else the one control's value.
+function temporalInput(field, parsed) {
+  if (optionalTime(field)) {
+    if (!parsed) return { date: "", time: "" };
+    if (parsed.kind === "date") return { date: boundToInput(parsed.secs, "date"), time: "" };
+    const [date, time] = boundToInput(parsed.secs, "datetime", true).split("T");
+    return { date, time };
+  }
+  const kind = TEMPORAL[field.type];
+  return parsed ? boundToInput(parsed.secs, kind, kind === "datetime") : "";
+}
+
+function temporalRead(type, str) {
+  const kind = TEMPORAL[type];
+  return canonicalTemporal(kind, inputToBound(str, kind, "lo", kind === "datetime"));
+}
+
+function temporalReadPair(date, time) {
+  if (!date) return "";
+  if (!time) return canonicalTemporal("date", inputToBound(date, "date", "lo"));
+  return temporalRead("datetime", `${date}T${time}`);
+}
 
 // Computed fields may feed each other; the dynamic pass repeats until no
 // field value changes, giving up (and warning) after this many rounds.
@@ -113,6 +183,15 @@ export function openDialog(spec, context, app, extra = {}) {
           input.value = want !== "" ? want : (input.options?.[0]?.value ?? "");
           next = input.value;
         } else next = v == null ? "" : String(v);
+      } else if (TEMPORAL[field.type]) {
+        const parsed = temporalParse(field, v);
+        next = temporalValue(field, parsed);
+        const shown = temporalInput(field, parsed);
+        if (optionalTime(field)) {
+          if (input) input.value = shown.date;
+          const time = fieldParts[key]?.time;
+          if (time) time.value = shown.time;
+        } else if (input) input.value = shown;
       } else {
         next = v == null ? "" : String(v);
         if (input) input.value = next;
@@ -167,6 +246,31 @@ export function openDialog(spec, context, app, extra = {}) {
         input = document.createElement("textarea");
         if (field.rows) input.rows = field.rows;
         input.addEventListener("input", onEdit(input, (i) => i.value));
+        wrapper.appendChild(input);
+      } else if (optionalTime(field)) {
+        const pair = document.createElement("div");
+        pair.className = "mkui-dialog-datetime";
+        // Side by side even under a stylesheet cached from before this type.
+        pair.style.display = "flex";
+        pair.style.gap = "6px";
+        input = document.createElement("input");
+        input.type = "date";
+        input.style.flex = "1";
+        input.style.minWidth = "0";
+        const time = document.createElement("input");
+        time.type = "time";
+        time.style.flex = "1";
+        time.style.minWidth = "0";
+        const read = () => temporalReadPair(input.value, time.value);
+        input.addEventListener("input", onEdit(input, read));
+        time.addEventListener("input", onEdit(time, read));
+        pair.append(input, time);
+        wrapper.appendChild(pair);
+        parts.time = time;
+      } else if (TEMPORAL[field.type]) {
+        input = document.createElement("input");
+        input.type = inputTypeForKind(TEMPORAL[field.type]);
+        input.addEventListener("input", onEdit(input, (i) => temporalRead(field.type, i.value)));
         wrapper.appendChild(input);
       } else {
         input = document.createElement("input");
@@ -450,10 +554,19 @@ export function openDialog(spec, context, app, extra = {}) {
         const p = resolveExpr(f.placeholder, scope);
         if (input.placeholder !== p) input.placeholder = p;
       }
+      // An optional-time pair: `step` is the time picker's (seconds), the
+      // rest the date's, and both follow disabled/readonly together.
+      const time = parts.time;
+      const stepTarget = time ?? input;
       for (const k of ["min", "max", "step"]) {
         const v = a[k];
-        if (v == null || v === "") input.removeAttribute?.(k);
-        else if (String(input[k]) !== String(v)) input[k] = v;
+        const target = k === "step" ? stepTarget : input;
+        if (v == null || v === "") target.removeAttribute?.(k);
+        else if (String(target[k]) !== String(v)) target[k] = v;
+      }
+      if (time) {
+        time.disabled = input.disabled;
+        time.readOnly = input.readOnly;
       }
     }
 
