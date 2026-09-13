@@ -638,6 +638,138 @@ test("a compute that moves a field re-fetches the options depending on it", asyn
   assert.deepEqual(requests.at(-1), { market: "UK-eq" });
 });
 
+test("a select with fill copies the picked row into named fields, skipping blanks", async () => {
+  const client = { request: async () => [
+    { id: 1, name: "Big", symbol: "AAPL", qty: "500", note: "" },
+    { id: 2, name: "Small", symbol: "", qty: "5", note: "tiny" },
+  ] };
+  const d = openForm({ fields: [
+    { name: "_template", type: "select", optionsFrom: { service: "templates", params: {}, value: "id", label: "name" },
+      fill: { symbol: "symbol", qty: "qty", note: "note", missing: "qty" } },
+    { name: "symbol", value: "MSFT" },
+    { name: "qty", type: "number" },
+    { name: "note", compute: "'Order for ' + symbol" },
+  ] }, {}, { client });
+  await Promise.resolve();
+  d.pick("_template", "1");
+  assert.equal(d.f("symbol").input.value, "AAPL");
+  assert.equal(d.f("qty").input.value, "500");
+  assert.equal(d.f("note").input.value, "Order for AAPL", "a blank column leaves the compute in charge");
+  d.pick("_template", "2");
+  assert.equal(d.f("symbol").input.value, "AAPL", "a blank column keeps the field's value");
+  assert.equal(d.f("qty").input.value, "5");
+  assert.equal(d.f("note").input.value, "tiny", "a filled field counts as edited: its compute yields");
+  d.type("symbol", "GOOG");
+  d.pick("_template", "1");
+  assert.equal(d.f("symbol").input.value, "AAPL", "a later pick overrides a typed value");
+  d.pick("_template", "");
+  assert.equal(d.f("symbol").input.value, "AAPL", "clearing the pick moves nothing");
+  const data = await d.submit();
+  assert.deepEqual(Object.keys(data), ["symbol", "qty", "note"], "the pick itself is never submitted");
+  assert.deepEqual([data.symbol, String(data.qty), data.note], ["AAPL", "500", "tiny"]);
+});
+
+test("a fill re-fetches the options that depend on a filled field", async () => {
+  const requests = [];
+  const client = { request: async (svc, params) => {
+    requests.push([svc, params]);
+    return svc === "templates" ? [{ id: 1, name: "UK", market: "LSE" }] : [{ id: "a", name: "A" }];
+  } };
+  const d = openForm({ fields: [
+    { name: "_template", type: "select", optionsFrom: { service: "templates", params: {}, value: "id", label: "name" }, fill: { market: "market" } },
+    { name: "market", value: "NYSE" },
+    { name: "venue", type: "select", optionsFrom: { service: "venues", params: { market: "${field.market}" }, value: "id", label: "name" } },
+  ] }, {}, { client });
+  await Promise.resolve();
+  assert.deepEqual(requests.filter(([s]) => s === "venues").at(-1), ["venues", { market: "NYSE" }]);
+  d.pick("_template", "1");
+  await Promise.resolve();
+  assert.deepEqual(requests.filter(([s]) => s === "venues").at(-1), ["venues", { market: "LSE" }]);
+});
+
+test("remember restores a field and a template pick, storing what the form says", async () => {
+  const store = new Map();
+  const storage = { getItem: (k) => store.has(k) ? store.get(k) : null, setItem: (k, v) => store.set(k, v) };
+  const client = { request: async () => [
+    { id: 1, name: "big", symbol: "AAPL", qty: "500" },
+    { id: 2, name: "small", symbol: "MSFT", qty: "5" },
+  ] };
+  const spec = { fields: [
+    { name: "_template", type: "select", optionsFrom: { service: "t", params: {}, value: "name", label: "name" },
+      fill: { symbol: "symbol", qty: "qty" },
+      remember: { key: "app.template", value: "IF(COALESCE(save_as, '') != '', save_as, _template)" } },
+    { name: "symbol" },
+    { name: "qty", type: "number" },
+    { name: "account", remember: "app.account" },
+    { name: "save_as" },
+  ] };
+  let d = openForm(spec, {}, { client, storage });
+  await Promise.resolve();
+  assert.equal(d.f("symbol").input.value, "", "nothing remembered yet");
+  d.pick("_template", "big");
+  d.type("account", "ACC1");
+  let data = await d.submit();
+  assert.deepEqual([store.get("app.template"), store.get("app.account")], ["big", "ACC1"]);
+
+  d = openForm(spec, {}, { client, storage });
+  assert.equal(d.f("account").input.value, "ACC1", "a plain field comes back at once");
+  await Promise.resolve();
+  assert.equal(d.f("_template").input.value, "big", "the pick comes back once the options load");
+  assert.equal(d.f("symbol").input.value, "AAPL", "and fills as a pick would");
+  d.type("save_as", "mine");
+  data = await d.submit();
+  assert.equal(data.save_as, "mine");
+  assert.equal(store.get("app.template"), "mine", "a typed name wins over the pick");
+
+  store.set("app.template", "gone");
+  d = openForm(spec, {}, { client, storage });
+  await Promise.resolve();
+  assert.equal(d.f("_template").input.value, "", "a name the options lack is left alone");
+  assert.equal(d.f("symbol").input.value, "");
+  d.pick("_template", "");
+  await d.submit();
+  assert.equal(store.get("app.template"), "", "a cleared pick is remembered as none");
+});
+
+test("a value given to a service-backed select before its options arrive is kept once they hold it", async () => {
+  // Two lists load at open: a remembered template fills the session as soon
+  // as the templates arrive, and the session list must not wipe it when it
+  // lands afterwards (nor a default, when the list simply comes late).
+  const store = new Map([["app.template", "big"]]);
+  const storage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) };
+  const deferred = {};
+  const client = { request: (svc) => new Promise((res) => { deferred[svc] = res; }) };
+  const d = openForm({ fields: [
+    { name: "_template", type: "select", optionsFrom: { service: "templates", params: {}, value: "name", label: "name" },
+      fill: { session: "session", symbol: "symbol" }, remember: "app.template" },
+    { name: "session", type: "select", optionsFrom: { service: "sessions", params: {}, value: "id", label: "id" } },
+    { name: "venue", type: "select", value: "LSE", optionsFrom: { service: "venues", params: {}, value: "id", label: "id" } },
+    { name: "symbol" },
+  ] }, {}, { client, storage });
+  deferred.templates([{ name: "big", session: "S2", symbol: "AAPL" }]);
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(d.f("symbol").input.value, "AAPL", "the template filled before the sessions came");
+  deferred.sessions([{ id: "S1" }, { id: "S2" }]);
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(d.f("session").input.value, "S2", "the fill survives the session list's arrival");
+  deferred.venues([{ id: "NYSE" }, { id: "LSE" }]);
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(d.f("venue").input.value, "LSE", "so does a plain default");
+  const data = await d.submit();
+  assert.deepEqual([data.session, data.venue, data.symbol], ["S2", "LSE", "AAPL"]);
+});
+
+test("a service-backed select whose list lacks the value it was given starts blank", async () => {
+  const client = { request: async () => [{ id: "S1" }] };
+  const d = openForm({ fields: [
+    { name: "session", type: "select", value: "GONE", optionsFrom: { service: "sessions", params: {}, value: "id", label: "id" } },
+  ] }, {}, { client });
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(d.f("session").input.value, "");
+  const data = await d.submit();
+  assert.equal(data.session, "");
+});
+
 test("a required checkbox must be checked", () => {
   const d = openForm({ fields: [{ name: "agree", type: "checkbox", required: true }] });
   d.submit();

@@ -3261,7 +3261,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const sec = Math.floor(Date.now() / 1000);
     if (f._at !== sec) {
       f._at = sec;
-      f._bounds = presetBounds(f.preset, f.timeKind, sec, f.localTz);
+      f._bounds = presetBounds(f.preset, f.timeKind, sec);
     }
     return f._bounds;
   }

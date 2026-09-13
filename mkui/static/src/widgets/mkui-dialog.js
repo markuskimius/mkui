@@ -99,6 +99,11 @@ export function openDialog(spec, context, app, extra = {}) {
     const fieldParts = {};   // key → { label, ro } extra DOM refs
     const resolvedAttrs = {}; // key → { required, disabled, readonly, min, max, step, pattern }
     const optionsKey = {};   // key → key of the option list last built
+    const optionRows = {};   // key → the rows an optionsFrom select was built from
+    const pendingRecall = new Set(); // selects whose remembered value awaits their options
+    const wanted = {};       // key → value asked of an optionsFrom select before its options arrived
+    const storage = extra?.storage ?? (typeof localStorage !== "undefined" ? localStorage : null);
+    const rememberKey = (f) => typeof f.remember === "string" ? f.remember : f.remember?.key;
     const dirty = new Set(); // keys the user has typed into (compute stays off them)
     const allFields = [];
     const anonKey = new Map(); // nameless field → its synthetic key
@@ -182,6 +187,14 @@ export function openDialog(spec, context, app, extra = {}) {
           const want = v == null || v === "" ? "" : String(v);
           input.value = want !== "" ? want : (input.options?.[0]?.value ?? "");
           next = input.value;
+          // A service-backed select asked for a value its options don't
+          // hold yet (a default, a compute, a fill from another select's
+          // pick, while both lists are still loading) keeps the ask and
+          // honours it when the options arrive.
+          if (want !== "" && next !== want && field.optionsFrom && !Array.isArray(optionRows[key])) {
+            wanted[key] = want;
+            next = want;
+          }
         } else next = v == null ? "" : String(v);
       } else if (TEMPORAL[field.type]) {
         const parsed = temporalParse(field, v);
@@ -222,7 +235,7 @@ export function openDialog(spec, context, app, extra = {}) {
       const onEdit = (input, read) => () => {
         dirty.add(keyOf(field));
         if (field.name) fieldState[field.name] = read(input);
-        onFieldChange(field.name ?? null);
+        onFieldChange(field.name ?? null, applyFill(field));
       };
 
       let input;
@@ -426,7 +439,7 @@ export function openDialog(spec, context, app, extra = {}) {
     });
 
     built = true;
-    onFieldChange(null);
+    onFieldChange(null, recallAll());
 
     // The initial height is a guess; if the body has to scroll, grow the
     // frame so the whole form and footer are visible, capped at 90% of the
@@ -443,12 +456,79 @@ export function openDialog(spec, context, app, extra = {}) {
       }
     }
 
-    // `name` is the edited field (null at open). Service-backed options
-    // re-fetch for it and for every field a compute moved along the way.
-    function onFieldChange(name) {
+    // `fill = { field: column }` on a service-backed select copies the
+    // picked row's columns into other fields — a Template dropdown filling
+    // an order form. A blank column is skipped, so a template can leave a
+    // field to the user; a filled field counts as edited, so its compute
+    // yields to the pick, and a later pick overrides a typed value. Returns
+    // the fields it moved.
+    function applyFill(field) {
+      if (!field.fill || field.type !== "select") return [];
+      const rows = optionRows[keyOf(field)];
+      const sel = fieldInputs[keyOf(field)];
+      const col = field.optionsFrom?.value;
+      const picked = rows && col ? rows.find((r) => String(r[col] ?? "") === String(sel?.value ?? "")) : null;
+      if (!picked) return [];
+      const filled = [];
+      for (const [target, column] of Object.entries(field.fill)) {
+        const v = picked[column];
+        if (v == null || v === "") continue;
+        const tf = allFields.find((f) => f.name === target && f.type !== "readonly");
+        if (!tf) continue;
+        dirty.add(keyOf(tf));
+        if (setFieldValue(tf, v)) filled.push(target);
+      }
+      return filled;
+    }
+
+    // `remember = "key"` (or `{ key, value }`) keeps a field across
+    // openings in localStorage (`extra.storage` in tests): a confirmed
+    // submit stores its value — or `value`, an expression over the form,
+    // for a pick a typed name should stand in for — and the next opening
+    // starts the field from it, a service-backed select once its options
+    // hold the value, running its fill as a pick would.
+    function recalled(f) {
+      const key = rememberKey(f);
+      if (!key || !storage) return null;
+      try { return storage.getItem(key); } catch { return null; }
+    }
+    // Apply a field's remembered value; the fields a select's fill moved.
+    function recallField(f) {
+      const v = recalled(f);
+      if (v == null || v === "" || f.type === "readonly") return [];
+      if (f.type === "select" && f.optionsFrom) {
+        const sel = fieldInputs[keyOf(f)];
+        if (!Array.isArray(optionRows[keyOf(f)]) || !sel) { pendingRecall.add(f); return []; }
+        if (![...sel.options].some((o) => o.value === v)) return [];
+        sel.value = v;
+        if (f.name) fieldState[f.name] = v;
+        return applyFill(f);
+      }
+      setFieldValue(f, v);
+      return [];
+    }
+    function recallAll() {
+      const filled = [];
+      for (const f of allFields) filled.push(...recallField(f));
+      return filled;
+    }
+    function storeRemembered() {
+      if (!storage) return;
+      for (const f of allFields) {
+        const key = rememberKey(f);
+        if (!key) continue;
+        const v = f.remember?.value != null ? evalValue(f.remember.value) : (f.name ? fieldState[f.name] : "");
+        try { storage.setItem(key, v == null ? "" : String(v)); } catch { /* full or blocked: nothing to remember */ }
+      }
+    }
+
+    // `name` is the edited field (null at open), `filled` the fields a
+    // pick copied into. Service-backed options re-fetch for them and for
+    // every field a compute moved along the way.
+    function onFieldChange(name, filled = []) {
       const before = { ...fieldState };
       applyDynamic();
-      const moved = new Set(name == null ? [] : [name]);
+      const moved = new Set(name == null ? [] : [name, ...filled]);
       for (const k of Object.keys(fieldState)) if (!Object.is(before[k], fieldState[k])) moved.add(k);
       for (const k of moved) refreshDependentOptions(k);
     }
@@ -604,7 +684,7 @@ export function openDialog(spec, context, app, extra = {}) {
           if (err) err.remove();
         }
       }
-      applyDynamic();
+      onFieldChange(null, recallAll());
       const firstInput = host.querySelector("input:not([type=hidden]):not([type=checkbox]), select, textarea");
       firstInput?.focus();
     }
@@ -657,6 +737,7 @@ export function openDialog(spec, context, app, extra = {}) {
             cancelBtn.disabled = false;
             return;
           }
+          storeRemembered();
           if (pinned) {
             status.textContent = "OK";
             status.className = "mkui-dialog-status";
@@ -676,6 +757,7 @@ export function openDialog(spec, context, app, extra = {}) {
           cancelBtn.disabled = false;
         }
       } else {
+        storeRemembered();
         if (pinned) {
           resetForm();
         } else {
@@ -737,6 +819,7 @@ export function openDialog(spec, context, app, extra = {}) {
 
       const params = resolveObject(field.optionsFrom.params ?? {}, { ...context, field: fieldState });
       const hasUnresolved = Object.values(params).some((v) => v === "");
+      optionRows[keyOf(field)] = null;
       if (hasUnresolved) {
         selectEl.innerHTML = "";
         const opt = document.createElement("option");
@@ -753,6 +836,7 @@ export function openDialog(spec, context, app, extra = {}) {
       try {
         const resp = await client.request(field.optionsFrom.service, params);
         const rows = Array.isArray(resp) ? resp : resp?.rows ?? [];
+        optionRows[keyOf(field)] = rows;
         selectEl.innerHTML = "";
         const emptyOpt = document.createElement("option");
         emptyOpt.value = "";
@@ -764,13 +848,25 @@ export function openDialog(spec, context, app, extra = {}) {
           opt.textContent = r[field.optionsFrom.label] ?? opt.value;
           selectEl.appendChild(opt);
         }
-        selectEl.value = "";
-        if (field.name) fieldState[field.name] = "";
+        // Keep what the field was given before the list came (or held
+        // before a re-fetch) when the list has it; else start blank.
+        const keep = wanted[keyOf(field)] ?? (field.name ? fieldState[field.name] : "");
+        delete wanted[keyOf(field)];
+        const has = keep != null && keep !== "" && [...selectEl.options].some((o) => o.value === String(keep));
+        selectEl.value = has ? String(keep) : "";
+        if (field.name) fieldState[field.name] = selectEl.value;
       } catch (e) {
         console.error("[mkui-dialog] optionsFrom error:", e);
       } finally {
         selectEl._mkuiLoading = false;
         selectEl.disabled = resolvedAttrs[keyOf(field)]?.disabled ?? false;
+      }
+      if (pendingRecall.delete(field)) {
+        const filled = recallField(field);
+        if (filled.length || (field.name && fieldState[field.name] !== "")) {
+          onFieldChange(field.name ?? null, filled);
+          return;
+        }
       }
       applyDynamic();
     }

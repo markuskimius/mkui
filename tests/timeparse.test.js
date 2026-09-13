@@ -118,12 +118,13 @@ test("presets resolve relative to now", () => {
   const now = T + 0.5;
   assert.deepEqual(presetBounds("1h", "datetime", now), { lo: now - 3600, hi: now });
   assert.deepEqual(presetBounds("15m", "datetime", now), { lo: now - 900, hi: now });
+  // "today" is the browser's calendar day, on a UTC column too: an
+  // evening table must not empty when the UTC date rolls over
   const today = presetBounds("today", "datetime", now);
-  assert.equal(today.lo, T - 9.5 * 3600, "UTC midnight for a UTC column");
-  assert.equal(today.hi, today.lo + 86400, "exclusive next midnight");
-  const todayLocal = presetBounds("today", "datetime", now, true);
   const d = new Date(now * 1000);
-  assert.equal(todayLocal.lo, new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 1000);
+  assert.equal(today.lo, new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 1000, "local midnight");
+  assert.equal(today.hi, today.lo + 86400, "exclusive next midnight");
+  assert.ok(today.lo <= now && now < today.hi, "now is inside today");
   // clock-time columns: today is the whole day, last-hour is by time of day
   assert.deepEqual(presetBounds("today", "time", now), { lo: 0, hi: 86400 });
   const h = presetBounds("1h", "time", now);

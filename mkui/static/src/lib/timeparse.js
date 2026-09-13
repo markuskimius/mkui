@@ -241,7 +241,7 @@ export const PRESETS = {
 };
 
 /** `{ lo, hi }` in the column's frame for a preset at time `now`. */
-export function presetBounds(name, kind, now = Date.now() / 1000, localTz = false) {
+export function presetBounds(name, kind, now = Date.now() / 1000) {
   const p = PRESETS[name];
   if (!p) return null;
   if (kind === "time") {
@@ -250,12 +250,12 @@ export function presetBounds(name, kind, now = Date.now() / 1000, localTz = fals
     return name === "today" ? { lo: 0, hi: 86400 } : { lo: Math.max(0, tod - p.secs), hi: tod };
   }
   if (name === "today") {
+    // "Today" is the browser's calendar day whatever zone the column keeps
+    // its stamps in: the user asking for today means the day on their
+    // clock, and a UTC day would empty an evening table once UTC rolled
+    // over (20:00 in New York) while the cells still read today's date.
     const d = new Date(now * 1000);
-    // "Today" is the browser's day for a local column; for a UTC column the
-    // UTC day, so the range agrees with the wall-clock dates in the cells.
-    const lo = localTz
-      ? new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 1000
-      : Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000;
+    const lo = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 1000;
     return { lo, hi: lo + 86400 };
   }
   return { lo: now - p.secs, hi: now };

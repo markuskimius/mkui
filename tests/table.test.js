@@ -4766,8 +4766,17 @@ test("time presets resolve against the clock and schedule a refresh", async () =
     pendingTimers.delete(tick[0]);
     tick[1].fn(); // fires and reschedules itself
     assert.deepEqual(shownNames(host), ["c"], "rows age out as time passes");
-    d.presets[0]._ev.click[0](); // Today (UTC day for a UTC column)
+    d.presets[0]._ev.click[0](); // Today: the browser's day, not the UTC day
     assert.deepEqual(shownNames(host), ["a", "b", "c"]);
+    // Late evening on the 29th by the browser's clock: west of Greenwich
+    // the UTC date has already turned, yet the rows stamped 09:00–10:00Z on
+    // the 29th stay today's for as long as the wall clock says the 29th
+    Date.now = () => new Date(2026, 7, 29, 23, 30).getTime();
+    const midnight = new Date(2026, 7, 29).getTime();
+    const stamps = { a: Date.UTC(2026, 7, 29, 9), b: Date.UTC(2026, 7, 29, 9, 30, 15), c: Date.UTC(2026, 7, 29, 10, 0, 0, 250) };
+    const expect = Object.keys(stamps).filter(n => stamps[n] >= midnight && stamps[n] < midnight + 86400000);
+    tick[1].fn();
+    assert.deepEqual(shownNames(host), expect, "today follows the browser's clock");
     typeBound(d.lo, "2026-08-29T10:00");
     assert.ok(!d.presets[0].classList.contains("active"), "typing a bound drops the preset");
     assert.deepEqual(shownNames(host), ["c"]);
