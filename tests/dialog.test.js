@@ -374,7 +374,17 @@ function openForm(spec, context = {}, extra = {}, appExtra = {}) {
   const rows = [];
   const walk = (n) => {
     for (const c of n._ch) {
-      if (c.className === "mkui-dialog-group") groups.push(c);
+      if (c.className === "mkui-dialog-section") {
+        const head = c._ch[0];
+        groups.push({
+          el: c, head, body: c._ch[1],
+          label: head._ch.find((x) => x.className === "mkui-dialog-group-label"),
+          summary: head._ch.find((x) => x.className === "mkui-dialog-group-summary"),
+          open: () => !c.classList.contains("mkui-dialog-collapsed"),
+          click: (ev = {}) => head.fire("click", ev),
+          key: (key, ev = {}) => head.fire("keydown", { key, preventDefault() {}, stopPropagation() {}, ...ev }),
+        });
+      }
       if (c.className === "mkui-dialog-row") rows.push(c);
       if (c.className === "mkui-dialog-field") {
         const label = c._ch.find((x) => x.tagName === "LABEL");
@@ -592,16 +602,231 @@ test("rows and groups hide with showWhen; hidden rows leave the data", async () 
     { group: "Shipping to ${city}", showWhen: "ship" },
     { row: [{ name: "city", value: "Oslo" }, { name: "zip", value: "0150" }], showWhen: "ship" },
   ] });
-  assert.equal(d.groups[0].textContent, "Shipping to Oslo");
-  assert.equal(d.groups[0].style.display, "");
+  assert.equal(d.groups[0].label.textContent, "Shipping to Oslo");
+  assert.equal(d.groups[0].el.style.display, "");
   assert.equal(d.rows[0].style.display, "");
   d.type("city", "Bergen");
-  assert.equal(d.groups[0].textContent, "Shipping to Bergen");
+  assert.equal(d.groups[0].label.textContent, "Shipping to Bergen");
   d.check("ship", false);
-  assert.equal(d.groups[0].style.display, "none");
+  assert.equal(d.groups[0].el.style.display, "none");
   assert.equal(d.rows[0].style.display, "none");
   const data = await d.submit();
   assert.deepEqual(data, { ship: false });
+});
+
+/* ── Sections ────────────────────────────────────────────────────────── */
+// A `{ group }` heads a section holding every item up to the next header.
+// `collapsible = true` folds it behind the head (click, Enter, Space;
+// alt/option for every section), `collapsed` picks the start, `remember`
+// keeps the fold in storage, and a folded head wears a summary — the
+// `summary` template, else how many fields were edited under it.
+
+const SECTIONED = { fields: [
+  { name: "symbol", value: "AAPL" },
+  { group: "Execution", collapsible: true, collapsed: true },
+  { name: "tif", type: "select", options: ["Day", "GTC"] },
+  { name: "note" },
+  { group: "Notes" },
+  { name: "memo" },
+] };
+
+test("a group's showWhen hides its section and drops its fields; a plain group has no caret", async () => {
+  const d = openForm({ fields: [
+    { name: "more", type: "checkbox", value: "${TRUE}" },
+    { group: "More" },
+    { name: "extra", value: "x" },
+    { group: "Always", showWhen: "!more" },
+    { name: "tail", value: "y" },
+  ] });
+  assert.equal(d.groups.length, 2);
+  assert.equal(d.groups[0].summary, undefined, "a plain group is a header, not a button");
+  assert.equal(d.groups[0].head._attrs.role, undefined);
+  assert.equal(d.groups[1].el.style.display, "none");
+  assert.deepEqual(await d.submit(), { more: true, extra: "x" });
+});
+
+test("a collapsible section starts folded, unfolds by click, Enter or Space, and its fields still submit", async () => {
+  const d = openForm(SECTIONED);
+  const [exec, notes] = d.groups;
+  assert.ok(exec.el.classList.contains("mkui-dialog-collapsible"));
+  assert.equal(exec.head._attrs.role, "button");
+  assert.equal(exec.open(), false);
+  assert.equal(exec.head._attrs["aria-expanded"], "false");
+  assert.equal(notes.open(), true, "a plain group is always open");
+  exec.click();
+  assert.equal(exec.open(), true);
+  assert.equal(exec.head._attrs["aria-expanded"], "true");
+  exec.key("Enter");
+  assert.equal(exec.open(), false);
+  exec.key(" ");
+  assert.equal(exec.open(), true);
+  exec.key("x");
+  assert.equal(exec.open(), true, "other keys are not toggles");
+  exec.click();
+  d.type("note", "hidden but live");
+  assert.deepEqual(await d.submit(), { symbol: "AAPL", tif: "Day", note: "hidden but live", memo: "" });
+});
+
+test("a folded head counts the fields edited under it; a summary template replaces the count", () => {
+  const d = openForm(SECTIONED);
+  const exec = d.groups[0];
+  assert.equal(exec.summary.textContent, "", "nothing changed yet");
+  d.type("note", "careful");
+  assert.equal(exec.summary.textContent, "1 changed");
+  d.pick("tif", "GTC");
+  assert.equal(exec.summary.textContent, "2 changed");
+  d.type("symbol", "MSFT");
+  assert.equal(exec.summary.textContent, "2 changed", "a field outside the section is not its business");
+  exec.click();
+  assert.equal(exec.summary.textContent, "", "open, the fields speak for themselves");
+  exec.click();
+  d.type("note", "");
+  assert.equal(exec.summary.textContent, "1 changed", "back to what it opened with");
+
+  const e = openForm({ fields: [
+    { group: "Execution", collapsible: true, collapsed: "TRUE", summary: "${tif} · ${note}" },
+    { name: "tif", value: "Day" },
+    { name: "note", value: "" },
+  ] });
+  assert.equal(e.groups[0].open(), false, "collapsed takes an expression");
+  assert.equal(e.groups[0].summary.textContent, "Day · ");
+  e.type("note", "x");
+  assert.equal(e.groups[0].summary.textContent, "Day · x");
+});
+
+test("alt-click folds or unfolds every collapsible section together", () => {
+  const d = openForm({ fields: [
+    { group: "A", collapsible: true },
+    { name: "a" },
+    { group: "B", collapsible: true, collapsed: true },
+    { name: "b" },
+    { group: "C" },
+    { name: "c" },
+  ] });
+  const [a, b, c] = d.groups;
+  assert.deepEqual([a.open(), b.open(), c.open()], [true, false, true]);
+  a.click({ altKey: true });
+  assert.deepEqual([a.open(), b.open(), c.open()], [false, false, true], "all take the clicked head's new state");
+  b.click({ altKey: true });
+  assert.deepEqual([a.open(), b.open(), c.open()], [true, true, true]);
+});
+
+test("remember keeps a section's fold across openings, stored as it changes", () => {
+  const store = new Map();
+  const storage = { getItem: (k) => store.has(k) ? store.get(k) : null, setItem: (k, v) => store.set(k, v) };
+  const spec = { fields: [
+    { group: "Execution", collapsible: true, collapsed: true, remember: "orders.exec" },
+    { name: "tif" },
+  ] };
+  let d = openForm(spec, {}, { storage });
+  assert.equal(d.groups[0].open(), false);
+  d.groups[0].click();
+  assert.equal(store.get("orders.exec"), "open", "kept at the toggle, not at submit");
+  d = openForm(spec, {}, { storage });
+  assert.equal(d.groups[0].open(), true, "the remembered fold beats `collapsed`");
+  store.set("orders.exec", "junk");
+  d = openForm(spec, {}, { storage });
+  assert.equal(d.groups[0].open(), false, "an unreadable value falls back to the config");
+});
+
+test("validation unfolds the section hiding a failing field, without remembering it", async () => {
+  const store = new Map();
+  const storage = { getItem: (k) => store.has(k) ? store.get(k) : null, setItem: (k, v) => store.set(k, v) };
+  const d = openForm({ fields: [
+    { name: "symbol", value: "AAPL" },
+    { group: "Execution", collapsible: true, collapsed: true, remember: "x" },
+    { name: "account", required: true },
+  ] }, {}, { storage });
+  assert.equal(d.groups[0].open(), false);
+  d.submit();
+  await Promise.resolve();
+  assert.deepEqual(d.errors(), ["account"]);
+  assert.equal(d.groups[0].open(), true, "the error must be seen to be fixed");
+  assert.equal(store.has("x"), false);
+});
+
+test("unfolding a section grows the frame, never shrinks it", () => {
+  const d = openForm(SECTIONED);
+  const frame = d.ws._frames[0];
+  assert.equal(frame.h, 0.5, "the folded form fits the initial guess");
+  assert.equal(d.ws.layoutCalls, 0);
+  geom = { "mkui-dialog-body": { scrollHeight: 500, clientHeight: 300 } };
+  d.groups[0].click();
+  assert.equal(frame.h, 0.75, "200px of overflow on a 400px frame in an 800px workspace");
+  assert.equal(d.ws.layoutCalls, 1);
+  d.groups[0].click();
+  assert.equal(frame.h, 0.75, "folding leaves the room");
+  assert.equal(d.ws.layoutCalls, 1);
+});
+
+test("a pinned reset re-baselines what a folded head counts as changed, keeping the fold", async () => {
+  const d = openForm(SECTIONED);
+  const pin = d.ws._frameEls.get(d.ws._frames[0].id)._extraControls()[0];
+  pin.fire("click", { stopPropagation() {} });
+  d.groups[0].click();
+  d.type("note", "x");
+  d.groups[0].click();
+  assert.equal(d.groups[0].summary.textContent, "1 changed");
+  d.submit();
+  await Promise.resolve();
+  assert.equal(d.f("note").input.value, "", "reset to the default");
+  assert.equal(d.groups[0].summary.textContent, "", "and that is the new baseline");
+  assert.equal(d.groups[0].open(), false, "the fold is a preference the reset leaves alone");
+});
+
+test("the changed count skips hidden, readonly, nameless and showWhen-hidden fields; rows nest in the section", () => {
+  const d = openForm({ fields: [
+    { name: "kind", type: "select", options: ["a", "b"] },
+    { group: "Details", collapsible: true, collapsed: true },
+    { row: [{ name: "x", value: "1" }, { name: "y", value: "2" }] },
+    { name: "_scratch", type: "hidden", compute: "kind" },
+    { name: "total", type: "readonly", compute: "x" },
+    { type: "readonly", value: "a line" },
+    { name: "only_b", showWhen: "kind == 'b'" },
+  ] });
+  const sec = d.groups[0];
+  assert.equal(d.rows[0]._parent, sec.body, "a { row } under the header lives in the section body");
+  assert.equal(d.f("total").el._parent, sec.body);
+  assert.equal(sec.summary.textContent, "");
+  d.pick("kind", "b");
+  assert.equal(sec.summary.textContent, "", "a compute moving a hidden or readonly field is not an edit");
+  d.type("only_b", "z");
+  assert.equal(sec.summary.textContent, "1 changed");
+  d.pick("kind", "a");
+  assert.equal(sec.summary.textContent, "", "a field showWhen hides no longer counts");
+  d.type("x", "10");
+  assert.equal(sec.summary.textContent, "1 changed", "readonly total moved with it, uncounted");
+});
+
+test("Enter and Space on a head are consumed, so the dialog's Enter-to-submit never fires", () => {
+  const d = openForm({ fields: [
+    { group: "More", collapsible: true },
+    { name: "a" },
+  ] });
+  const calls = [];
+  const ev = (key) => ({ key, preventDefault: () => calls.push(`pd:${key}`), stopPropagation: () => calls.push(`sp:${key}`) });
+  d.groups[0].head.fire("keydown", ev("Enter"));
+  d.groups[0].head.fire("keydown", ev(" "));
+  d.groups[0].head.fire("keydown", ev("Tab"));
+  assert.deepEqual(calls, ["pd:Enter", "sp:Enter", "pd: ", "sp: "], "Tab passes through untouched");
+  assert.equal(d.groups[0].open(), true, "two toggles: back where it started");
+});
+
+test("a non-collapsible group ignores collapsed and remember, and a collapsible one with no fields still folds", async () => {
+  const store = new Map();
+  const storage = { getItem: (k) => store.has(k) ? store.get(k) : null, setItem: (k, v) => store.set(k, v) };
+  const d = openForm({ fields: [
+    { group: "Plain", collapsed: true, remember: "plain" },
+    { name: "a", value: "1" },
+    { group: "Empty", collapsible: true },
+  ] }, {}, { storage });
+  assert.equal(d.groups[0].open(), true, "collapsed means nothing without collapsible");
+  assert.equal(d.groups[0].summary, undefined);
+  d.groups[1].click();
+  assert.equal(d.groups[1].open(), false);
+  assert.equal(d.groups[1].summary.textContent, "");
+  assert.equal(store.size, 0, "no remember key, nothing stored");
+  assert.deepEqual(await d.submit(), { a: "1" });
 });
 
 test("title and footer note re-resolve, and the note leaves submit feedback alone", () => {

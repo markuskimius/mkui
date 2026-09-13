@@ -1486,7 +1486,15 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   box-sizing: border-box;
 }
 
+/* A `{ group }` heads a section: `.mkui-dialog-section` wraps the header
+   and a body holding the items under it. A collapsible one wears a caret
+   (rotated open), its head is a button (pointer, hover tint, focus ring),
+   its body indents under an accent rule, and a folded one hides the body
+   and shows a summary badge on the head. */
 .mkui-dialog-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   font-weight: 600;
   color: var(--mkui-fg-mute);
@@ -1496,7 +1504,46 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   padding-bottom: 4px;
   border-bottom: 1px solid var(--mkui-border);
 }
-.mkui-dialog-group:first-child { margin-top: 0; }
+.mkui-dialog-section:first-child > .mkui-dialog-group { margin-top: 0; }
+.mkui-dialog-group-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mkui-dialog-collapsible > .mkui-dialog-group {
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 4px;
+  border-radius: 3px;
+}
+.mkui-dialog-collapsible > .mkui-dialog-group:hover { background: var(--mkui-bg-hover); }
+.mkui-dialog-collapsible > .mkui-dialog-group:focus-visible {
+  outline: 1px solid var(--mkui-accent);
+  outline-offset: -1px;
+}
+.mkui-dialog-caret { display: inline-flex; color: var(--mkui-fg-mute); transition: transform 120ms; }
+.mkui-dialog-caret .mkui-icon { width: 12px; height: 12px; }
+.mkui-dialog-section:not(.mkui-dialog-collapsed) > .mkui-dialog-group .mkui-dialog-caret { transform: rotate(90deg); }
+.mkui-dialog-group-summary {
+  padding: 0 5px;
+  border-radius: 7px;
+  background: var(--mkui-bg-alt);
+  color: var(--mkui-fg-mute);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.mkui-dialog-group-summary:empty { display: none; }
+.mkui-dialog-collapsible > .mkui-dialog-section-body {
+  margin: 0 0 4px 6px;
+  padding-left: 8px;
+  border-left: 2px solid color-mix(in srgb, var(--mkui-accent) 45%, var(--mkui-border));
+}
+.mkui-dialog-collapsed > .mkui-dialog-section-body { display: none; }
 
 .mkui-dialog-row {
   display: flex;

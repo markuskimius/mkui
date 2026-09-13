@@ -124,12 +124,12 @@ protocol = "query"
 # exists in no row, so it must be listed in `columns` explicitly. Derived
 # values are what the table sorts, filters, and copies. SPREAD_BPS is an
 # application function registered in static/app.js.
-columns = ["id", "_mkio_version", "ts", "side", "symbol", "qty", "price", "notional", "status"]
+columns = ["id", "_mkio_version", "ts", "side", "symbol", "qty", "price", "notional", "status", "tif", "note"]
 # `_mkio_version` is mkio's own column — the cursor into the record's
 # chain, and the one thing the row itself says about its history. Naming
 # it here is what shows it; mkio's columns are hidden otherwise, and
 # `labels` overrides the default heading ("Version") as for any column.
-labels = { ts = "Time", _mkio_version = "Ver" }
+labels = { ts = "Time", _mkio_version = "Ver", tif = "TIF" }
 values = { notional = "ROUND(qty * price, 2)" }
 # Which columns show, in this order. `id` and `price` start hidden — the
 # Columns button at the header's right edge (badge: 2) opens the picker
@@ -146,6 +146,7 @@ visible = ["ts", "side", "symbol", "qty", "notional", "status", "_mkio_version"]
 groups = [
   { label = "Order",   columns = ["id", "_mkio_version", "ts", "side", "symbol"] },
   { label = "Pricing", columns = ["qty", "price", "notional"] },
+  { label = "Execution", columns = ["tif", "note"] },
 ]
 # Mirror the current row into app state; the order-detail pane follows it.
 select = { state = "selected_order" }
@@ -227,6 +228,12 @@ modal = true
 width = 420
 footer = { note = "${IF(_filled, NUM(qty * price, digits: 2, group: TRUE) + ' notional', 'Enter quantity and price')}" }
 
+# A `{ group }` heads a section: everything up to the next header sits
+# under it. This one is a plain header — the fields it holds are the
+# order, always in view.
+[[panes.all-orders.buttons.action.dialog.fields]]
+group = "Order"
+
 [[panes.all-orders.buttons.action.dialog.fields]]
 row = [
   { name = "side", label = "Side", type = "select", width = 0.35, options = ["Buy", "Sell"], required = true },
@@ -252,6 +259,26 @@ label = "Notional"
 type = "readonly"
 compute = "${IF(_filled, NUM(qty * price, digits: 2, group: TRUE), '')}"
 showWhen = "_filled"
+
+# The rarely-touched options fold away behind a collapsible header: a
+# caret marks it, a click (or Enter, Space; alt/option-click for every
+# section at once) opens it, `collapsed` starts it folded, and `remember`
+# keeps the fold in localStorage, so someone who always sets a time in
+# force finds it open next time. Folded fields still submit, and a folded
+# head counts the fields edited under it — "2 changed" — so nothing set
+# here goes unnoticed; a required field left empty unfolds it on submit.
+# Give `summary` a template to say something more specific instead.
+[[panes.all-orders.buttons.action.dialog.fields]]
+group = "Execution"
+collapsible = true
+collapsed = true
+remember = "orders.new.execution"
+
+[[panes.all-orders.buttons.action.dialog.fields]]
+row = [
+  { name = "tif", label = "Time in force", type = "select", width = 0.4, options = ["Day", "GTC", "IOC"], value = "Day" },
+  { name = "note", label = "Note", type = "text", width = 0.6, placeholder = "for the desk" },
+]
 
 [panes.all-orders.buttons.action.dialog.submit]
 label = "Place Order"

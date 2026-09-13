@@ -11,7 +11,10 @@ auto_migrate = "safe"
 # table recognises as a time, so its filter dropdown offers a date range.
 # `parent_id` nests child orders under a parent (the Order Tree pane): a
 # row whose parent_id is empty is a top-level order.
-columns = { id = "INTEGER PRIMARY KEY AUTOINCREMENT", ts = "TEXT DEFAULT CURRENT_TIMESTAMP", side = "TEXT NOT NULL", symbol = "TEXT NOT NULL", qty = "INTEGER", price = "REAL DEFAULT 0", status = "TEXT DEFAULT 'pending'", parent_id = "INTEGER" }
+# `tif` (time in force) and `note` are the New Order dialog's rarely-used
+# options, behind a folded section; `defaults` below fill them when a
+# writer (seed.py) doesn't send them.
+columns = { id = "INTEGER PRIMARY KEY AUTOINCREMENT", ts = "TEXT DEFAULT CURRENT_TIMESTAMP", side = "TEXT NOT NULL", symbol = "TEXT NOT NULL", qty = "INTEGER", price = "REAL DEFAULT 0", status = "TEXT DEFAULT 'pending'", parent_id = "INTEGER", tif = "TEXT DEFAULT 'Day'", note = "TEXT DEFAULT ''" }
 # `versioned = true` is the whole switch: mkio numbers every version of
 # every row (`_mkio_version`, 1 on insert and +1 per edit) and records it
 # in a companion `orders__history` table, stamped with the ref, the user,
@@ -25,8 +28,8 @@ versioned = true
 protocol = "transaction"
 
 [services.orders.ops]
-new    = [{ table = "orders", op_type = "insert", fields = ["side", "symbol", "qty", "price"] }]
-child  = [{ table = "orders", op_type = "insert", fields = ["side", "symbol", "qty", "price", "parent_id"] }]
+new    = [{ table = "orders", op_type = "insert", fields = ["side", "symbol", "qty", "price", "tif", "note"], defaults = { tif = "Day", note = "" } }]
+child  = [{ table = "orders", op_type = "insert", fields = ["side", "symbol", "qty", "price", "parent_id", "tif", "note"], defaults = { tif = "Day", note = "" } }]
 fill   = [{ table = "orders", op_type = "update", key = ["id"], fields = ["status"], defaults = { status = "filled" } }]
 cancel = [{ table = "orders", op_type = "update", key = ["id"], fields = ["status"], defaults = { status = "cancelled" } }]
 # undo/redo take only the key — the values come from the history table —

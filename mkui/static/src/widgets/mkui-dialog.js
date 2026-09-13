@@ -109,17 +109,23 @@ export function openDialog(spec, context, app, extra = {}) {
     const anonKey = new Map(); // nameless field → its synthetic key
     const keyOf = (f) => f.name || anonKey.get(f);
     const rowOf = new Map(); // field → the { row } item holding it
-    const containers = [];   // [{ item, el }] for group headers and rows
+    const containers = [];   // [{ item, el }] for sections and rows: showWhen
+    const sections = [];     // [{ item, el, head, label, body, summary?, open }] per { group }
+    const sectionOf = new Map(); // field → the { group } item heading it
+    const initial = {};      // name → value at open (or the last reset): what "changed" means
     let computeWarned = false;
     let built = false;       // the dynamic pass waits for the whole form
 
-    function flattenFields(items, row = null) {
+    // A `{ group }` heads a section: every item up to the next one is under
+    // it, so its showWhen hides them and `collapsible` folds them.
+    function flattenFields(items, row = null, group = null) {
       for (const item of items) {
-        if (item.group != null) continue;
-        if (item.row) { flattenFields(item.row, item); continue; }
+        if (item.group != null) { group = item; continue; }
+        if (item.row) { flattenFields(item.row, item, group); continue; }
         if (!item.name) anonKey.set(item, `#${allFields.length}`);
         allFields.push(item);
         if (row) rowOf.set(item, row);
+        if (group) sectionOf.set(item, group);
       }
     }
     flattenFields(spec.fields ?? []);
@@ -163,7 +169,9 @@ export function openDialog(spec, context, app, extra = {}) {
     function isShown(field) {
       if (!shown(field.showWhen)) return false;
       const row = rowOf.get(field);
-      return row ? shown(row.showWhen) : true;
+      if (row && !shown(row.showWhen)) return false;
+      const group = sectionOf.get(field);
+      return group ? shown(group.showWhen) : true;
     }
 
     // Write a value into a field's DOM and (when named) its state; true
@@ -213,6 +221,103 @@ export function openDialog(spec, context, app, extra = {}) {
       const changed = !Object.is(fieldState[name], next);
       fieldState[name] = next;
       return changed;
+    }
+
+    // A section: the header, then a body holding the items under it. A
+    // collapsible one gets a caret, a summary badge, and a head that is a
+    // button — click, Enter or Space fold it, alt/option folds every
+    // section the same way.
+    function renderSection(item) {
+      const el = document.createElement("div");
+      el.className = "mkui-dialog-section";
+      const head = document.createElement("div");
+      head.className = "mkui-dialog-group";
+      const label = document.createElement("span");
+      label.className = "mkui-dialog-group-label";
+      label.textContent = resolveExpr(item.group, formScope());
+      const sbody = document.createElement("div");
+      sbody.className = "mkui-dialog-section-body";
+      const sec = { item, el, head, label, body: sbody, open: true };
+      if (item.collapsible) {
+        el.classList.add("mkui-dialog-collapsible");
+        const caret = document.createElement("span");
+        caret.className = "mkui-dialog-caret";
+        caret.appendChild(icon("chevron-right"));
+        const summary = document.createElement("span");
+        summary.className = "mkui-dialog-group-summary";
+        head.append(caret, label, summary);
+        head.tabIndex = 0;
+        head.setAttribute("role", "button");
+        head.addEventListener("click", (ev) => toggleSection(sec, ev.altKey));
+        head.addEventListener("keydown", (ev) => {
+          if (ev.key !== "Enter" && ev.key !== " ") return;
+          ev.preventDefault();
+          ev.stopPropagation(); // Enter on the head folds; it never submits
+          toggleSection(sec, ev.altKey);
+        });
+        sec.summary = summary;
+      } else head.appendChild(label);
+      el.append(head, sbody);
+      sections.push(sec);
+      return sec;
+    }
+
+    function setSectionOpen(sec, open) {
+      sec.open = open;
+      sec.el.classList.toggle("mkui-dialog-collapsed", !open);
+      sec.head.setAttribute("aria-expanded", String(open));
+      syncSection(sec);
+    }
+    function toggleSection(sec, all = false) {
+      const open = !sec.open;
+      for (const s of all ? sections.filter((x) => x.item.collapsible) : [sec]) {
+        setSectionOpen(s, open);
+        // Fold state is a preference, kept the moment it changes — unlike a
+        // field's `remember`, which waits for a confirmed submit.
+        const key = s.item.remember;
+        if (key && storage) {
+          try { storage.setItem(key, open ? "open" : "closed"); } catch { /* full or blocked */ }
+        }
+      }
+      fitFrame();
+    }
+    // Remembered, else `collapsed` (a boolean or an expression) read once.
+    function initialFold(sec) {
+      const key = sec.item.remember;
+      if (key && storage) {
+        let v = null;
+        try { v = storage.getItem(key); } catch { /* blocked */ }
+        if (v === "open" || v === "closed") return v === "open";
+      }
+      return !truthy(sec.item.collapsed);
+    }
+    // The header's text, and — while folded — its summary: `summary`, a
+    // template, else how many of its fields no longer hold what they
+    // opened with, so a folded section can't hide a change from view.
+    function syncSection(sec) {
+      const t = resolveExpr(sec.item.group, formScope());
+      if (sec.label.textContent !== t) sec.label.textContent = t;
+      if (!sec.summary) return;
+      let s = "";
+      if (!sec.open) {
+        if (sec.item.summary != null) s = resolveExpr(sec.item.summary, formScope());
+        else { const n = changedIn(sec); s = n ? `${n} changed` : ""; }
+      }
+      s = s == null ? "" : String(s);
+      if (sec.summary.textContent !== s) sec.summary.textContent = s;
+    }
+    function changedIn(sec) {
+      let n = 0;
+      for (const f of allFields) {
+        if (sectionOf.get(f) !== sec.item || !f.name) continue;
+        if (f.type === "hidden" || f.type === "readonly" || !isShown(f)) continue;
+        if (!Object.is(fieldState[f.name], initial[f.name])) n++;
+      }
+      return n;
+    }
+    function snapshotInitial() {
+      for (const f of allFields) if (f.name) initial[f.name] = fieldState[f.name];
+      for (const sec of sections) syncSection(sec);
     }
 
     function renderFieldItem(field) {
@@ -356,13 +461,13 @@ export function openDialog(spec, context, app, extra = {}) {
     const body = document.createElement("div");
     body.className = "mkui-dialog-body";
 
+    let target = body; // the body, or the open section's
     for (const item of spec.fields ?? []) {
       if (item.group != null) {
-        const hdr = document.createElement("div");
-        hdr.className = "mkui-dialog-group";
-        hdr.textContent = resolveExpr(item.group, formScope());
-        body.appendChild(hdr);
-        containers.push({ item, el: hdr });
+        const sec = renderSection(item);
+        body.appendChild(sec.el);
+        containers.push({ item, el: sec.el });
+        target = sec.body;
         continue;
       }
 
@@ -376,13 +481,13 @@ export function openDialog(spec, context, app, extra = {}) {
             rowDiv.appendChild(el);
           }
         }
-        body.appendChild(rowDiv);
+        target.appendChild(rowDiv);
         containers.push({ item, el: rowDiv });
         continue;
       }
 
       const el = renderFieldItem(item);
-      if (el) body.appendChild(el);
+      if (el) target.appendChild(el);
     }
 
     container.appendChild(body);
@@ -440,20 +545,26 @@ export function openDialog(spec, context, app, extra = {}) {
 
     built = true;
     onFieldChange(null, recallAll());
+    snapshotInitial();
+    for (const sec of sections) if (sec.item.collapsible) setSectionOpen(sec, initialFold(sec));
+    fitFrame();
 
-    // The initial height is a guess; if the body has to scroll, grow the
-    // frame so the whole form and footer are visible, capped at 90% of the
-    // workspace, and re-center vertically.
-    const bodyOverflow = body.scrollHeight - body.clientHeight;
-    if (bodyOverflow > 0) {
+    // The frame's height is a guess: when the body has to scroll — at open,
+    // or once a section unfolds — grow the frame by the overflow so the
+    // whole form and the footer show, capped at 90% of the workspace, and
+    // re-center vertically. Never shrinks: a fold leaves room, not a jump.
+    function fitFrame() {
+      const bodyOverflow = body.scrollHeight - body.clientHeight;
+      if (bodyOverflow <= 0) return;
       const fspec = ws._frames.find((f) => f.id === frameId);
-      if (fspec && wsRect.height > 0) {
-        const curPx = frameEl?.offsetHeight ?? hFrac * wsRect.height;
-        const newFrac = Math.min((curPx + bodyOverflow) / wsRect.height, 0.9);
-        fspec.h = newFrac;
-        fspec.y = Math.max(0, (1 - newFrac) / 2);
-        ws._layoutFrames();
-      }
+      const rect = ws.getBoundingClientRect();
+      if (!fspec || !(rect.height > 0)) return;
+      const curPx = frameEl?.offsetHeight ?? fspec.h * rect.height;
+      const newFrac = Math.min((curPx + bodyOverflow) / rect.height, 0.9);
+      if (newFrac <= fspec.h) return;
+      fspec.h = newFrac;
+      fspec.y = Math.max(0, (1 - newFrac) / 2);
+      ws._layoutFrames();
     }
 
     // `fill = { field: column }` on a service-backed select copies the
@@ -554,13 +665,8 @@ export function openDialog(spec, context, app, extra = {}) {
         }
       }
 
-      for (const { item, el } of containers) {
-        el.style.display = shown(item.showWhen) ? "" : "none";
-        if (item.group != null) {
-          const t = resolveExpr(item.group, formScope());
-          if (el.textContent !== t) el.textContent = t;
-        }
-      }
+      for (const { item, el } of containers) el.style.display = shown(item.showWhen) ? "" : "none";
+      for (const sec of sections) syncSection(sec);
       for (const f of allFields) {
         const el = fieldEls[keyOf(f)];
         if (!el) continue;
@@ -685,6 +791,7 @@ export function openDialog(spec, context, app, extra = {}) {
         }
       }
       onFieldChange(null, recallAll());
+      snapshotInitial();
       const firstInput = host.querySelector("input:not([type=hidden]):not([type=checkbox]), select, textarea");
       firstInput?.focus();
     }
@@ -796,6 +903,7 @@ export function openDialog(spec, context, app, extra = {}) {
 
     function validate() {
       let ok = true;
+      let unfolded = false;
       for (const f of allFields) {
         if (!f.name) continue;
         const el = fieldEls[f.name];
@@ -832,8 +940,12 @@ export function openDialog(spec, context, app, extra = {}) {
           msg.className = "mkui-dialog-error";
           msg.textContent = err;
           el.appendChild(msg);
+          // An error behind a folded header must be seen to be fixed.
+          const sec = sections.find((s) => s.item === sectionOf.get(f));
+          if (sec && !sec.open) { setSectionOpen(sec, true); unfolded = true; }
         }
       }
+      if (unfolded) fitFrame();
       return ok;
     }
 

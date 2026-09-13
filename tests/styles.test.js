@@ -683,3 +683,19 @@ test("a pinned window's pin reads as pressed, like any toolbar toggle", () => {
   // And its chip dims exactly as a paused link chip does.
   assert.ok(css.includes(".mkui-chip-record"), "the subject chip is a chip");
 });
+
+// Dialog sections: a `{ group }` wraps what follows it, and a collapsible
+// one folds by hiding the section body — the fields stay in the form (they
+// still submit), only the paint goes. The head must read as a control: a
+// pointer cursor and a hover tint a plain header never gets, and a caret
+// that turns to show the state. The summary badge is a pill that vanishes
+// when empty, so an open section shows no stray dot.
+test("a folded dialog section hides its body; the head reads as a button", () => {
+  assert.equal(declaration(".mkui-dialog-collapsed > .mkui-dialog-section-body", "display"), "none");
+  assert.equal(declaration(".mkui-dialog-collapsible > .mkui-dialog-group", "cursor"), "pointer");
+  assert.ok(declaration(".mkui-dialog-collapsible > .mkui-dialog-group:hover", "background"));
+  assert.ok(!/cursor/.test(rule(".mkui-dialog-group")), "a plain group header is not a control");
+  assert.match(css, /\.mkui-dialog-section:not\(\.mkui-dialog-collapsed\) > \.mkui-dialog-group \.mkui-dialog-caret \{[^}]*rotate\(90deg\)/, "the caret turns when open");
+  assert.equal(declaration(".mkui-dialog-group-summary:empty", "display"), "none");
+  assert.equal(declaration(".mkui-dialog-group-summary", "text-transform"), "none", "the pill is not shouted like the header");
+});
