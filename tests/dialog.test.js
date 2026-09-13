@@ -361,10 +361,10 @@ test("zero-height workspace rect skips auto-grow without crashing", () => {
 // on fields/rows/groups, labels, placeholders, `required`/`disabled`/
 // `readonly` flags, `min`/`max`/`step`/`pattern`, the title, and the note.
 
-function openForm(spec, context = {}, extra = {}) {
+function openForm(spec, context = {}, extra = {}, appExtra = {}) {
   geom = {};
   const ws = makeWorkspace();
-  const app = { _element: { workspace: ws } };
+  const app = { _element: { workspace: ws }, ...appExtra };
   const promise = openDialog(spec, context, app, extra);
   const host = ws._paneEls.values().next().value.contentEl;
   const body = host._ch[0]._ch[0];
@@ -812,6 +812,70 @@ test("a pinned submit resets the form and a compute takes the field back", async
   assert.equal(d.f("note").input.value, "Order for AAPL", "compute applies again after reset");
   d.type("symbol", "GOOG");
   assert.equal(d.f("note").input.value, "Order for GOOG", "and follows again");
+});
+
+/* ── submit.then ─────────────────────────────────────────────────────── */
+// A confirmed submit may fire one mkui action with args resolved against
+// what was sent — the way a table's own buttons resolve theirs against the
+// selection — so a dialog that files a record on some pane can select it
+// there and let the linked panes follow.
+
+test("submit.then fires after a confirmed submit, args resolved against the data", async () => {
+  const sent = [], fired = [];
+  const client = { send: async (svc, data) => { sent.push(data); return { type: "ok" }; } };
+  const d = openForm({
+    submit: { service: "tasks", op: "add_ref",
+              then: { action: "table.select", args: { pane: "tasks", keys: ["${task_id}"], from: "${row.id}" } } },
+    fields: [{ name: "task_id", value: "T1" }, { name: "_scratch", value: "never sent" }],
+  }, { row: { id: 7 } }, { client }, { fireAction: (name, args) => fired.push([name, args]) });
+  const data = await d.submit();
+  assert.deepEqual(data, { task_id: "T1" }, "scratch fields stay out of the submit");
+  assert.deepEqual(sent, [{ task_id: "T1" }]);
+  assert.deepEqual(fired, [["table.select", { pane: "tasks", keys: ["T1"], from: 7 }]],
+    "the args see the submitted fields over the opening context");
+});
+
+test("submit.then stays quiet on a refused submit and fires on every pinned confirmation", async () => {
+  let refuse = true;
+  const fired = [];
+  const client = { send: async () => refuse ? { type: "error", message: "no" } : { type: "ok" } };
+  const d = openForm({
+    submit: { service: "tasks", then: { action: "table.select", args: { keys: ["${task_id}"] } } },
+    fields: [{ name: "task_id", value: "T1" }],
+  }, {}, { client }, { fireAction: (name, args) => fired.push(args.keys[0]) });
+  const pin = d.ws._frameEls.get("frame-1")._extraControls()[0];
+  pin._ev.click[0]({ stopPropagation() {} });
+  d.submit();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(fired, [], "a refusal fires nothing");
+  refuse = false;
+  d.type("task_id", "T2");
+  d.submit();
+  await new Promise((r) => setTimeout(r, 0));
+  d.type("task_id", "T3");
+  d.submit();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(fired, ["T2", "T3"], "each confirmed submit of a pinned dialog fires once");
+});
+
+test("submit.then without a service fires on the resolve, and a bad spec warns instead of throwing", async () => {
+  const fired = [], warned = [];
+  const warn = console.warn;
+  console.warn = (m) => warned.push(m);
+  try {
+    const d = openForm({ submit: { then: { action: "pane.show", args: { pane: "x" } } },
+                         fields: [{ name: "a", value: "1" }] }, {}, {},
+                       { fireAction: (name, args) => fired.push([name, args]) });
+    assert.deepEqual(await d.submit(), { a: "1" });
+    assert.deepEqual(fired, [["pane.show", { pane: "x" }]]);
+    const bad = openForm({ submit: { then: "table.select" }, fields: [{ name: "a", value: "1" }] }, {}, {},
+                         { fireAction: () => fired.push("bad") });
+    assert.deepEqual(await bad.submit(), { a: "1" }, "the submit itself is unaffected");
+    assert.equal(fired.length, 1);
+    assert.ok(warned.some((m) => m.includes("submit.then")), "the shape is named once");
+  } finally {
+    console.warn = warn;
+  }
 });
 
 test("readonly on a select or checkbox disables it; a dynamic min validates", () => {

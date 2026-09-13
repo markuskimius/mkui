@@ -700,6 +700,29 @@ export function openDialog(spec, context, app, extra = {}) {
       return data;
     }
 
+    // `submit.then = { action, args }` fires an mkui action once a submit
+    // has gone through — `table.select` on the pane that owns what was just
+    // written, so the workspace follows the record the dialog made or moved
+    // rather than leaving it wherever the linked panes were looking. `args`
+    // resolve against what was submitted (the fields by name, `form`) over
+    // the opening context, so `keys = ["${task_id}"]` names the record the
+    // server received, scratch fields and all. A refused submit fires
+    // nothing; a pinned one fires on every confirmation.
+    function follow(data) {
+      const then = spec.submit?.then;
+      if (!then) return;
+      if (typeof then !== "object" || !then.action) {
+        console.warn("[mkui-dialog] submit.then: expected { action, args }");
+        return;
+      }
+      if (typeof app?.fireAction !== "function") return;
+      try {
+        app.fireAction(then.action, resolveObject(then.args ?? null, { ...context, ...data, form: data }));
+      } catch (e) {
+        console.warn(`[mkui-dialog] submit.then ${then.action} failed: ${e.message}`);
+      }
+    }
+
     async function submit() {
       if (resolved) return;
       if (!validate()) return;
@@ -750,6 +773,7 @@ export function openDialog(spec, context, app, extra = {}) {
             cleanup();
             resolve(data);
           }
+          follow(data);
         } catch (e) {
           status.textContent = e.message || "Transaction failed";
           status.className = "mkui-dialog-status mkui-dialog-status-error";
@@ -766,6 +790,7 @@ export function openDialog(spec, context, app, extra = {}) {
           cleanup();
           resolve(data);
         }
+        follow(data);
       }
     }
 
