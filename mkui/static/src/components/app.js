@@ -146,20 +146,31 @@ class MkuiApp extends HTMLElement {
       };
 
       // With auth enabled `_verify` never runs — logging in proves the
-      // server — but the capabilities still have to be read, and only an
-      // authenticated request carries them. Runs after login and again on
-      // each reconnect, once mkio's client has re-authenticated.
+      // server is the application — but the capabilities still have to be
+      // read, and only an authenticated request carries them. Runs after
+      // login and again on each reconnect, once mkio's client has
+      // re-authenticated. The one judgement it still makes is mkui's own
+      // mkio floor (`judgeServer` with no `expect`): a server of another
+      // major is incompatible however the login went.
       this._probe = async (client) => {
+        let info;
         try {
           const ms = config.mkio.timeout ?? 5000;
           const reply = await Promise.race([
             client.request("_mkio"),
             new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms)),
           ]);
-          capture(reply.row ?? {});
+          info = reply.row ?? {};
         } catch (e) {
           console.warn(`[mkui] could not read server capabilities: ${e.message}`);
+          return;
         }
+        st.set("mkio.server.mkio", info.mkio ?? null);
+        capture(info);
+        const { verified, reason } = judgeServer(info, null);
+        st.set("mkio.verified", verified);
+        st.set("mkio.reason", reason);
+        if (!verified) apply(incompatibleMap(config.mkio.incompatible, reason));
       };
 
       this._verify = async (client) => {

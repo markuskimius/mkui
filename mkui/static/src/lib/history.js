@@ -3,7 +3,7 @@
 // pane, the undo/redo gating, and the table's column rules all read the
 // same shapes from one place (tests/history.test.js).
 //
-// mkio 0.3.0 records every version of a row from a `versioned = true` table
+// mkio records every version of a row from a `versioned = true` table
 // in a companion `<table>__history`, keyed (base pk…, `_mkio_version`).
 // Each history row carries the version, the op that wrote it, the
 // transaction ref, the user, the service it came through, and the source
@@ -88,6 +88,34 @@ export function historyCapabilities(info) {
  */
 export function pkFromSchema(row) {
   return (row?.columns ?? []).filter((c) => c && c.pk).map((c) => c.name);
+}
+
+/**
+ * The columns a versioned table leaves out of its history, from the same
+ * `{ table }` reply (`unversioned = [...]` in mkio's table config; the key
+ * lists it only when non-empty). A history row never carries them, an
+ * edit to one records no version, and undo/redo leave them alone — so a
+ * versions table has no column to show for them, and a record pane can
+ * say so.
+ */
+export function unversionedFromSchema(row) {
+  const list = row?.unversioned;
+  return Array.isArray(list) ? list.filter((c) => typeof c === "string" && c) : [];
+}
+
+/**
+ * The identity mkio stamps on a query row as `_mkio_row`, rebuilt from
+ * the key columns the service builds it from (its `key`, else the primary
+ * key): one column is its value as a string, several are the values as a
+ * compact JSON array. A client that fabricates a row — an as-of snapshot
+ * read through a reqrep, which carries no `_mkio_row` — stamps it the
+ * same way, so the row shares identity with its live counterpart.
+ */
+export function mkioRowId(row, keyCols) {
+  if (!Array.isArray(keyCols) || !keyCols.length) return null;
+  const vals = keyCols.map((c) => row?.[c]);
+  if (vals.some((v) => v === undefined)) return null;
+  return vals.length === 1 ? String(vals[0]) : JSON.stringify(vals);
 }
 
 /* ── The `history` pane-spec block ─────────────────────────────────────── */

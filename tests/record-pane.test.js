@@ -428,6 +428,35 @@ test("without a configured key the server is asked which columns identify a reco
   assert.equal(sub().filter, "id == 'O1'");
 });
 
+test("a field the table keeps no history of is marked, from the same schema reply", async () => {
+  const { host } = await makePane({
+    spec: { key: null, fields: ["id", "symbol", "note"], record: { key: { id: "O1" } } },
+    replies: { _mkio: { type: "reply", row: { table: "orders", columns: [
+      { name: "id", pk: true }, { name: "symbol", pk: false }, { name: "note", pk: false },
+    ], unversioned: ["note"] } } },
+  });
+  await flush();
+  sub().onSnapshot([{ ...ORDER, note: "call back" }]);
+  const marked = findAll(host, "mkui-record-field").filter((f) => f.classList.contains("mkui-record-unversioned"));
+  assert.deepEqual(marked.map((f) => find(f, "mkui-record-fname").title), ["note — not versioned: changes record no version, and undo/redo leave it as it is"]);
+  assert.deepEqual(marked.map((f) => find(f, "mkui-record-fvalue").textContent), ["call back"]);
+  // the others are not
+  assert.equal(find(host, "mkui-record-fname").title, "id");
+});
+
+test("a configured key still reads the schema, so the marker does not depend on it", async () => {
+  const { host } = await makePane({
+    spec: { key: ["id"], fields: ["id", "note"], record: { key: { id: "O1" } } },
+    replies: { _mkio: { type: "reply", row: { table: "orders", columns: [{ name: "id", pk: true }], unversioned: ["note"] } } },
+  });
+  await flush();
+  assert.deepEqual(requests.map((r) => r.service), ["_mkio"]);
+  assert.equal(sub().filter, "id == 'O1'");
+  sub().onSnapshot([{ ...ORDER, note: "" }]);
+  const marked = findAll(host, "mkui-record-field").filter((f) => f.classList.contains("mkui-record-unversioned"));
+  assert.deepEqual(marked.map((f) => find(f, "mkui-record-fname").textContent), ["note"]);
+});
+
 test("a bad record block warns and leaves the window following nothing", async () => {
   const warned = [];
   const orig = console.warn;

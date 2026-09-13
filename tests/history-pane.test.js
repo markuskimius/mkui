@@ -298,7 +298,7 @@ test("the versions are a table over the feed, narrowed to the record", async () 
   assert.deepEqual(t.spec.columns, ["_mkio_version", "_mkio_op", "_mkio_user", "_mkio_ref", "id", "qty", "status"],
     "mkio's own columns first, then the record's as the source table has them");
   assert.equal(ws.tab, "O1", "the record names the tab, not a head");
-  assert.deepEqual(requests, [], "the chain is the table's rows, not a second read");
+  assert.ok(!requests.some((r) => r.service === "order_versions"), "the chain is the table's rows, not a second read");
 });
 
 test("the key goes into the filter as a literal, whatever its type", async () => {
@@ -474,6 +474,42 @@ test("without a configured key the pane asks the server which columns identify a
   assert.deepEqual(requests.map((r) => r.service), ["_mkio"]);
   assert.deepEqual(requests[0].data, { table: "orders" });
   assert.equal(table().spec.filter, "id == 'O1'");
+});
+
+test("a column the table keeps no history of gets no column in the versions table", async () => {
+  // The schema reply the key is asked from also names the `unversioned`
+  // columns (mkio 0.6): the history rows never carry them, so a column
+  // for one would sit empty.
+  const { table } = await makePane({
+    rows: [liveRow()],
+    history: { ...HISTORY, key: null },
+    srcColumns: ["id", "qty", "status", "note"],
+    replies: {
+      _mkio: { type: "reply", row: { table: "orders", columns: [
+        { name: "id", pk: true }, { name: "qty", pk: false }, { name: "note", pk: false },
+      ], unversioned: ["note"] } },
+    },
+  });
+  assert.deepEqual(table().spec.columns, ["_mkio_version", "_mkio_op", "_mkio_user", "_mkio_ref", "id", "qty", "status"]);
+});
+
+test("a configured key still reads the schema once, for the unversioned columns", async () => {
+  const { table } = await makePane({
+    rows: [liveRow()], srcColumns: ["id", "qty", "status", "note"],
+    replies: { _mkio: { type: "reply", row: { table: "orders", columns: [{ name: "id", pk: true }], unversioned: ["note"] } } },
+  });
+  assert.deepEqual(requests.map((r) => r.service), ["_mkio"]);
+  assert.equal(table().spec.filter, "id == 'O1'", "the configured key, not the schema's");
+  assert.ok(!table().spec.columns.includes("note"));
+});
+
+test("with a configured key a schema the server refuses costs nothing: every source column shows", async () => {
+  const { table, host } = await makePane({
+    rows: [liveRow()], srcColumns: ["id", "qty", "status", "note"],
+    replies: { _mkio: { type: "error", message: "authentication required" } },
+  });
+  assert.ok(table().spec.columns.includes("note"));
+  assert.equal(emptyText(host), null, "not an error the pane reports");
 });
 
 test("a key that cannot be resolved is reported, not guessed", async () => {

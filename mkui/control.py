@@ -30,6 +30,10 @@ queued for tabs that connect later — push after they subscribe (an
 The service speaks mkio's subpub protocol on the wire, so it needs no
 table: a subscribe gets an empty snapshot, and every push is an
 ``update`` whose row is ``{"action": name, "args": …}``.
+
+Built on mkio 1.x: :class:`mkio.services.base.Service` and the envelope
+builders in :mod:`mkio.ws_protocol` are part of what mkio's semantic
+versioning promises, so any 1.x release serves this module unchanged.
 """
 
 from __future__ import annotations

@@ -4,8 +4,10 @@
 promise is quiet: the client paints its `incompatible` map for reason
 `version` in the statusbar rather than failing, which reads as a broken server
 instead of a stale config. mkio 0.3 arriving beside an example that still said
-`mkio = "0.2"` did exactly that — semver matching is exact-minor below 1.0, so
-a minor release of the library invalidates the pin.
+`mkio = "0.2"` did exactly that. From mkio 1.0.0 the rule is semantic
+versioning — a `mkio` pin accepts its own major at or above the pinned minor
+and patch — so a pin goes stale only when it asks for a release newer than
+the server, or when it still says `0.x`, which no 1.x server accepts.
 
 These tests put each example's own `expect` block through mkio's real
 `InfoService`, the same code the browser's `_mkio` request reaches, so drift in
@@ -181,7 +183,9 @@ class TestExpect(unittest.TestCase):
         """The negative control: prove the harness would notice a drifted pin.
 
         Without this, a change that stopped the compatibility check running
-        would leave every assertion above trivially true.
+        would leave every assertion above trivially true. A pin one minor
+        above the server asks for additions it does not have, under the
+        exact-minor rule of 0.x and the semantic rule of 1.x alike.
         """
         for name, server, client in with_expect():
             expect = dict(client["mkio"]["expect"])
@@ -195,6 +199,31 @@ class TestExpect(unittest.TestCase):
                 row = ask_mkio(server, stale)
                 self.assertIs(row.get("compatible"), False, f"{name}: a wrong mkio pin passed")
                 self.assertIs(row["compatibility"]["mkio"], False)
+
+    def test_a_pre_1_0_pin_is_rejected_by_a_1x_server(self):
+        """The hazard of mkio's 1.0.0: `mkio = "0.x"` was the exact-minor
+        pin every pre-1.0 example carried, and a 1.x server accepts none of
+        them — the statusbar would read "incompatible" against a server that
+        is nothing but newer."""
+        for name, server, client in with_expect():
+            expect = dict(client["mkio"]["expect"])
+            with self.subTest(example=name):
+                served = ask_mkio(server, {})["mkio"]
+                self.assertRegex(served, r"^[1-9]\d*\.", f"the installed mkio is {served}, not 1.x+")
+                row = ask_mkio(server, {**expect, "mkio": "0.10"})
+                self.assertIs(row.get("compatible"), False, f"{name}: a 0.x pin passed a 1.x server")
+                self.assertIs(row["compatibility"]["mkio"], False)
+
+    def test_no_example_pins_mkio_below_1(self):
+        """mkui 1.x is built against mkio 1.x and checks the major itself
+        (`lib/verify.js`); a `0.x` pin in an example would be the stale one
+        the test above rejects."""
+        for name, _server, client in with_expect():
+            pin = client["mkio"]["expect"].get("mkio")
+            with self.subTest(example=name):
+                if pin is None:
+                    continue
+                self.assertRegex(str(pin), r"^[1-9]", f"{name}: expect.mkio = {pin!r} is pre-1.0")
 
     def test_expect_version_tracks_the_server_it_names(self):
         """`version` is the app's own, so it must match that server.toml."""
@@ -440,6 +469,29 @@ class TestHistoryWiring(unittest.TestCase):
                         f"{name}: {pid}'s history.key names {missing}, "
                         f"absent from [tables.{table}].columns",
                     )
+
+    def test_unversioned_columns_are_declared_and_not_key(self):
+        """`unversioned` (mkio 0.6) names columns the history leaves out: each
+        must be a declared column, never a key column (mkio refuses that at
+        load, but the client's `history.key` is checked here), and one
+        example shows the feature so the panes' handling of it is exercised."""
+        shown = []
+        for name, server, client in examples():
+            tables = server.get("tables", {})
+            for pid, hist in history_blocks(client):
+                table = hist.get("table")
+                if not table or table not in tables:
+                    continue
+                unv = tables[table].get("unversioned") or []
+                with self.subTest(example=name, pane=pid):
+                    cols = set(tables[table].get("columns", {}))
+                    self.assertEqual([c for c in unv if c not in cols], [],
+                                     f"{name}: unversioned names a column [tables.{table}] lacks")
+                    self.assertEqual([c for c in unv if c in (hist.get("key") or [])], [],
+                                     f"{name}: {pid}'s history.key overlaps unversioned")
+                    if unv:
+                        shown.append((name, table, unv))
+        self.assertTrue(shown, "no example declares an `unversioned` column any more")
 
     def test_undo_and_redo_name_ops_of_the_matching_op_type(self):
         """`{ service, op }`, where the op really is an undo (or a redo): an

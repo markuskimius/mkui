@@ -1723,6 +1723,9 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-record-fvalue { overflow-wrap: anywhere; }
 .mkui-record-fvalue.mkui-cell-styled { background: var(--mkui-cell-bg); border-radius: 2px; padding: 0 3px; }
 .mkui-record-blank { color: var(--mkui-fg-mute); }
+/* A field the table keeps no history of (mkio `unversioned`): the label
+   says so, dimmed, and its tooltip spells it out. */
+.mkui-record-unversioned .mkui-record-fname { color: var(--mkui-fg-mute); font-style: italic; }
 .mkui-record-group + .mkui-record-group { margin-top: 2px; }
 .mkui-record-group-head {
   display: flex;

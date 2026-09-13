@@ -73,7 +73,9 @@ service = "all_orders"
 protocol = "query"
 # `_mkio_version` is mkio's own column — the cursor into the record's
 # chain. Naming it here is what shows it; it is hidden otherwise.
-columns = ["id", "_mkio_version", "side", "symbol", "qty", "price", "status"]
+# `note` is unversioned on the server (server.toml), so it shows here and
+# in the detail window but has no column in the history pane.
+columns = ["id", "_mkio_version", "side", "symbol", "qty", "price", "status", "note"]
 labels = { id = "ID" }
 # The audit tape publishes the id of the change you click; this table
 # narrows to that record. The chip on the toolbar shows the link and
@@ -112,10 +114,11 @@ title = "Order"
 type = "mkio-record"
 service = "all_orders"
 source = "orders"
-fields = ["id", "side", "symbol", "qty", "price", "status", "_mkio_version"]
+fields = ["id", "side", "symbol", "qty", "price", "status", "_mkio_version", "note"]
 groups = [
   { label = "Instruction", columns = ["id", "side", "symbol", "qty", "price"] },
   { label = "Progress", columns = ["status", "_mkio_version"] },
+  { label = "Notes", columns = ["note"] },
 ]
 labels = { _mkio_version = "Version" }
 
@@ -187,6 +190,18 @@ layout = { type = "tabs", active = 0, children = ["detail"] }
 url = "ws://localhost:8080/ws"
 connected    = { "status.message" = "Connected" }
 disconnected = { "status.message" = "Disconnected" }
+
+# What this app requires of the server: its own name and version, both
+# set in server.toml. mkui's own requirement — an mkio 1.x server — is
+# checked whether or not this block exists; `mkio` is pinned here only
+# by an app that needs a particular minor's additions.
+[mkio.expect]
+name = "order-history"
+version = "1.0"
+
+[mkio.incompatible]
+"status.message" = "Not the order-history server"
+version = { "status.message" = "Incompatible order-history server" }
 
 [statusbar]
 left  = [{ type = "text", text = "${state.status.message}" }]

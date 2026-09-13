@@ -527,10 +527,14 @@ url = "ws://localhost:8080/ws"
 control = "_mkui"
 
 # What this app requires of the server it connects to; a mismatch applies
-# `incompatible` below. Below 1.0 semver matching is exact-minor, so the
-# `mkio` pin has to be bumped with every minor release of the library —
-# tests/test_examples.py fails when it goes stale, rather than letting the
-# statusbar quietly read "Incompatible order-book version".
+# `incompatible` below. `name` and `version` are the app's own (server.toml
+# sets them), `protocol` the wire protocol, `expr` the expression language,
+# matched exactly. mkui's own requirement — an mkio 1.x server — is checked
+# whether or not this block exists, so `mkio` is pinned only by an app that
+# needs a particular minor's additions (`"1.2"` accepts 1.2.0 and later
+# 1.x; a `0.x` pin no 1.x server accepts). tests/test_examples.py runs
+# this block against server.toml, so a stale pin fails there rather than
+# quietly reading "Incompatible order-book version" in the statusbar.
 [mkio.expect]
 name = "order-book"
 version = "1.0"

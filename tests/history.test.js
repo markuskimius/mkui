@@ -10,6 +10,7 @@ import {
   MKIO_FIELDS, SHOWABLE_COLUMNS, MKIO_LABELS,
   historyCapabilities, parseHistorySpec,
   parseChain, cursorOf, diffVersions, changedOnly, sameValue, blame,
+  pkFromSchema, unversionedFromSchema, mkioRowId,
 } from "../mkui/static/src/lib/history.js";
 
 // Collects the warnings a parse emits instead of printing them.
@@ -425,4 +426,47 @@ test("parseChain treats every `_mkio_` key as the framework's, not the record's"
   ]);
   assert.deepEqual(chain.columns, ["id", "qty"]);
   assert.equal(chain.byVersion.get(1).row._mkio_row, "O1-1", "the raw row still carries it");
+});
+
+/* ── The `{ table }` schema reply ─────────────────────────────────────── */
+
+const SCHEMA = { table: "orders", versioned: true, history_table: "orders__history",
+  columns: [{ name: "id", pk: true }, { name: "qty", pk: false }, { name: "note", pk: false }],
+  unversioned: ["note"] };
+
+test("pkFromSchema reads the key columns in declaration order", () => {
+  assert.deepEqual(pkFromSchema(SCHEMA), ["id"]);
+  assert.deepEqual(pkFromSchema({ columns: [{ name: "b", pk: 2 }, { name: "a", pk: 1 }, null] }), ["b", "a"]);
+  assert.deepEqual(pkFromSchema(null), []);
+  assert.deepEqual(pkFromSchema({}), []);
+});
+
+test("unversionedFromSchema reads the columns the history leaves out", () => {
+  assert.deepEqual(unversionedFromSchema(SCHEMA), ["note"]);
+  // the key is absent from the reply when the list is empty, and a server
+  // before it existed never sent one: both mean none
+  assert.deepEqual(unversionedFromSchema({ columns: SCHEMA.columns }), []);
+  assert.deepEqual(unversionedFromSchema(null), []);
+  assert.deepEqual(unversionedFromSchema({ unversioned: "note" }), []);
+  assert.deepEqual(unversionedFromSchema({ unversioned: ["note", 3, "", null, "memo"] }), ["note", "memo"]);
+});
+
+/* ── The identity mkio stamps on a query row ──────────────────────────── */
+
+test("mkioRowId: one key column is its value as a string", () => {
+  assert.equal(mkioRowId({ id: 7, qty: 1 }, ["id"]), "7");
+  assert.equal(mkioRowId({ id: "O1" }, ["id"]), "O1");
+  assert.equal(mkioRowId({ id: null }, ["id"]), "null");
+});
+
+test("mkioRowId: several are the values as a compact JSON array, in key order", () => {
+  assert.equal(mkioRowId({ day: "2026-09-13", id: 7 }, ["id", "day"]), '[7,"2026-09-13"]');
+  assert.equal(mkioRowId({ a: 1, b: null }, ["a", "b"]), "[1,null]");
+});
+
+test("mkioRowId: no key, or a row missing a key column, is null", () => {
+  assert.equal(mkioRowId({ id: 1 }, []), null);
+  assert.equal(mkioRowId({ id: 1 }, null), null);
+  assert.equal(mkioRowId({ qty: 1 }, ["id"]), null);
+  assert.equal(mkioRowId(null, ["id"]), null);
 });

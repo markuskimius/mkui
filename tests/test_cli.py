@@ -210,6 +210,71 @@ class TestInit(unittest.TestCase):
         self.assertTrue(os.path.isdir(target))
 
 
+class TestMkioFloor(unittest.TestCase):
+    """`mkui serve` refuses an mkio of another major before it imports it.
+
+    mkui is built against mkio 1.x; semantic versioning means any 1.x
+    serves, and a 2.x may not speak what `mkui/control.py` and the browser
+    expect. A checkout with no package metadata cannot be judged and passes.
+    """
+
+    def test_the_built_against_major_passes(self):
+        from mkui.__main__ import check_mkio, MKIO_MAJOR
+        self.assertEqual(MKIO_MAJOR, 1)
+        for v in ["1.0.0", "1.0", "1.7.2", "1.99.0"]:
+            self.assertIsNone(check_mkio(v), v)
+
+    def test_another_major_is_refused_with_the_versions_named(self):
+        from mkui.__main__ import check_mkio
+        from mkui import __version__
+        for v in ["0.10.0", "0.5.1", "2.0.0"]:
+            msg = check_mkio(v)
+            self.assertIsNotNone(msg, v)
+            self.assertIn(f"mkio {v}", msg)
+            self.assertIn(f"mkui {__version__}", msg)
+            self.assertIn("mkio 1.x", msg)
+
+    def test_an_unreadable_version_is_not_judged(self):
+        from mkui.__main__ import check_mkio
+        for v in ["dev", "", "x.y"]:
+            self.assertIsNone(check_mkio(v), repr(v))
+
+    def test_reads_the_installed_metadata_when_not_given(self):
+        import importlib.metadata
+        from unittest import mock
+        from mkui.__main__ import check_mkio
+        with mock.patch.object(importlib.metadata, "version", return_value="2.0.0"):
+            self.assertIsNotNone(check_mkio())
+        with mock.patch.object(importlib.metadata, "version", return_value="1.4.0"):
+            self.assertIsNone(check_mkio())
+        with mock.patch.object(importlib.metadata, "version",
+                               side_effect=importlib.metadata.PackageNotFoundError("mkio")):
+            self.assertIsNone(check_mkio())
+
+    def test_serve_exits_1_before_touching_the_project(self):
+        import argparse
+        import importlib.metadata
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+        from mkui.__main__ import cmd_serve
+        args = argparse.Namespace(dir="/nonexistent/project", port=None, open=False)
+        err = io.StringIO()
+        with mock.patch.object(importlib.metadata, "version", return_value="0.10.0"), \
+             redirect_stderr(err), self.assertRaises(SystemExit) as cm:
+            cmd_serve(args)
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("needs mkio 1.x", err.getvalue())
+        self.assertIn("pip install 'mkio>=1.0,<2'", err.getvalue())
+        # the missing project was never reached: the mkio message is the only one
+        self.assertNotIn("not found", err.getvalue())
+
+    def test_pyproject_declares_the_same_range(self):
+        with open(Path(__file__).parent.parent / "pyproject.toml", "rb") as f:
+            proj = tomllib.load(f)
+        self.assertEqual(proj["project"]["optional-dependencies"]["mkio"], ["mkio>=1.0,<2"])
+
+
 class TestServe(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()

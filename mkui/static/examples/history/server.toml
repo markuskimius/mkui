@@ -16,10 +16,18 @@ auto_migrate = "safe"
 # `versioned = true` is the whole switch: mkio numbers every version of
 # every row (`_mkio_version`, 1 on insert and +1 per edit) and records it
 # in a companion `orders__history` table, stamped with the ref, the user
-# and the service the change came through.
+# and the service the change came through. A write that changes nothing
+# records nothing.
+#
+# `unversioned` names the columns left out of that: an edit to `note`
+# makes no version, the history table has no column for it, and undo and
+# redo pass it by — a scribble on the record, not a fact about the order.
+# The detail window dims its label, and the history pane shows no column
+# for it.
 [tables.orders]
-columns = { id = "INTEGER PRIMARY KEY AUTOINCREMENT", side = "TEXT NOT NULL", symbol = "TEXT NOT NULL", qty = "INTEGER", price = "REAL DEFAULT 0", status = "TEXT DEFAULT 'pending'" }
+columns = { id = "INTEGER PRIMARY KEY AUTOINCREMENT", side = "TEXT NOT NULL", symbol = "TEXT NOT NULL", qty = "INTEGER", price = "REAL DEFAULT 0", status = "TEXT DEFAULT 'pending'", note = "TEXT DEFAULT ''" }
 versioned = true
+unversioned = ["note"]
 
 [services.orders]
 protocol = "transaction"
@@ -29,6 +37,8 @@ new    = [{ table = "orders", op_type = "insert", fields = ["side", "symbol", "q
 amend  = [{ table = "orders", op_type = "update", key = ["id"], fields = ["qty", "price"] }]
 fill   = [{ table = "orders", op_type = "update", key = ["id"], fields = ["status"], defaults = { status = "filled" } }]
 cancel = [{ table = "orders", op_type = "update", key = ["id"], fields = ["status"], defaults = { status = "cancelled" } }]
+# A note on the record: `note` is unversioned, so this records no version.
+note   = [{ table = "orders", op_type = "update", key = ["id"], fields = ["note"] }]
 # undo/redo take only the key — the values come from the history table —
 # and record no new version, so a step is always reversible. Undoing
 # version 1 removes the row and keeps its versions, so redo can rebuild it.

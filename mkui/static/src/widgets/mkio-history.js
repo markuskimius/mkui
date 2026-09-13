@@ -31,7 +31,7 @@ import { isRich, richText, renderRich } from "../lib/rich.js";
 import { writeGrid, makeCopyStatus } from "../lib/copy.js";
 import { refToDate } from "../lib/timeparse.js";
 import {
-  parseHistorySpec, parseChain, cursorOf, diffVersions, blame, pkFromSchema,
+  parseHistorySpec, parseChain, cursorOf, diffVersions, blame, pkFromSchema, unversionedFromSchema,
   MKIO_FIELDS, MKIO_LABELS,
 } from "../lib/history.js";
 
@@ -179,6 +179,7 @@ registerPaneType("mkio-history", async (spec, app, host) => {
   let showUnchanged = false;
   let view = "diff";      // "diff" | "blame" — a preference, not per record
   let keyCols = null;     // resolved primary key columns
+  let unversionedCols = [];  // the table's columns its history leaves out
   let loadGen = 0, stateGen = 0;
   let client = null;
   let built = false;      // the embedded table exists
@@ -206,12 +207,14 @@ registerPaneType("mkio-history", async (spec, app, host) => {
   // when — then the record's, as the source table has them. They are named
   // rather than inferred because `_mkio_*` columns show only when a config
   // asks for them.
+  // A column the table leaves out of its history (`unversioned`) has no
+  // version to show and would sit empty: dropped.
   function historyColumns(h) {
     const meta = [MKIO_FIELDS.version, MKIO_FIELDS.op, MKIO_FIELDS.user, MKIO_FIELDS.ref];
     const src = h?.columns ?? srcHook()?.columns?.() ?? srcSpec.columns ?? null;
     if (src && !src.length) return null;
     if (!src) return null;                    // nothing known: let the data say
-    return [...meta, ...src.filter((c) => !meta.includes(c))];
+    return [...meta, ...src.filter((c) => !meta.includes(c) && !unversionedCols.includes(c))];
   }
 
   // The feed is a query over the whole history table; `recordFilter`
@@ -247,23 +250,36 @@ registerPaneType("mkio-history", async (spec, app, host) => {
 
   /* ── Reading the chain ────────────────────────────────────────────── */
 
-  // The key columns: configured, else the base table's primary key, which
-  // the server will name (`_mkio` table introspection). Asked for once.
-  let keyColsAsked = null;   // the flight, so two loads share one request
-  async function resolveKeyCols(h) {
-    if (h.key) return h.key;
-    if (keyCols) return keyCols;
-    if (!h.table) return null;
-    if (!keyColsAsked) {
-      keyColsAsked = (async () => {
+  // The table's schema (`_mkio` table introspection), asked for once and
+  // shared: it names the primary key when the config did not, and the
+  // unversioned columns either way, which is why a configured key still
+  // reads it — best-effort there, since the key is already known.
+  let schemaFlight = null;   // the flight, so two loads share one request
+  function tableSchema(h) {
+    if (!h.table) return Promise.resolve(null);
+    if (!schemaFlight) {
+      schemaFlight = (async () => {
         const reply = await client.request("_mkio", { table: h.table });
         if (reply?.type === "error") throw new Error(reply.message ?? "schema unavailable");
-        const cols = pkFromSchema(reply?.row);
-        if (!cols.length) throw new Error(`table '${h.table}' reports no primary key`);
-        return (keyCols = cols);
-      })().catch((e) => { keyColsAsked = null; throw e; });   // a failure may be retried
+        unversionedCols = unversionedFromSchema(reply?.row);
+        return reply?.row ?? null;
+      })().catch((e) => { schemaFlight = null; throw e; });   // a failure may be retried
     }
-    return keyColsAsked;
+    return schemaFlight;
+  }
+
+  // The key columns: configured, else the base table's primary key.
+  async function resolveKeyCols(h) {
+    if (h.key) {
+      await tableSchema(h).catch(() => {});
+      return h.key;
+    }
+    if (keyCols) return keyCols;
+    const row = await tableSchema(h);
+    if (!row) return null;
+    const cols = pkFromSchema(row);
+    if (!cols.length) throw new Error(`table '${h.table}' reports no primary key`);
+    return (keyCols = cols);
   }
 
   const rowsOf = (reply) => reply?.rows ?? (reply?.row ? [reply.row] : []);

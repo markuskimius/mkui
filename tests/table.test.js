@@ -8561,6 +8561,27 @@ test("as of: history rows are given the identity the table tracks records by", a
   assert.deepEqual(host._paneEl._select.set(["1"]).selected, ["1"]);
 });
 
+test("as of: the identity is built the way mkio builds `_mkio_row`, so a composite key reads as its JSON array", async () => {
+  // A live row's `_mkio_row` for key ["id", "day"] is '[1,"d1"]' (mkio's
+  // `_key`): the as-of row must get the same, or a selection made before
+  // the switch would point at nothing.
+  const t = await createTable({
+    protocol: "query", columns: ["id", "day", "qty"], rowColumn: true,
+    history: { ...AS_OF_HISTORY, key: ["id", "day"] },
+  }, { replies: { order_as_of: { type: "reply", rows: [
+    { id: 1, day: "d1", _mkio_version: 2, qty: "500" },
+    { id: 2, day: "d1", _mkio_version: 1, qty: "300" },
+  ] } } });
+  triggerVisible(t.io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: '[1,"d1"]', id: 1, day: "d1", _mkio_version: 3, qty: "750" },
+    { _mkio_row: '[2,"d1"]', id: 2, day: "d1", _mkio_version: 1, qty: "300" },
+  ]);
+  await showAsOf(t.host);
+  assert.deepEqual(t.host._paneEl._select.set(['[1,"d1"]']).selected, ['[1,"d1"]']);
+  assert.deepEqual(t.host._paneEl._select.set(["1\u0000d1"]).selected, []);
+});
+
 test("as of: the live subscription is dropped, and nothing lands on the view", async () => {
   const { host } = await asOfTable();
   const subs = fakeClient.calls.filter(c => c.type === "subscribe").length;

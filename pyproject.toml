@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mkui"
-version = "0.10.0"
+version = "1.0.0"
 description = "Config-driven, zero-dependency web GUI framework with dockable panes"
 readme = "README.md"
 license = "Apache-2.0"
@@ -12,13 +12,19 @@ requires-python = ">=3.9"
 authors = [{ name = "Mark Kim" }]
 keywords = ["gui", "web", "framework", "dockable", "config-driven"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Programming Language :: JavaScript",
     "Programming Language :: Python :: 3",
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Software Development :: User Interfaces",
 ]
+
+# mkio is optional: standalone mode has no server. `mkui serve`, the
+# examples and the control channel need it, at the major mkui is built
+# against (`mkui/__main__.py` checks at serve time).
+[project.optional-dependencies]
+mkio = ["mkio>=1.0,<2"]
 
 [project.scripts]
 mkui = "mkui.__main__:main"

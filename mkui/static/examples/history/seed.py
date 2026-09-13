@@ -66,6 +66,11 @@ async def main():
         await send(client, {"id": ids[1]}, "undo")
         print(f"order {ids[1]}: amended, cancelled, then stepped back to v2")
 
+        # A note on the first order. `note` is unversioned, so this changes
+        # the row without recording a version: the table still says v3.
+        await send(client, {"id": ids[0], "note": "client called to confirm"}, "note")
+        print(f"order {ids[0]}: noted — still three versions")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

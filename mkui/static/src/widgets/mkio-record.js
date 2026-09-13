@@ -25,7 +25,7 @@ import { attachRecord, recordFilter } from "../lib/subject.js";
 import { makeSubjectControls } from "../lib/subject-ui.js";
 import { isRich, richText, renderRich } from "../lib/rich.js";
 import { writeGrid, makeCopyStatus } from "../lib/copy.js";
-import { pkFromSchema } from "../lib/history.js";
+import { pkFromSchema, unversionedFromSchema } from "../lib/history.js";
 
 const el = (cls, tag = "div") => {
   const n = document.createElement(tag);
@@ -106,6 +106,7 @@ registerPaneType("mkio-record", async (spec, app, host) => {
   let row = null;         // the record as the service has it
   let keyCols = null;     // resolved key columns
   let keyColsAsked = null;
+  let unversionedCols = [];  // the table's columns its history leaves out
   let client = null;
   let subid = null;
   let subscribed = false;
@@ -126,22 +127,37 @@ registerPaneType("mkio-record", async (spec, app, host) => {
   // The key columns: configured, else the source table's `history.key`,
   // else the server's word on the table's primary key. Asked for once,
   // and the flight is shared so two record changes make one request.
-  async function resolveKeyCols() {
-    const own = spec.key ?? getWs()?.paneHistory?.(srcId)?.spec?.key ?? null;
-    if (own) return Array.isArray(own) ? own : [own];
-    if (keyCols) return keyCols;
-    const table = spec.table ?? service;
-    if (!table) return null;
+  // The table's schema, asked for once: the key when nothing configured
+  // one, and the unversioned columns either way — so a configured key
+  // still reads it, best-effort.
+  // The table: configured, else the source table's `history.table`, else
+  // the service's name (a query service is often named after its table).
+  function tableSchema() {
+    const table = spec.table ?? getWs()?.paneHistory?.(srcId)?.spec?.table ?? service;
+    if (!table) return Promise.resolve(null);
     if (!keyColsAsked) {
       keyColsAsked = (async () => {
         const reply = await client.request("_mkio", { table });
         if (reply?.type === "error") throw new Error(reply.message ?? "schema unavailable");
-        const cols = pkFromSchema(reply?.row);
-        if (!cols.length) throw new Error(`table '${table}' reports no primary key`);
-        return (keyCols = cols);
+        unversionedCols = unversionedFromSchema(reply?.row);
+        return reply?.row ?? null;
       })().catch((e) => { keyColsAsked = null; throw e; });
     }
     return keyColsAsked;
+  }
+
+  async function resolveKeyCols() {
+    const own = spec.key ?? getWs()?.paneHistory?.(srcId)?.spec?.key ?? null;
+    if (own) {
+      await tableSchema().catch(() => {});
+      return Array.isArray(own) ? own : [own];
+    }
+    if (keyCols) return keyCols;
+    const row = await tableSchema();
+    if (!row) return null;
+    const cols = pkFromSchema(row);
+    if (!cols.length) throw new Error(`table '${row.table ?? spec.table ?? service}' reports no primary key`);
+    return (keyCols = cols);
   }
 
   function unsub() {
@@ -274,6 +290,13 @@ registerPaneType("mkio-record", async (spec, app, host) => {
     const name = el("mkui-record-fname");
     name.textContent = label(col);
     name.title = col;
+    // A column the table keeps no history of: an edit here makes no
+    // version, and undo and redo pass it by. Said on the label, so the
+    // history pane's silence about it is not a surprise.
+    if (unversionedCols.includes(col)) {
+      line.classList.add("mkui-record-unversioned");
+      name.title = `${col} — not versioned: changes record no version, and undo/redo leave it as it is`;
+    }
     const val = el("mkui-record-fvalue");
     const widget = spec.widgets?.[col] ? getWidget(spec.widgets[col]) : null;
     if (widget) {

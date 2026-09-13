@@ -1,7 +1,7 @@
 // Run with: node --test tests/verify.test.js
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { judgeServer, incompatibleMap, DEFAULT_MESSAGES } from "../mkui/static/src/lib/verify.js";
+import { judgeServer, incompatibleMap, DEFAULT_MESSAGES, parseSemver, mkioSupported, MKIO_MAJOR } from "../mkui/static/src/lib/verify.js";
 
 const expect = { name: "order-book", version: "1.0" };
 
@@ -27,6 +27,39 @@ test("judgeServer: the right name failing the version check is 'version'", () =>
 
 test("judgeServer: without an expect block any answer verifies", () => {
   assert.deepEqual(judgeServer({ name: "anything", compatible: false }, undefined), { verified: true, reason: null });
+});
+
+// mkui's own floor: mkio 1.x. Semantic versioning from mkio 1.0.0 means a
+// minor release only adds, so the major is the whole question.
+test("parseSemver: two or three dot-parts, nothing else", () => {
+  assert.deepEqual(parseSemver("1.2.3"), [1, 2, 3]);
+  assert.deepEqual(parseSemver("1.2"), [1, 2, 0]);
+  assert.deepEqual(parseSemver(" 10.0.1 "), [10, 0, 1]);
+  for (const bad of ["1", "1.2.3.4", "1.x", "dev", "", null, undefined, 1.2, "v1.0.0"])
+    assert.equal(parseSemver(bad), null, `parseSemver(${JSON.stringify(bad)})`);
+});
+
+test("mkioSupported: the built-against major passes, another fails, an unreadable one passes", () => {
+  assert.equal(MKIO_MAJOR, 1);
+  for (const ok of ["1.0.0", "1.7.2", "1.0", "1.99.99"]) assert.equal(mkioSupported(ok), true, ok);
+  for (const no of ["0.10.0", "0.5.1", "2.0.0", "2.0"]) assert.equal(mkioSupported(no), false, no);
+  // a source checkout with no package metadata reports "dev": not judged
+  for (const dev of ["dev", "", null, undefined]) assert.equal(mkioSupported(dev), true, String(dev));
+});
+
+test("judgeServer: a server of another mkio major is 'version', expect block or not", () => {
+  assert.deepEqual(judgeServer({ name: "order-book", mkio: "0.10.0", compatible: true }, expect), { verified: false, reason: "version" });
+  assert.deepEqual(judgeServer({ name: "order-book", mkio: "2.0.0" }, undefined), { verified: false, reason: "version" });
+  assert.deepEqual(judgeServer({ name: "order-book", mkio: "2.0.0" }, null), { verified: false, reason: "version" });
+  // the right major verifies as before; a reply without `mkio` is not judged on it
+  assert.deepEqual(judgeServer({ name: "order-book", mkio: "1.3.0" }, expect), { verified: true, reason: null });
+  assert.deepEqual(judgeServer({ name: "order-book", mkio: "1.3.0" }, undefined), { verified: true, reason: null });
+  assert.deepEqual(judgeServer({ name: "order-book" }, undefined), { verified: true, reason: null });
+  assert.deepEqual(judgeServer({ name: "order-book", mkio: "dev" }, expect), { verified: true, reason: null });
+});
+
+test("judgeServer: 'name' still wins over the mkio floor", () => {
+  assert.deepEqual(judgeServer({ name: "inventory", mkio: "0.10.0" }, expect), { verified: false, reason: "name" });
 });
 
 test("incompatibleMap: a flat state map applies unchanged for every reason", () => {
@@ -103,6 +136,15 @@ test("<mkui-app> still records what the server said before judging it", () => {
   const compat = appSrc.indexOf('st.set("mkio.server.compatibility", info.compatibility)');
   assert.ok(record > 0 && record < judge);
   assert.ok(compat > 0 && compat < judge);
+});
+
+test("<mkui-app> judges the mkio floor under auth too, where _verify never runs", () => {
+  const probe = appSrc.slice(appSrc.indexOf("this._probe = async"), appSrc.indexOf("this._verify = async"));
+  assert.match(probe, /const \{ verified, reason \} = judgeServer\(info, null\);\n\s*st\.set\("mkio\.verified", verified\);\n\s*st\.set\("mkio\.reason", reason\);\n\s*if \(!verified\) apply\(incompatibleMap\(config\.mkio\.incompatible, reason\)\);/);
+  // what it judges is recorded first, for the statusbar
+  assert.ok(probe.indexOf('st.set("mkio.server.mkio", info.mkio ?? null)') < probe.indexOf("judgeServer(info, null)"));
+  // and a failed read judges nothing: the login already proved the server
+  assert.ok(probe.indexOf("could not read server capabilities") < probe.indexOf("return;"));
 });
 
 test("<mkui-app> clears mkio.reason on disconnect", () => {

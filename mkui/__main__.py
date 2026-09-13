@@ -1,6 +1,7 @@
 """mkui — scaffold and serve mkui projects."""
 
 import argparse
+import importlib.metadata
 import shutil
 import subprocess
 import sys
@@ -299,7 +300,40 @@ def cmd_init(args):
     print(f"Next: mkui serve {args.dir}")
 
 
+# The mkio major this mkui is built against. mkio follows semantic
+# versioning from 1.0.0, so any 1.x speaks what the control service and
+# the browser client expect; another major may not.
+MKIO_MAJOR = 1
+
+
+def check_mkio(version=None):
+    """Whether the installed mkio is one this mkui can serve with.
+
+    Returns ``None`` when it is, else the message to print. ``version``
+    is read from the package metadata when not given; a checkout with no
+    metadata cannot be judged and passes, as does one whose version does
+    not parse.
+    """
+    if version is None:
+        try:
+            version = importlib.metadata.version("mkio")
+        except importlib.metadata.PackageNotFoundError:
+            return None
+    head = str(version).split(".", 1)[0]
+    if not head.isdigit():
+        return None
+    if int(head) != MKIO_MAJOR:
+        return f"mkui {__version__} needs mkio {MKIO_MAJOR}.x, found mkio {version}"
+    return None
+
+
 def cmd_serve(args):
+    problem = check_mkio()
+    if problem:
+        print(f"error: {problem}", file=sys.stderr)
+        print(f"       pip install 'mkio>={MKIO_MAJOR}.0,<{MKIO_MAJOR + 1}'", file=sys.stderr)
+        sys.exit(1)
+
     from mkio import create_app
 
     project_dir = Path(args.dir).resolve()

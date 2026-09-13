@@ -8,7 +8,7 @@ import { writeGrid, makeCopyStatus } from "../lib/copy.js";
 import { isRich, richText, richToHTML, renderRich } from "../lib/rich.js";
 import {
   SHOWABLE_COLUMNS, MKIO_LABELS, MKIO_FIELDS, historyTable, parseHistorySpec,
-  pkFromSchema, parseChain, diffVersions, changedOnly,
+  pkFromSchema, mkioRowId, parseChain, diffVersions, changedOnly,
 } from "../lib/history.js";
 import {
   detectTimeKind, parseTime, kindForSpec, kindForFormat, inputToBound, boundToInput,
@@ -3117,7 +3117,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     // stamp each with the identity the table tracks records by, built
     // from the key columns, so selection and linking work as ever.
     const rows_ = reply.rows ?? (reply.row ? [reply.row] : []);
-    if (keyCols) for (const r of rows_) r[idKey] = keyCols.map((c) => r[c]).join("\u0000");
+    if (keyCols) for (const r of rows_) r[idKey] = mkioRowId(r, keyCols) ?? r[idKey];
     unsub();
     asOfRef = ref;
     host.classList.add("mkui-table-historic");
@@ -5380,7 +5380,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     el.addEventListener("animationend", () => el.classList.remove(cls), { once: true });
   }
 
-  // Which flash a live change deserves. mkio 0.5 says outright whether one
+  // Which flash a live change deserves. mkio says outright whether one
   // came from a version cursor move — `cause` is "undo" or "redo" — and a
   // record moving under you because someone stepped it along its versions
   // is a different event from an edit, so each direction gets its own
@@ -5570,8 +5570,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const tr = rowEls.get(key);
     if (tr) {
       // What moved this record: mkio says so outright when it was a
-      // cursor move. Failing that (a server before 0.5, or a projection
-      // that drops the counter) fall back to the old inference — a record
+      // cursor move. Failing that (a projection that drops the counter,
+      // a delta) fall back to the old inference — a record
       // that steps *back* along its versions was undone, not edited. That
       // reading only ever caught half of it: a redo and a fresh edit both
       // raise the counter by one, so an unattributed increase stays an
@@ -5652,7 +5652,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (follow) scrollToTail();
       else maybeRestoreScroll();
     },
-    // mkio 0.5 hands live changes a third argument, `{ cause, ref,
+    // mkio hands live changes a third argument, `{ cause, ref,
     // service, subid }`; `cause` is "undo"/"redo" for a version cursor
     // move and absent for an ordinary write. Deltas carry none — no mkio
     // service emits them — so every attributable change comes through here.
