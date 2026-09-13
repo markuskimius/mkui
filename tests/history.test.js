@@ -392,7 +392,7 @@ const appSrc = await (async () => {
 })();
 
 test("the verify reply is where capabilities are captured", () => {
-  assert.match(appSrc, /st\.set\("mkio\.server\.mkio",\s+info\.mkio\s+\?\? null\);\n\s*capture\(info\);/);
+  assert.match(appSrc, /st\.set\("mkio\.server\.mkio",\s+info\.mkio\s+\?\? null\);\n(\s*if \(info\.compatibility[^\n]*\n[^\n]*\n)?\s*capture\(info\);/);
   assert.match(appSrc, /const caps = historyCapabilities\(info\);\n\s*if \(caps\) \{/);
   assert.match(appSrc, /st\.set\("mkio\.server\.versioned", caps\.versioned\);/);
   assert.match(appSrc, /st\.set\("mkio\.server\.historySuffix", caps\.suffix\);/);

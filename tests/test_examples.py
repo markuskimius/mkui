@@ -1,9 +1,9 @@
 """The example apps' configs, checked against the servers they name.
 
 `[mkio.expect]` is a promise about the server an example talks to, and a broken
-promise is quiet: the client paints its `incompatible` map ("Wrong server") in
-the statusbar rather than failing, which reads as a broken server instead of a
-stale config. mkio 0.3 arriving beside an example that still said
+promise is quiet: the client paints its `incompatible` map for reason
+`version` in the statusbar rather than failing, which reads as a broken server
+instead of a stale config. mkio 0.3 arriving beside an example that still said
 `mkio = "0.2"` did exactly that — semver matching is exact-minor below 1.0, so
 a minor release of the library invalidates the pin.
 

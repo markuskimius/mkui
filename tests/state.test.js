@@ -213,12 +213,15 @@ test("verification failure applies incompatible state map", () => {
   s.set("mkio.connected", true);
   apply({ "status.message": "Connected", "status.color": null, "status.background": null });
 
-  // Verification fails (wrong name, incompatible version, or timeout)
+  // Verification fails: another application answered (the reason is
+  // decided by lib/verify.js, tested in verify.test.js)
   s.set("mkio.verified", false);
+  s.set("mkio.reason", "name");
   apply({ "status.message": "Wrong server", "status.color": "#ffffff", "status.background": "#cc0000" });
 
   assert.equal(s.get("mkio.connected"), true);
   assert.equal(s.get("mkio.verified"), false);
+  assert.equal(s.get("mkio.reason"), "name");
   assert.equal(s.get("status.message"), "Wrong server");
   assert.equal(s.get("status.color"), "#ffffff");
   assert.equal(s.get("status.background"), "#cc0000");

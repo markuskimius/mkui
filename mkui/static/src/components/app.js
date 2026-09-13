@@ -10,6 +10,7 @@ import { App } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
 import { LayoutManager } from "../layouts.js";
 import { historyCapabilities } from "../lib/history.js";
+import { judgeServer, incompatibleMap } from "../lib/verify.js";
 import "./menubar.js";
 import "./statusbar.js";
 import "./workspace.js";
@@ -164,6 +165,7 @@ class MkuiApp extends HTMLElement {
       this._verify = async (client) => {
         const gen = ++verifyGen;
         st.set("mkio.verified", false);
+        st.set("mkio.reason", null);
         st.set("mkio.server", {});
 
         const expect = config.mkio.expect;
@@ -182,30 +184,29 @@ class MkuiApp extends HTMLElement {
           ]);
         } catch (e) {
           if (gen !== verifyGen) return;
-          st.set("mkio.verified", false);
-          apply(config.mkio.incompatible ?? { "status.message": "Incompatible server" });
-          return;
+          reply = null;
         }
 
         if (gen !== verifyGen) return;
-        const info = reply.row;
+        const info = reply?.row ?? null;
 
-        st.set("mkio.server.name",     info.name     ?? null);
-        st.set("mkio.server.version",  info.version  ?? null);
-        st.set("mkio.server.protocol", info.protocol ?? null);
-        st.set("mkio.server.mkio",     info.mkio     ?? null);
-        capture(info);
-
-        let verified = true;
-        if (expect) {
-          if (expect.name && info.name !== expect.name) verified = false;
-          if (info.compatible === false) verified = false;
+        if (info) {
+          st.set("mkio.server.name",     info.name     ?? null);
+          st.set("mkio.server.version",  info.version  ?? null);
+          st.set("mkio.server.protocol", info.protocol ?? null);
+          st.set("mkio.server.mkio",     info.mkio     ?? null);
+          if (info.compatibility && typeof info.compatibility === "object")
+            st.set("mkio.server.compatibility", info.compatibility);
+          capture(info);
         }
 
+        // Three ways to fail, told apart for the statusbar: no answer, a
+        // server of another name, a server of the right name but a
+        // version the config rejects (`lib/verify.js`).
+        const { verified, reason } = judgeServer(info, expect);
         st.set("mkio.verified", verified);
-        if (!verified) {
-          apply(config.mkio.incompatible ?? { "status.message": "Incompatible server" });
-        }
+        st.set("mkio.reason", reason);
+        if (!verified) apply(incompatibleMap(config.mkio.incompatible, reason));
       };
 
       ensureMkio(config.mkio.url, {
@@ -229,6 +230,7 @@ class MkuiApp extends HTMLElement {
         onDisconnect: () => {
           st.set("mkio.connected", false);
           st.set("mkio.verified", false);
+          st.set("mkio.reason", null);
           if (hasAuth) {
             apply(config.auth.disconnected ?? config.mkio.disconnected ?? { "status.message": "Disconnected" });
           } else {

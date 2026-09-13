@@ -530,7 +530,7 @@ control = "_mkui"
 # `incompatible` below. Below 1.0 semver matching is exact-minor, so the
 # `mkio` pin has to be bumped with every minor release of the library —
 # tests/test_examples.py fails when it goes stale, rather than letting the
-# statusbar quietly read "Wrong server".
+# statusbar quietly read "Incompatible order-book version".
 [mkio.expect]
 name = "order-book"
 version = "1.0"
@@ -542,10 +542,15 @@ expr = "1"
 "status.color" = ""
 "status.background" = ""
 
+# Shared entries paint every failure; the entry per reason (`unreachable`:
+# no `_mkio` reply, `name`: another application, `version`: this one at a
+# version the pins above reject) supplies the message.
 [mkio.incompatible]
-"status.message" = "Wrong server"
 "status.color" = "#ffffff"
 "status.background" = "#cc0000"
+unreachable = { "status.message" = "Not an mkio server" }
+name = { "status.message" = "Not the order-book server" }
+version = { "status.message" = "Incompatible order-book version" }
 
 [mkio.disconnected]
 "status.message" = "Disconnected"

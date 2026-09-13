@@ -42,6 +42,7 @@ Paths are under `mkui/static/src/` unless they start with `mkui/`.
 - `auth.js` — config-driven login dialog; `showLogin()` runs before the app loads
 - `layouts.js` / `lib/layouts.js` — `LayoutManager` (`layout.*` actions, startup restore); the format: `sanitizeLayout`, `retained`, the stores
 - `lib/links.js` — `LinkHub`, the table-link bus (retained values per name, queued delivery, `MAX_CHAIN`); `App.links` owns one
+- `lib/verify.js` — `judgeServer`/`incompatibleMap`: why a server was rejected
 - `mkui/control.py` — `ControlService` / `install(app)`, pushing actions to browsers (see Control channel)
 - `mkui/static/styles/mkui.css` — default theme, CSS custom properties
 
@@ -72,13 +73,13 @@ Edit routing: `edit.copy`/`edit.selectAll`/`edit.find` call `workspace.editActio
 
 ## mkio connection state
 
-When `config.mkio.url` is present, `<mkui-app>` calls `ensureMkio` with `onConnect`/`onDisconnect` callbacks **before** setting up menubar, workspace, and statusbar (load-bearing: the bridge caches the first caller's promise). Callbacks get the `client` first.
+When `config.mkio.url` is present, `<mkui-app>` calls `ensureMkio` with `onConnect`/`onDisconnect` callbacks **before** setting up menubar, workspace, and statusbar (the bridge caches the first caller's promise). Callbacks get the `client`.
 
-Connection is two-phase: **connect** then **verify**. On open, `mkio.connected` goes `true` and `config.mkio.connected` applies; an async `_mkio` reqrep then queries identity: a pass sets `mkio.verified`, a failure leaves it false and applies `config.mkio.incompatible`. Reruns on reconnect.
+Connection is two-phase: **connect** then **verify**. On open, `mkio.connected` goes `true` and `config.mkio.connected` applies; an async `_mkio` reqrep then queries identity: a pass sets `mkio.verified`, a failure sets `mkio.reason` (`unreachable` | `name` | `version`, in that order) and applies `config.mkio.incompatible` (the flat map, an entry per reason on top, defaults per reason). Reruns on reconnect. `tests/verify.test.js`.
 
-Capabilities ride the same reply: `capture` writes `mkio.server.services`/`.versioned`/`.historySuffix` only when it carries them (an old server, or the pre-login reply under auth, leaves them be). Under auth `_verify` never runs: `_probe` re-reads after login and on each authenticated reconnect.
+Capabilities ride the same reply: `capture` writes `mkio.server.services`/`.versioned`/`.historySuffix` only when it carries them (an old server, or the pre-login reply under auth, leaves them be). Under auth `_verify` never runs: `_probe` re-reads after login and on authenticated reconnects.
 
-`config.mkio.expect` is optional (the README has its keys): the query runs either way to fill `mkio.server.*`, timing out per `config.mkio.timeout` (5s). An `expect.mkio` pin goes stale on every mkio minor release (semver is exact-minor below 1.0), the app then quietly reading "Wrong server" (`tests/test_examples.py`). The `connected` / `disconnected` / `incompatible` state maps are `"state.path": value` objects applied per lifecycle event.
+`config.mkio.expect` is optional (keys in the README): the query runs either way to fill `mkio.server.*`, timing out per `config.mkio.timeout` (5s). An `expect.mkio` pin goes stale on every mkio minor release (semver is exact-minor below 1.0), quietly reading reason `version` (`tests/test_examples.py`). The `connected` / `disconnected` / `incompatible` maps are `"state.path": value` objects applied per lifecycle event.
 
 ## Authentication
 
@@ -86,7 +87,7 @@ When `config.auth` is present, `<mkui-app>` shows a login dialog before loading 
 
 Config keys are the README's; `connected` is applied after login *and* on reconnect (mkio's client re-authenticates), `disconnected` falls back to `mkio.disconnected`. State paths: `auth.authenticated`, `auth.user`, `auth.role`. Action `auth.logout` reloads the page. With auth enabled, `_mkio` verification is skipped (authentication proves the server); `mkio.connected` still applies on socket open.
 
-Login dialog: a floating frame (`stayOnTop`, `noDock`) made undismissable by `_hideClose` and an empty `_extraControls`.
+Login dialog: a floating frame (`stayOnTop`, `noDock`), undismissable via `_hideClose` and an empty `_extraControls`.
 
 ## mkio-table pane type
 
@@ -186,7 +187,7 @@ Undo/redo: `history.undo` / `history.redo` (`{ service, op, label }`) put a butt
 
 ## Saved layouts
 
-`[layouts]` enables it (`store` `"mkio"` when `mkio.url` else `"local"`). `workspace.getLayout()` → `{ version, frames, focused, panes }`: docked frames in z-order (noDock/stayOnTop excluded); pane view state through the `_filters`/`_sort`/`_columns`/`_link` hooks, open panes only; never a paged table's position. `sanitizeLayout` (lib/layouts.js) throws on a non-layout, drops unknown pane ids. `setLayout(layout, { reopen })` diffs open panes: stayers move silently, leavers get `mkui-pane-close`, arrivals `mkui-pane-open` then the saved state (on `el._ready`). `resetLayout()` = config `frames`, `reopen: true`. `LayoutManager` (src/layouts.js): owner = `auth.user` if authenticated else `""`; `save` skips one `sameLayout` to the newest, then prunes by `retained`; the stores' `send`/`request` *resolve* with error envelopes. `<mkui-app>` defers frames; `_loadFrames` applies `restoreLatest()` within `timeout`, else the config frames.
+`[layouts]` enables it (`store` `"mkio"` when `mkio.url` else `"local"`). `workspace.getLayout()` → `{ version, frames, focused, panes }`: docked frames in z-order (noDock/stayOnTop excluded); pane view state through the `_filters`/`_sort`/`_columns`/`_link` hooks, open panes only; never a paged table's position. `sanitizeLayout` (lib/layouts.js) throws on a non-layout, drops unknown panes. `setLayout(layout, { reopen })` diffs open panes: stayers move, leavers get `mkui-pane-close`, arrivals `mkui-pane-open` then the saved state (on `el._ready`). `resetLayout()` = config `frames`, `reopen: true`. `LayoutManager` (src/layouts.js): owner = `auth.user` when authenticated, else `""`; `save` skips one `sameLayout` to the newest, then prunes by `retained`; the stores' `send`/`request` *resolve* with error envelopes. `<mkui-app>` defers frames: `_loadFrames` applies `restoreLatest()` within `timeout`, else config `frames`.
 
 ## Dialogs
 

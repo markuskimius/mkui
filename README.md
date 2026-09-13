@@ -195,7 +195,12 @@ mkio server and verifies its identity. Connection is two-phase:
     "expr": "1"
   },
   "connected":    { "status.message": "Connected", "status.background": null },
-  "incompatible": { "status.message": "Wrong server", "status.background": "#cc0000" },
+  "incompatible": {
+    "status.background": "#cc0000",
+    "unreachable": { "status.message": "Not an mkio server" },
+    "name":        { "status.message": "Not the order-book server" },
+    "version":     { "status.message": "Incompatible order-book version" }
+  },
   "disconnected": { "status.message": "Disconnected", "status.background": "#858585" }
 }
 ```
@@ -211,8 +216,9 @@ Semver matching is stricter below 1.0, where the minor number carries the
 breaking changes: `"0.3"` accepts 0.3.x and rejects 0.4.0, so pinning
 `mkio` at a pre-1.0 version means every minor release of the library
 invalidates the pin. A stale pin is quiet — the app connects, the
-`incompatible` map is applied, and the statusbar reads "Wrong server"
-while nothing is wrong with the server. Leave `mkio` out unless the app
+`incompatible` map is applied for reason `version`, and the statusbar
+reads "Incompatible server version" while nothing is wrong with the
+server. Leave `mkio` out unless the app
 truly depends on the library's version, and pin `name` and `version`,
 which are your own, instead.
 
@@ -230,9 +236,27 @@ The `_mkio` request has a configurable timeout (`config.mkio.timeout`,
 default 5000 ms) — non-mkio servers that don't respond are detected as
 incompatible.
 
-State maps default to `{ "status.message": "Connected" }`,
-`{ "status.message": "Disconnected" }`, and
-`{ "status.message": "Incompatible server" }`. Combine with
+Verification can fail three ways, and `mkio.reason` says which:
+
+| `mkio.reason` | What happened | Default message |
+|---|---|---|
+| `unreachable` | No `_mkio` reply: an error, or the timeout | Not an mkio server |
+| `name` | The server answered under another `name`: a different application | Wrong application |
+| `version` | The right application, but `version`, `protocol`, `mkio` or `expr` failed its check | Incompatible server version |
+
+`name` is decided before `version`: another application's version is
+moot. The per-key verdict lands in `mkio.server.compatibility`
+(`{ version: true, mkio: false, … }`) for a statusbar template to pick
+apart. `mkio.reason` is `null` while verified or disconnected.
+
+`incompatible` is a state map, applied whatever the reason. An entry named
+after a reason and holding a map applies on top for that reason only, so
+the colours are shared and the message varies, as above. A flat map with
+no such entries behaves as before; with no map at all each reason paints
+its default message.
+
+State maps default to `{ "status.message": "Connected" }` and
+`{ "status.message": "Disconnected" }`. Combine with
 `statusbar.bindStyle` to change the statusbar appearance on disconnect or
 server mismatch.
 
