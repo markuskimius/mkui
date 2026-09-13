@@ -75,7 +75,7 @@ Edit routing: `edit.copy`/`edit.selectAll`/`edit.find` call `workspace.editActio
 
 When `config.mkio.url` is present, `<mkui-app>` calls `ensureMkio` with `onConnect`/`onDisconnect` callbacks **before** setting up menubar, workspace, and statusbar (the bridge caches the first caller's promise). Callbacks get the `client`.
 
-Connection is two-phase: **connect** then **verify**. On open, `mkio.connected` goes `true` and `config.mkio.connected` applies; an async `_mkio` reqrep then queries identity: a pass sets `mkio.verified`, a failure sets `mkio.reason` (`unreachable` | `name` | `version`, in that order) and applies `config.mkio.incompatible` (the flat map, an entry per reason on top, defaults per reason). Reruns on reconnect. `tests/verify.test.js`.
+Connection is two-phase: **connect** then **verify**. On open `mkio.connected` goes `true` and `config.mkio.connected` applies; an async `_mkio` reqrep then asks who it is: a pass sets `mkio.verified`, a failure sets `mkio.reason` (`unreachable` | `name` | `version`, in that order) and applies `config.mkio.incompatible` (the flat map, an entry per reason on top, defaults per reason). Reruns on reconnect. `tests/verify.test.js`.
 
 Capabilities ride the same reply: `capture` writes `mkio.server.services`/`.versioned`/`.historySuffix` only when it carries them (an old server, or the pre-login reply under auth, leaves them be). Under auth `_verify` never runs: `_probe` re-reads after login and on authenticated reconnects.
 
