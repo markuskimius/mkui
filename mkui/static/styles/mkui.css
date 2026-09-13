@@ -10,8 +10,17 @@
   --mkui-accent-fg: #ffffff;
   --mkui-focus:     #ffffff;
   --mkui-match-bg:  rgba(255, 200, 60, 0.28);
+  /* The connection: the statusbar and banner while the server is away
+     (danger) or the wrong one (warn); a tint over the workspace while
+     what it shows is stale. */
+  --mkui-danger:    #b3261e;
+  --mkui-danger-fg: #ffffff;
+  --mkui-warn:      #9a5b00;
+  --mkui-warn-fg:   #ffffff;
+  --mkui-stale:     rgba(128, 128, 128, 0.10);
   --mkui-menubar-h:   28px;
   --mkui-statusbar-h: 22px;
+  --mkui-banner-h:    32px;
   --mkui-tabbar-h:    28px;
   --mkui-splitter:    4px;
   --mkui-frame-shadow: 0 10px 30px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.2);
@@ -31,6 +40,11 @@ mkui-app[theme="light"] {
   --mkui-accent-fg: #ffffff;
   --mkui-focus:     #000000;
   --mkui-match-bg:  rgba(255, 190, 0, 0.35);
+  --mkui-danger:    #c62828;
+  --mkui-danger-fg: #ffffff;
+  --mkui-warn:      #b26a00;
+  --mkui-warn-fg:   #ffffff;
+  --mkui-stale:     rgba(96, 96, 96, 0.08);
   --mkui-frame-shadow: 0 10px 30px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.08);
   color-scheme: light;
 }
@@ -125,6 +139,100 @@ mkui-statusbar {
   z-index: 100;
 }
 .mkui-status-side { display: flex; gap: 12px; align-items: center; }
+
+/* ─── Connection ─────────────────────────────────────────────────────── */
+/* The root `mkio` attribute carries the phase (connecting | connected |
+   disconnected | incompatible; lib/connection.js). The statusbar takes
+   its colour from it — a config's `bindStyle` still wins, being inline —
+   and the light in its corner reads the same. */
+mkui-app[mkio="connecting"] mkui-statusbar {
+  background: var(--mkui-fg-mute);
+  color: var(--mkui-bg);
+}
+mkui-app[mkio="disconnected"] mkui-statusbar {
+  background: var(--mkui-danger);
+  color: var(--mkui-danger-fg);
+}
+mkui-app[mkio="incompatible"] mkui-statusbar {
+  background: var(--mkui-warn);
+  color: var(--mkui-warn-fg);
+}
+.mkui-status-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.mkui-conn-dot { width: 10px; height: 10px; opacity: 0.65; }
+mkui-app[mkio="connecting"] .mkui-conn-dot,
+mkui-app[mkio="disconnected"] .mkui-conn-dot {
+  opacity: 1;
+  animation: mkui-conn-pulse 1.2s ease-in-out infinite;
+}
+mkui-app[mkio="incompatible"] .mkui-conn-dot { opacity: 1; }
+@keyframes mkui-conn-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+/* The outage banner: a strip between the menubar and the workspace, in
+   the DOM only while it shows (`mkio.offline.delay` seconds into an
+   outage, at once for an incompatible server); the root's `banner`
+   attribute moves the workspace down by its height. */
+.mkui-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--mkui-banner-h);
+  box-sizing: border-box;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--mkui-danger);
+  color: var(--mkui-danger-fg);
+  position: absolute;
+  left: 0; right: 0;
+  top: var(--mkui-menubar-h);
+  z-index: 99;
+  animation: mkui-banner-in 0.2s ease-out;
+}
+mkui-app[mkio="incompatible"] .mkui-banner {
+  background: var(--mkui-warn);
+  color: var(--mkui-warn-fg);
+}
+.mkui-banner .mkui-conn-dot { width: 12px; height: 12px; }
+.mkui-banner-down { font-weight: 400; opacity: 0.85; font-variant-numeric: tabular-nums; }
+mkui-app[banner] mkui-workspace {
+  top: calc(var(--mkui-menubar-h) + var(--mkui-banner-h));
+}
+@keyframes mkui-banner-in {
+  from { transform: translateY(-100%); }
+  to { transform: none; }
+}
+
+/* Stale: while the root carries `stale` (an outage, `mkio.offline.stale`
+   on) a hatched, pointer-transparent tint lies over the workspace, so
+   what the frames show reads as a photograph rather than a window. An
+   overlay, not a filter: a filter on the workspace would make it the
+   containing block of anything positioned fixed inside it. */
+mkui-app[stale] mkui-workspace::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20000;
+  background: repeating-linear-gradient(135deg, var(--mkui-stale) 0 6px, transparent 6px 16px);
+}
+/* The stamp a table or record wears while down: when it last heard. */
+.mkui-table-stale, .mkui-record-stale {
+  color: var(--mkui-fg-mute);
+  font-size: 12px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.mkui-table-stale .mkui-icon, .mkui-record-stale .mkui-icon { width: 13px; height: 13px; }
 
 /* ─── Workspace + frames ─────────────────────────────────────────────── */
 

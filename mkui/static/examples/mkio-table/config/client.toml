@@ -4,8 +4,6 @@ theme = "dark"
 
 [state.status]
 message = "Connecting..."
-color = "#000000"
-background = "#b8b8b8"
 
 # ─── Menubar ──────────────────────────────────────────────────────────
 
@@ -105,13 +103,14 @@ items = [
 
 # ─── Statusbar ─────────────────────────────────────────────────────────
 
+# The statusbar colours itself by the connection — grey while connecting,
+# red while the server is away, amber when it is the wrong one — and wears
+# a dot and, in an outage, a clock; the message is this widget's. A
+# `[statusbar.bindStyle]` map (README) would override the colours from
+# state instead.
 [statusbar]
 left = [{ type = "text", bind = "status.message" }]
 right = [{ type = "text", text = "mkio-table demo" }]
-
-[statusbar.bindStyle]
-color = "status.color"
-background = "status.background"
 
 # ─── Panes ─────────────────────────────────────────────────────────────
 
@@ -543,23 +542,31 @@ expr = "1"
 
 [mkio.connected]
 "status.message" = "Connected"
-"status.color" = ""
-"status.background" = ""
 
-# Shared entries paint every failure; the entry per reason (`unreachable`:
-# no `_mkio` reply, `name`: another application, `version`: this one at a
-# version the pins above reject) supplies the message.
+# The entry per reason (`unreachable`: no `_mkio` reply, `name`: another
+# application, `version`: this one at a version the pins above reject)
+# supplies the message; a flat entry beside them would apply to every
+# reason.
 [mkio.incompatible]
-"status.color" = "#ffffff"
-"status.background" = "#cc0000"
 unreachable = { "status.message" = "Not an mkio server" }
 name = { "status.message" = "Not the order-book server" }
 version = { "status.message" = "Incompatible order-book version" }
 
 [mkio.disconnected]
 "status.message" = "Disconnected"
-"status.color" = "#000000"
-"status.background" = "#b8b8b8"
+
+# What the shell does about an outage, beyond the message: the tab title
+# and favicon change, a banner drops in under the menubar after `delay`
+# seconds (at once for an incompatible server), and the workspace and its
+# tables read as stale. Every key defaults on; `offline = false` turns
+# the lot off. Shown here at the defaults.
+[mkio.offline]
+indicator = true   # the statusbar's dot and outage clock
+title = true       # "⚠ Disconnected · Order Book" in the tab
+favicon = true     # a red dot for the tab's icon
+banner = true      # the strip under the menubar
+delay = 3          # seconds down before the banner shows
+stale = true       # the hatched tint and the "as of" stamps
 
 # ─── Saved layouts ────────────────────────────────────────────────────
 # Enables the Layout menu's actions and the startup restore of the latest

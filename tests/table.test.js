@@ -268,7 +268,7 @@ async function createTable(specOverrides = {}, opts = {}) {
   host._paneEl = paneEl;
   const state = makeState([["mkio.connected", true]]);
   const app = {
-    config: { mkio: { url: "ws://localhost:8080/ws" } },
+    config: { mkio: { url: "ws://localhost:8080/ws", ...(opts.offline !== undefined ? { offline: opts.offline } : {}) } },
     state,
     links: opts.hub ?? new LinkHub(state),
     fireAction() {},
@@ -8738,4 +8738,65 @@ test("_toolbar's slot is made only when it is asked for", async () => {
   const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
   assert.equal(toolbar._ch.length, 1, "no empty box in a table nobody embeds");
   assert.equal(toolbar._ch[0].className, "mkui-table-chips");
+});
+
+/* ── Stale stamp (mkio.offline.stale) ─────────────────────────────────── */
+
+const staleOf = (host) => {
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
+  return toolbar?._ch.find(c => c.className === "mkui-table-stale") ?? null;
+};
+
+test("stale: a disconnect stamps the toolbar with when the table last heard, the next snapshot clears it", async () => {
+  const { io, host, state } = await createTable({});
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", x: 10 }]);
+  assert.equal(staleOf(host), null, "nothing while connected");
+
+  state.set("mkio.connected", false);
+  const stamp = staleOf(host);
+  assert.ok(stamp, "the stamp shows on disconnect");
+  const text = stamp._ch.find(c => c.nodeType === 3)?.textContent;
+  assert.match(text, /^as of \d\d:\d\d:\d\d$/);
+
+  // the connection returning is not enough: the rows are still those
+  state.set("mkio.connected", true);
+  assert.ok(staleOf(host), "stays until data arrives");
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", x: 11 }]);
+  assert.equal(staleOf(host), null, "the next snapshot clears it");
+});
+
+test("stale: a live update clears the stamp; a table that never heard, or holds no rows, has no stamp", async () => {
+  const { io, host, state } = await createTable({});
+  state.set("mkio.connected", false);
+  assert.equal(staleOf(host), null, "never heard: nothing to stamp");
+  state.set("mkio.connected", true);
+
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([]);
+  state.set("mkio.connected", false);
+  assert.equal(staleOf(host), null, "no rows: nothing stale");
+  state.set("mkio.connected", true);
+
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", x: 10 }]);
+  state.set("mkio.connected", false);
+  assert.ok(staleOf(host));
+  lastSubscribe().opts.onUpdate("replace", { _mkio_row: "1", x: 12 });
+  assert.equal(staleOf(host), null, "an update means the subscription is live");
+});
+
+test("stale: repeated disconnect callbacks keep one stamp; mkio.offline.stale = false makes none", async () => {
+  const { io, host, state } = await createTable({});
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", x: 10 }]);
+  state.set("mkio.connected", false);
+  state.set("mkio.connected", false);
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
+  assert.equal(toolbar._ch.filter(c => c.className === "mkui-table-stale").length, 1);
+
+  const off = await createTable({}, { offline: { stale: false } });
+  triggerVisible(off.io);
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", x: 10 }]);
+  off.state.set("mkio.connected", false);
+  assert.equal(staleOf(off.host), null);
 });

@@ -20,6 +20,7 @@ import { registerPaneType, getWidget } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
 import { compileTemplate, expr } from "../lib/expressions.js";
 import { icon } from "../lib/icons.js";
+import { offlineOptions } from "../lib/connection.js";
 import { compileStyler, applyStyle, makeRunner } from "../lib/styles.js";
 import { attachRecord, recordFilter } from "../lib/subject.js";
 import { makeSubjectControls } from "../lib/subject-ui.js";
@@ -215,17 +216,20 @@ registerPaneType("mkio-record", async (spec, app, host) => {
       filter: recordFilter(key),
       onSnapshot: (snap) => {
         if (gen !== loadGen) return;
+        heard();
         row = snap?.[0] ?? null;
         missing = !row;
         render();
       },
       onDelta: (changes) => {
         if (gen !== loadGen) return;
+        heard();
         for (const ch of changes) apply(ch.op, ch.row);
         render();
       },
       onUpdate: (op, r) => {
         if (gen !== loadGen) return;
+        heard();
         apply(op, r);
         render();
       },
@@ -373,6 +377,34 @@ registerPaneType("mkio-record", async (spec, app, host) => {
     });
     return true;
   }
+
+  /* ── Stale ────────────────────────────────────────────────────────── */
+
+  // While the connection is down the strip says when this record was
+  // last heard of, as the table does (`mkui-record-stale`); the next
+  // callback clears it. Off with `mkio.offline.stale = false`.
+  const staleOn = offlineOptions(app.config?.mkio?.offline).stale;
+  let lastHeard = null;
+  let staleEl = null;
+  function heard() {
+    lastHeard = Date.now();
+    if (staleEl) { staleEl.remove(); staleEl = null; }
+  }
+  app.state.subscribe("mkio.connected", (v) => {
+    if (v) {
+      if (staleEl && !subscribed) { staleEl.remove(); staleEl = null; }
+      return;
+    }
+    if (!staleOn || staleEl || lastHeard == null || !row) return;
+    const d = new Date(lastHeard);
+    const pad = (n) => String(n).padStart(2, "0");
+    const at = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    staleEl = el("mkui-record-stale", "span");
+    staleEl.appendChild(icon("clock"));
+    staleEl.appendChild(document.createTextNode(`as of ${at}`));
+    staleEl.title = `The server went away at ${at}; this record is as of then`;
+    toolbar.appendChild(staleEl);
+  });
 
   /* ── Following the record ─────────────────────────────────────────── */
 

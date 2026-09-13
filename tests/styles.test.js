@@ -56,6 +56,40 @@ test("workspace offsets use the same variables as the bar heights", () => {
   assert.equal(declaration("mkui-workspace", "bottom"), "var(--mkui-statusbar-h)");
 });
 
+// ── Connection ────────────────────────────────────────────────────────────
+// The root `mkio` attribute carries the phase (lib/connection.js); the
+// statusbar and the banner take their colours from it, and the banner
+// pushes the workspace down by exactly its own height.
+
+test("the statusbar takes its colour from the root's connection phase", () => {
+  assert.equal(declaration('mkui-app[mkio="disconnected"] mkui-statusbar', "background"), "var(--mkui-danger)");
+  assert.equal(declaration('mkui-app[mkio="disconnected"] mkui-statusbar', "color"), "var(--mkui-danger-fg)");
+  assert.equal(declaration('mkui-app[mkio="incompatible"] mkui-statusbar', "background"), "var(--mkui-warn)");
+  assert.equal(declaration('mkui-app[mkio="connecting"] mkui-statusbar', "background"), "var(--mkui-fg-mute)");
+});
+
+test("the banner is sized by its variable and moves the workspace down by it", () => {
+  assert.equal(declaration(".mkui-banner", "height"), "var(--mkui-banner-h)");
+  assert.equal(declaration(".mkui-banner", "box-sizing"), "border-box");
+  assert.equal(declaration(".mkui-banner", "top"), "var(--mkui-menubar-h)");
+  assert.equal(declaration("mkui-app[banner] mkui-workspace", "top"),
+    "calc(var(--mkui-menubar-h) + var(--mkui-banner-h))");
+  assert.equal(declaration('mkui-app[mkio="incompatible"] .mkui-banner', "background"), "var(--mkui-warn)");
+});
+
+test("both themes define the connection colours", () => {
+  for (const t of ["--mkui-danger", "--mkui-danger-fg", "--mkui-warn", "--mkui-warn-fg", "--mkui-stale"]) {
+    assert.ok(new RegExp(`:root\\s*\\{[^}]*${t}\\s*:`).test(css), `${t} in :root`);
+    assert.ok(new RegExp(`mkui-app\\[theme="light"\\]\\s*\\{[^}]*${t}\\s*:`).test(css), `${t} in the light theme`);
+  }
+});
+
+test("the stale tint is an overlay the pointer passes through, not a filter", () => {
+  assert.equal(declaration("mkui-app[stale] mkui-workspace::after", "pointer-events"), "none");
+  assert.equal(declaration("mkui-app[stale] mkui-workspace::after", "position"), "absolute");
+  assert.ok(!/mkui-app\[stale\][^{]*\{[^}]*\bfilter\s*:/.test(css), "no CSS filter on the workspace");
+});
+
 test("frames are border-box so a snapped frame's border stays in its rect", () => {
   assert.equal(declaration("mkui-frame", "box-sizing"), "border-box");
 });

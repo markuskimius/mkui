@@ -260,9 +260,61 @@ no such entries behaves as before; with no map at all each reason paints
 its default message.
 
 State maps default to `{ "status.message": "Connected" }` and
-`{ "status.message": "Disconnected" }`. Combine with
-`statusbar.bindStyle` to change the statusbar appearance on disconnect or
-server mismatch.
+`{ "status.message": "Disconnected" }`. mkio's client reconnects on its
+own (backing off to once a second) and calls the disconnect callback on
+every failed attempt, so the `disconnected` map is re-applied about once a
+second while the server is away; everything below fires once per outage.
+
+### Losing the connection
+
+A dropped connection is loud by default, at four distances, so it is seen
+from a glance at the statusbar, from the browser's tab strip, and from the
+data itself:
+
+- **The statusbar colours itself.** `<mkui-app>` carries the connection
+  phase as its `mkio` attribute — `connecting` (before the first open),
+  `connected`, `disconnected`, or `incompatible` — and the stylesheet paints
+  the statusbar from it: muted while connecting, `--mkui-danger` while
+  disconnected, `--mkui-warn` for an incompatible server. A
+  `statusbar.bindStyle` map still wins, being inline. A dot at the
+  statusbar's left edge is the connection light — steady when connected,
+  pulsing while away — and during an outage a clock beside it counts how
+  long (`0:42`, `1:02:03` past an hour). The message stays whatever text
+  widget the config binds.
+- **The browser tab says so.** The document title becomes
+  `⚠ Disconnected · <title>` and the favicon a red dot, both restored on
+  reconnect — the one signal that reaches a user who has switched tabs.
+- **A banner drops in under the menubar** after `delay` seconds (default
+  3, so a laptop waking or a Wi-Fi hop never flashes it) with the message
+  and the clock, and leaves on reconnect; there is no dismiss. An
+  incompatible server gets it at once, in the warn colour, since no
+  reconnect will fix that.
+- **The data reads as stale.** A hatched, pointer-transparent tint lies
+  over the workspace, and every `mkio-table` and `mkio-record` pane stamps
+  its toolbar with when it last heard from its service — `as of 14:32:05`
+  — cleared by the next snapshot or update once the server is back.
+
+There is no Retry button: the client is already retrying every second.
+
+Each piece is a key of `mkio.offline`, all on by default; `false` turns
+the lot off:
+
+```toml
+[mkio.offline]
+indicator = true   # the statusbar's dot and clock
+title = true       # the tab title
+favicon = true     # the tab icon
+banner = true      # the strip under the menubar
+delay = 3          # seconds down before the banner shows; 0 = at once
+stale = true       # the workspace tint and the panes' "as of" stamps
+```
+
+State paths: `mkio.downSince` (epoch milliseconds when the outage began,
+`null` while up) and `mkio.downFor` (the clock's text, rewritten every
+second, `null` while up), for a statusbar template of your own. Styling
+hooks: the root's `mkio` attribute, `banner` while the banner shows and
+`stale` while the tint does; the tokens `--mkui-danger`, `--mkui-danger-fg`,
+`--mkui-warn`, `--mkui-warn-fg`, `--mkui-stale` and `--mkui-banner-h`.
 
 ## Authentication
 
@@ -673,7 +725,10 @@ applied as inline styles on `<mkui-app>` so every descendant inherits them:
 ```
 
 Any variable from `styles/mkui.css` (`--mkui-*`) may be overridden. Missing
-keys fall back to the default (dark) values. Switch themes at runtime with
+keys fall back to the default (dark) values. The connection colours —
+`--mkui-danger` / `-fg` for the statusbar and banner while the server is
+away, `--mkui-warn` / `-fg` for an incompatible one, `--mkui-stale` for the
+tint over a workspace showing stale data — are among them. Switch themes at runtime with
 `appEl.setTheme("solarized")`.
 
 ## Standalone mode
@@ -1050,7 +1105,8 @@ on mkui depends on:
   `ensureMkio`, `attachRecord` and the record subject); the built-in
   actions (`app.*`, `pane.*`, `window.*`, `edit.*`, `table.*`, `record.*`,
   `layout.*`, `auth.*`) and their `args`; the documented state paths
-  (`mkio.*`, `auth.*`, `layouts.list`, `link.<name>`, `status.message`);
+  (`mkio.*` including `mkio.downSince` / `mkio.downFor`, `auth.*`,
+  `layouts.list`, `link.<name>`, `status.message`);
   and the pane hooks a custom pane type may implement (`_editActions`,
   `_filters`, `_sort`, `_columns`, `_link`, `_select`, `_tree`, `_source`,
   `_data`, `_toolbar`, `_record`, `_history`).

@@ -11,6 +11,8 @@ import { ensureMkio } from "../mkio-bridge.js";
 import { LayoutManager } from "../layouts.js";
 import { historyCapabilities } from "../lib/history.js";
 import { judgeServer, incompatibleMap } from "../lib/verify.js";
+import { phaseOf, offlineOptions, Outage, offlineTitle, OFFLINE_FAVICON } from "../lib/connection.js";
+import { icon } from "../lib/icons.js";
 import "./menubar.js";
 import "./statusbar.js";
 import "./workspace.js";
@@ -42,6 +44,10 @@ class MkuiApp extends HTMLElement {
     this._menubar   = document.createElement("mkui-menubar");
     this._workspace = document.createElement("mkui-workspace");
     this._statusbar = document.createElement("mkui-statusbar");
+    // The outage banner: between the menubar and the workspace, absent
+    // from the DOM until an outage earns it (`_watchConnection`).
+    this._banner    = document.createElement("div");
+    this._banner.className = "mkui-banner";
     this.appendChild(this._menubar);
     this.appendChild(this._workspace);
     this.appendChild(this._statusbar);
@@ -256,6 +262,8 @@ class MkuiApp extends HTMLElement {
     // the one with the lifecycle callbacks.
     this._layouts = config.layouts ? new LayoutManager(config, this._app, ws) : null;
 
+    if (config.mkio?.url) this._watchConnection(config);
+
     this._menubar.setApp(this._app);
     this._statusbar.setApp(this._app);
 
@@ -275,6 +283,125 @@ class MkuiApp extends HTMLElement {
       if (hasAuth) this._controlAfterLogin = true; // an `auth` service: subscribe once logged in
       else this._subscribeControl(config);
     }
+  }
+
+  // How the shell shows the connection (lib/connection.js). The phase —
+  // connecting, connected, disconnected, incompatible — rides the root
+  // `mkio` attribute, which the stylesheet keys the statusbar colours,
+  // the dot and the stale tint on; the transitions do the rest: the
+  // outage clock behind `mkio.downSince` / `mkio.downFor`, the tab title
+  // and favicon, the banner. Driven by the `mkio.connected` and
+  // `mkio.reason` state paths, so it sees every lifecycle event — the
+  // maps a config applies on those events stay its own business. Each
+  // piece is a `config.mkio.offline` option.
+  _watchConnection(config) {
+    const st = this._app.state;
+    const opts = offlineOptions(config.mkio.offline);
+    const outage = new Outage();
+    let phase = null;
+    let ever = false;
+    let tick = null;
+    let bannerTimer = null;
+    let savedTitle = null;
+    let savedIcon = null;   // { el, href } — the page's icon link, or null when it had none
+    this._offline = opts;
+
+    const clearTimers = () => {
+      if (tick) { clearInterval(tick); tick = null; }
+      if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
+    };
+
+    const showBanner = () => {
+      if (!opts.banner || this._banner.isConnected) return;
+      this._banner.textContent = "";
+      const dot = icon("dot");
+      dot.classList.add("mkui-conn-dot");
+      const msg = document.createElement("span");
+      msg.className = "mkui-banner-msg";
+      const unsubMsg = st.subscribe("status.message", (v) => { msg.textContent = v ?? ""; });
+      const down = document.createElement("span");
+      down.className = "mkui-banner-down";
+      const unsubDown = st.subscribe("mkio.downFor", (v) => {
+        down.textContent = v == null ? "" : `down ${v}`;
+        down.hidden = v == null;
+      });
+      this._banner._unsub = () => { unsubMsg(); unsubDown(); };
+      this._banner.append(dot, msg, down);
+      this.insertBefore(this._banner, this._workspace);
+      this.setAttribute("banner", "");
+    };
+    const hideBanner = () => {
+      if (!this._banner.isConnected) return;
+      this._banner._unsub?.();
+      this._banner.remove();
+      this.removeAttribute("banner");
+    };
+
+    const markPage = () => {
+      if (opts.title) {
+        savedTitle = document.title;
+        document.title = offlineTitle(savedTitle);
+      }
+      if (opts.favicon) {
+        const el = document.querySelector('link[rel~="icon"]');
+        if (el) {
+          savedIcon = { el, href: el.getAttribute("href") };
+        } else {
+          const made = document.createElement("link");
+          made.rel = "icon";
+          document.head.appendChild(made);
+          savedIcon = { el: made, href: null };
+        }
+        savedIcon.el.setAttribute("href", OFFLINE_FAVICON);
+      }
+    };
+    const unmarkPage = () => {
+      if (savedTitle != null) { document.title = savedTitle; savedTitle = null; }
+      if (savedIcon) {
+        if (savedIcon.href == null) savedIcon.el.remove();
+        else savedIcon.el.setAttribute("href", savedIcon.href);
+        savedIcon = null;
+      }
+    };
+
+    const startOutage = () => {
+      if (!outage.down()) return;
+      st.set("mkio.downSince", outage.since);
+      st.set("mkio.downFor", outage.downFor());
+      tick = setInterval(() => st.set("mkio.downFor", outage.downFor()), 1000);
+      markPage();
+      if (opts.stale) this.setAttribute("stale", "");
+      if (opts.banner) {
+        if (opts.delay > 0) bannerTimer = setTimeout(() => { bannerTimer = null; showBanner(); }, opts.delay * 1000);
+        else showBanner();
+      }
+    };
+    const endOutage = () => {
+      if (!outage.up()) return;
+      clearTimers();
+      st.set("mkio.downSince", null);
+      st.set("mkio.downFor", null);
+      unmarkPage();
+      this.removeAttribute("stale");
+      hideBanner();
+    };
+
+    const sync = () => {
+      const next = phaseOf({ connected: st.get("mkio.connected"), reason: st.get("mkio.reason"), ever });
+      if (next === phase) return;
+      phase = next;
+      this.setAttribute("mkio", phase);
+      if (phase === "disconnected") startOutage();
+      else endOutage();
+      // An incompatible server is a state, not an outage: no clock, but
+      // the banner at once — nothing here is going to reconnect its way
+      // out of it.
+      if (phase === "incompatible") showBanner();
+      else if (phase !== "disconnected") hideBanner();
+    };
+
+    st.subscribe("mkio.connected", (v) => { if (v) ever = true; sync(); });
+    st.subscribe("mkio.reason", sync);
   }
 
   // The control channel: `config.mkio.control = "<service>"` (or `{

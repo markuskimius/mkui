@@ -71,6 +71,8 @@
     "auth.user",
     "layouts.list",
     "mkio.connected",
+    "mkio.downFor",
+    "mkio.downSince",
     "mkio.reason",
     "mkio.server",
     "mkio.server.compatibility",
@@ -87,10 +89,13 @@
   "themeTokens": [
     "--mkui-accent",
     "--mkui-accent-fg",
+    "--mkui-banner-h",
     "--mkui-bg",
     "--mkui-bg-alt",
     "--mkui-bg-hover",
     "--mkui-border",
+    "--mkui-danger",
+    "--mkui-danger-fg",
     "--mkui-fg",
     "--mkui-fg-mute",
     "--mkui-focus",
@@ -100,9 +105,12 @@
     "--mkui-match-bg",
     "--mkui-menubar-h",
     "--mkui-splitter",
+    "--mkui-stale",
     "--mkui-statusbar-h",
     "--mkui-tab-active",
-    "--mkui-tabbar-h"
+    "--mkui-tabbar-h",
+    "--mkui-warn",
+    "--mkui-warn-fg"
   ],
   "paneHooks": [
     "_editActions",

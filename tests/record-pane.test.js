@@ -128,7 +128,7 @@ async function makePane(opts = {}) {
   const ws = makeWorkspace(opts);
   host._closest = (sel) => (sel === "mkui-workspace" ? ws : sel === "mkui-pane" ? paneEl : null);
   const app = {
-    config: { mkio: { url: "ws://localhost:8080/ws" } },
+    config: { mkio: { url: "ws://localhost:8080/ws", ...(opts.offline !== undefined ? { offline: opts.offline } : {}) } },
     state: new State({}),
     links: opts.hub ?? new LinkHub(),
   };
@@ -468,4 +468,47 @@ test("a bad record block warns and leaves the window following nothing", async (
   } finally {
     console.warn = orig;
   }
+});
+
+/* ── Stale stamp (mkio.offline.stale) ─────────────────────────────────── */
+
+const stale = (host) => find(host, "mkui-record-stale");
+const staleText = (host) => stale(host)?._ch.find((c) => c.nodeType === 3)?.textContent ?? null;
+
+test("a disconnect stamps the strip with when the record was last heard of; the next snapshot clears it", async () => {
+  const { host, app } = await makePane({ spec: { record: { key: { id: "O1" } } } });
+  await flush();
+  app.state.set("mkio.connected", true);
+  sub().onSnapshot([ORDER]);
+  assert.equal(stale(host), null, "nothing while connected");
+
+  app.state.set("mkio.connected", false);
+  assert.ok(stale(host), "the stamp shows on disconnect");
+  assert.match(staleText(host), /^as of \d\d:\d\d:\d\d$/);
+  app.state.set("mkio.connected", false);
+  assert.equal(findAll(host, "mkui-record-stale").length, 1, "one stamp under repeated callbacks");
+
+  app.state.set("mkio.connected", true);
+  assert.ok(stale(host), "stays until the record is heard of again");
+  sub().onUpdate("replace", { ...ORDER, symbol: "GOOG" });
+  assert.equal(stale(host), null, "the next callback clears it");
+});
+
+test("no stamp for a window showing no record, or with mkio.offline.stale = false", async () => {
+  const empty = await makePane({ spec: { record: { key: { id: "O1" } } } });
+  await flush();
+  empty.app.state.set("mkio.connected", true);
+  empty.app.state.set("mkio.connected", false);
+  assert.equal(stale(empty.host), null, "never heard: nothing to stamp");
+  empty.app.state.set("mkio.connected", true);
+  sub().onSnapshot([]);
+  empty.app.state.set("mkio.connected", false);
+  assert.equal(stale(empty.host), null, "no record: nothing stale");
+
+  const built = await makePane({ spec: { record: { key: { id: "O1" } } }, offline: { stale: false } });
+  await flush();
+  built.app.state.set("mkio.connected", true);
+  sub().onSnapshot([ORDER]);
+  built.app.state.set("mkio.connected", false);
+  assert.equal(stale(built.host), null);
 });

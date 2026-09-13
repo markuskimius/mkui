@@ -2,6 +2,7 @@ import { registerPaneType } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
 import { resolveExpr, resolveObject, evalExpr, compileExpr, compileTemplate, expr } from "../lib/expressions.js";
 import { icon } from "../lib/icons.js";
+import { offlineOptions } from "../lib/connection.js";
 import { makeChip, makeGroup, linkIcon, linkDirWord, armedClear } from "../lib/chips.js";
 import { compileStyler, applyStyle, makeRunner } from "../lib/styles.js";
 import { writeGrid, makeCopyStatus } from "../lib/copy.js";
@@ -291,6 +292,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // so a table nobody embeds carries no empty box. The element is the
   // contract, as a frame's `_extraControls` is.
   let extrasEl = null;
+  // The stale stamp: when this table last heard from its service, worn
+  // while the connection is down (`showStale`, below the callbacks).
+  let staleEl = null;
   function toolbarExtras() {
     if (!extrasEl) {
       extrasEl = document.createElement("div");
@@ -302,7 +306,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   let toolbarShown = false;
   function syncToolbar() {
-    const show = hasButtons || hasHistoryBtns || asOfBtn != null
+    const show = hasButtons || hasHistoryBtns || asOfBtn != null || staleEl != null
       || extrasEl?.children.length > 0 || chipsEl.children.length > 0;
     if (show === toolbarShown) return;
     toolbarShown = show;
@@ -5630,6 +5634,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   const callbacks = {
     onSnapshot: (snap) => {
+      heard();
       const follow = shouldFollowTail();
       applySnapshot(snap);
       if (protocol === "stream" && snap.length > 0) {
@@ -5639,6 +5644,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (follow) scrollToTail();
     },
     onDelta: (changes) => {
+      heard();
       const follow = shouldFollowTail();
       for (const ch of changes) {
         if (ch.op === "insert") applyInsert(ch.row);
@@ -5657,6 +5663,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     // move and absent for an ordinary write. Deltas carry none — no mkio
     // service emits them — so every attributable change comes through here.
     onUpdate: (op, row, info) => {
+      heard();
       const follow = shouldFollowTail();
       const cause = info?.cause ?? null;
       // A named cursor move invalidates what the `state` probe cached for
@@ -5777,6 +5784,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       topic: spec.topic,
       filter: spec.filter,
       onPage: (pageRows, info) => {
+        heard();
         if (before) {
           pageHasPrev = info.hasmore;
           pageHasMore = true;
@@ -5864,6 +5872,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       topic: spec.topic,
       filter: spec.filter,
       onPage: (pageRows, info) => {
+        heard();
         pageFetchPending = false;
         pageHasPrev = info.hasmore;
         if (pageRows.length > 0) {
@@ -5909,11 +5918,46 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
   if (historySpec) app.state.subscribe("mkio.server.versioned", checkHistory);
 
+  // Stale: while the connection is down the toolbar says when this table
+  // last heard from its service — "as of 14:32:05" — so what it shows
+  // reads as of then rather than now. Every change callback notes the
+  // time (`heard`) and clears the stamp, since data arriving means the
+  // subscription is live again; a reconnect with nothing subscribed
+  // clears it too, nothing being on its way. A table with no rows has
+  // nothing stale to stamp. `mkio.offline.stale = false` turns it off.
+  const staleOn = offlineOptions(app.config?.mkio?.offline).stale;
+  let lastHeard = null;
+  function heard() {
+    lastHeard = Date.now();
+    if (staleEl) clearStale();
+  }
+  function showStale() {
+    if (!staleOn || staleEl || lastHeard == null || rows.size === 0) return;
+    const d = new Date(lastHeard);
+    const pad = (n) => String(n).padStart(2, "0");
+    const at = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    staleEl = document.createElement("span");
+    staleEl.className = "mkui-table-stale";
+    staleEl.appendChild(icon("clock"));
+    staleEl.appendChild(document.createTextNode(`as of ${at}`));
+    staleEl.title = `The server went away at ${at}; these rows are as of then`;
+    toolbar.insertBefore(staleEl, chipsEl);
+    syncToolbar();
+  }
+  function clearStale() {
+    if (!staleEl) return;
+    staleEl.remove();
+    staleEl = null;
+    syncToolbar();
+  }
+
   mkioConnected = !!app.state.get("mkio.connected");
   app.state.subscribe("mkio.connected", (v) => {
     mkioConnected = !!v;
     refreshButtons();
     updatePagingUI();
+    if (!mkioConnected) showStale();
+    else if (!subscribed) clearStale();
   });
 
   function updatePagingUI() {
@@ -6088,6 +6132,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       closed = false;
       subscribed = false;
       lastRef = null;
+      clearStale();
       clearData();
       closeDropdown();
       closePicker();
