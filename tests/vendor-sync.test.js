@@ -14,12 +14,16 @@ import { join } from "node:path";
 const here = fileURLToPath(new URL(".", import.meta.url));
 
 function mkioDir() {
-  try {
-    return execFileSync("python3", ["-c", "import mkio, os; print(os.path.dirname(mkio.__file__))"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-  } catch {
-    return null;
+  // `python3` on Unix; Windows installs the interpreter as `python`.
+  for (const python of ["python3", "python"]) {
+    try {
+      return execFileSync(python, ["-c", "import mkio, os; print(os.path.dirname(mkio.__file__))"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      // try the next name
+    }
   }
+  return null;
 }
 
 const dir = mkioDir();

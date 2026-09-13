@@ -880,6 +880,12 @@ and the mkio client JS — all from one process, one port.
 pip install mkui[mkio]
 ```
 
+Runs on Linux, macOS and Windows with the standard CPython 3.9+
+interpreter (`mkui serve` needs 3.11+, mkio's floor); it has no compiled
+dependencies of its own. On Windows, run mkio 1.0.1 or later: earlier
+1.x releases could not start their server there. The files `mkui init`
+writes are UTF-8 regardless of the system code page, as TOML requires.
+
 mkio is optional — standalone and library mode need no server — and the
 extra pins it to the 1.x line mkui is built against (`mkio>=1.0,<2`).
 `mkui serve` refuses to start with an mkio of another major, and the

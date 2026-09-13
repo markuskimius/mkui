@@ -281,19 +281,21 @@ def cmd_init(args):
 
     # Append mkui routing to server.toml
     server_toml = target / "server.toml"
-    with open(server_toml, "a") as f:
+    # UTF-8 explicitly: TOML is UTF-8 by definition, and Windows' default
+    # text encoding (the ANSI code page) cannot hold these templates.
+    with open(server_toml, "a", encoding="utf-8") as f:
         f.write(SERVER_TOML_APPEND)
 
     # Create static/index.html
     static_subdir = target / "static"
     static_subdir.mkdir(exist_ok=True)
     html_path = static_subdir / "index.html"
-    html_path.write_text(INDEX_HTML)
+    html_path.write_text(INDEX_HTML, encoding="utf-8")
     print(f"Created {html_path}")
 
     # Create config/client.toml
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(CLIENT_TOML)
+    config_path.write_text(CLIENT_TOML, encoding="utf-8")
     print(f"Created {config_path}")
 
     print()

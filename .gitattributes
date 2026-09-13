@@ -1,0 +1,6 @@
+# LF everywhere, on Windows checkouts too: lib/expr.js is compared byte for
+# byte with mkio's copy (tests/vendor-sync.test.js), and the served files
+# and fixtures are read verbatim by the tests.
+* text=auto eol=lf
+*.db binary
+*.png binary

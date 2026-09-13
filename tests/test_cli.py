@@ -275,6 +275,75 @@ class TestMkioFloor(unittest.TestCase):
         self.assertEqual(proj["project"]["optional-dependencies"]["mkio"], ["mkio>=1.0,<2"])
 
 
+@unittest.skipIf(sys.platform == "win32", "emulates Windows' default text encoding on POSIX")
+class TestInitEncoding(unittest.TestCase):
+    """The scaffold is written as UTF-8 whatever the locale's encoding is.
+
+    Windows' default text encoding is the ANSI code page (cp1252 in Western
+    locales), which cannot hold the client template's box-drawing rules; and
+    a TOML file is UTF-8 by definition, so a file written in the code page
+    is one tomllib refuses at serve time. The child runs under an ASCII
+    locale, stricter than any code page, with a stand-in `mkio` on PATH so
+    only mkui's own writes are under test.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        bindir = os.path.join(self.tmpdir, "bin")
+        os.mkdir(bindir)
+        fake = os.path.join(bindir, "mkio")
+        with open(fake, "w", encoding="utf-8") as f:
+            f.write('#!/bin/sh\nmkdir -p "$2" && printf \'port = 8080\\n\' > "$2/server.toml"\n')
+        os.chmod(fake, 0o755)
+        self.env = {
+            **os.environ,
+            "PATH": bindir + os.pathsep + os.environ.get("PATH", ""),
+            "LC_ALL": "C", "LANG": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0",
+        }
+        probe = subprocess.run(
+            [sys.executable, "-c", "import locale; print(locale.getpreferredencoding(False))"],
+            capture_output=True, text=True, env=self.env,
+        )
+        if probe.stdout.strip().lower().replace("-", "") not in ("ascii", "usascii", "ansi_x3.41968"):
+            self.skipTest(f"could not get an ASCII locale (got {probe.stdout.strip()!r})")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_scaffold_is_utf8_under_an_ascii_locale(self):
+        target = os.path.join(self.tmpdir, "myapp")
+        r = subprocess.run(
+            [sys.executable, "-m", "mkui", "init", target],
+            capture_output=True, text=True, env=self.env,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for rel in ("server.toml", os.path.join("config", "client.toml")):
+            with open(os.path.join(target, rel), "rb") as f:
+                data = f.read()
+            text = data.decode("utf-8")          # what tomllib does at serve time
+            tomllib.loads(text)
+        client = Path(target, "config", "client.toml").read_text(encoding="utf-8")
+        self.assertIn("\u2500", client)          # the box-drawing rule cp1252 lacks
+        self.assertIn("\u2014", Path(target, "server.toml").read_text(encoding="utf-8"))
+        html = Path(target, "static", "index.html").read_bytes()
+        self.assertIn(b'<meta charset="utf-8" />', html)
+        self.assertIn(b"<mkui-app", html)
+
+    def test_scaffold_has_no_carriage_returns(self):
+        """The files are written in text mode: on Windows that turns every
+        newline into CRLF, which TOML and HTML accept, but the scaffold must
+        not depend on it — the same file must read identically everywhere."""
+        target = os.path.join(self.tmpdir, "myapp")
+        r = subprocess.run(
+            [sys.executable, "-m", "mkui", "init", target],
+            capture_output=True, text=True, env=self.env,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for rel in (os.path.join("config", "client.toml"), os.path.join("static", "index.html")):
+            data = Path(target, rel).read_bytes()
+            self.assertNotIn(b"\r", data, rel)
+
+
 class TestServe(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
