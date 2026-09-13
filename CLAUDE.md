@@ -11,7 +11,7 @@ mkui: a config-driven, zero-dependency Web Components GUI framework: a floating-
 - **Panes** (`<mkui-pane>`) are leaf content hosts inside frames, always wrapped in a TabGroup
 - Pane elements are pooled at workspace level with stable identity, `appendChild` moving them between frames (into the pool *before* their content is built)
 - Frame positions are fractions of the workspace and split ratios sum to 1, so proportional resize is automatic. Frame rects are *painted* in whole pixels (`applyFrameRect` rounds edges, not width/height, so snapped frames stay flush).
-- Every frame move/resize passes through `clampToDock`
+- Every frame move/resize goes through `clampToDock`
 - Focus model: the top frame gets `[data-focused]` (`_applyZOrder`); each frame tracks an `_activeTabGroup`, updated on interaction with a tab or pane; hotkeys act on it.
 - Tab drag: pointer events (mouse + touch) on tabs (`touch-action: none`); within a bar a ghost label + drop indicator reorder on release, outside the pane tears into a new frame. On noDock frames (dialogs, login) the tab is titlebar text: mousedown moves the frame, click activates the tab, and CSS must keep these tabs pointer-interactive (never `pointer-events: none`).
 - Tab overflow: past `min-width: 3em` `.mkui-tabs` clips, `.mkui-tab-scroll` arrows appear and the bar gets `.mkui-tabbar-overflow` (`updateArrows` in `_renderTabBar`). Rename: ctrl/cmd+click (`contextmenu` + `ctrlKey` on macOS) swaps the label for `.mkui-tab-rename`, Enter/blur committing via `workspace.renamePane`, which sets `titled`, the flag stopping `setPaneAutoTitle` (a detail window hanging its record's name off the pane's title) overwriting a name the user chose.
@@ -208,4 +208,4 @@ Pin button: `icon("pin")` through `frameEl._extraControls`; pinned, a *confirmed
 - `registerPaneType(name, factory)` for custom content; `registerWidget(name, factory)` for inline widgets
 - Layout tree invariant: every leaf sits inside a `{ type: "tabs", children: [...] }`; no bare strings after normalize
 - CSS invariant: `mkui-menubar`/`mkui-statusbar` are `box-sizing: border-box` so their height equals `--mkui-menubar-h`/`--mkui-statusbar-h` exactly; the workspace is positioned by those, and an overhang would paint over snapped frames' borders (`tests/styles.test.js`)
-- Tests: `node:test` + `node:assert/strict`
+- Tests: `node:test`, `node:assert/strict`
