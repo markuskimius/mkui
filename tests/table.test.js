@@ -8535,6 +8535,47 @@ test("as of: the bar opens on the button and closes on it again", async () => {
   assert.equal(asOfBar(host), undefined);
 });
 
+const asOfClose = (host) => asOfBar(host)._ch.find(c => String(c.className).includes("mkui-asof-close"));
+const asOfKey = (host, key) => {
+  const ev = { key, prevented: false, preventDefault() { this.prevented = true; } };
+  asOfBar(host)._ch[0]._ev.keydown[0](ev);
+  return ev;
+};
+
+test("as of: the bar closes on its own × and on Escape in the input", async () => {
+  const { host } = await asOfTable();
+  asOfBtn(host)._ev.click[0]();
+  asOfClose(host)._ev.click[0]();
+  assert.equal(asOfBar(host), undefined, "closed by ×");
+  assert.ok(!asOfBtn(host).classList.contains("active"), "the button is released too");
+  asOfBtn(host)._ev.click[0]();
+  assert.ok(asOfKey(host, "Escape").prevented);
+  assert.equal(asOfBar(host), undefined, "closed by Escape");
+});
+
+test("as of: closing the bar over a historic view goes live", async () => {
+  const { host } = await asOfTable();
+  await showAsOf(host);
+  assert.ok(host.classList.contains("mkui-table-historic"));
+  const subs = fakeClient.calls.filter(c => c.type === "subscribe").length;
+  asOfClose(host)._ev.click[0]();
+  assert.ok(!host.classList.contains("mkui-table-historic"));
+  assert.equal(fakeClient.calls.filter(c => c.type === "subscribe").length, subs + 1, "re-subscribed");
+});
+
+test("as of: the button reads as pressed while its bar is up", async () => {
+  const { host } = await asOfTable();
+  const btn = asOfBtn(host);
+  assert.ok(!btn.classList.contains("active"));
+  assert.match(btn.title, /as it stood/);
+  btn._ev.click[0]();
+  assert.ok(btn.classList.contains("active"), "pressed while open");
+  assert.match(btn.title, /^Close/);
+  btn._ev.click[0]();
+  assert.ok(!btn.classList.contains("active"), "released on close");
+  assert.match(btn.title, /as it stood/);
+});
+
 test("as of: showing a moment asks the service for that ref and renders the answer", async () => {
   const { host } = await asOfTable();
   await showAsOf(host);

@@ -16,6 +16,8 @@ import {
   inputTypeForKind, presetBounds, PRESETS, dateToRef,
 } from "../lib/timeparse.js";
 
+const AS_OF_TITLE = "Show the table as it stood at a moment";
+
 function midnightRef() {
   const d = new Date();
   const m = new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -276,7 +278,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     asOfBtn.className = "mkui-btn mkui-toolbar-btn mkui-history-asof";
     asOfBtn.appendChild(icon("clock"));
     asOfBtn.appendChild(document.createTextNode("As of…"));
-    asOfBtn.title = "Show the table as it stood at a moment";
+    asOfBtn.title = AS_OF_TITLE;
+    asOfBtn.setAttribute("aria-pressed", "false");
     asOfBtn.addEventListener("click", () => (asOfOpen ? closeAsOf() : openAsOf()));
     toolbar.appendChild(asOfBtn);
   }
@@ -3044,6 +3047,15 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   let asOfOpen = false;    // the bar is in the DOM only while armed
   let asOfBar = null, asOfInput = null, asOfLabel = null, asOfGen = 0;
 
+  // A toggle: pressed while its bar is up (the history pane's Unchanged
+  // wears the same look), and the tooltip says which way the click goes.
+  function syncAsOfBtn() {
+    if (!asOfBtn) return;
+    asOfBtn.classList.toggle("active", asOfOpen);
+    asOfBtn.setAttribute("aria-pressed", String(asOfOpen));
+    asOfBtn.title = asOfOpen ? "Close the as-of bar" : AS_OF_TITLE;
+  }
+
   function buildAsOfBar() {
     asOfBar = document.createElement("div");
     asOfBar.className = "mkui-table-asof";
@@ -3056,14 +3068,26 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     show.className = "mkui-btn mkui-asof-show";
     show.textContent = "Show";
     show.addEventListener("click", () => applyAsOf(asOfInput.value));
-    asOfInput.addEventListener("keydown", (ev) => { if (ev.key === "Enter") applyAsOf(asOfInput.value); });
+    // Enter shows, Escape puts the bar away (going live if a view is up).
+    asOfInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") applyAsOf(asOfInput.value);
+      else if (ev.key === "Escape") { ev.preventDefault?.(); closeAsOf(); }
+    });
     asOfLabel = document.createElement("span");
     asOfLabel.className = "mkui-asof-label";
     const live = document.createElement("button");
     live.className = "mkui-btn mkui-asof-live";
     live.textContent = "Live";
     live.addEventListener("click", () => asOfGoLive());
-    asOfBar.append(asOfInput, show, asOfLabel, live);
+    // The bar dismisses itself, as the find bar does; the toolbar button
+    // closing it too is the toggle's other half, not the only way out.
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "mkui-find-btn mkui-asof-close";
+    close.title = "Close (Escape)";
+    close.appendChild(icon("close"));
+    close.addEventListener("click", () => closeAsOf());
+    asOfBar.append(asOfInput, show, asOfLabel, live, close);
   }
 
   function openAsOf() {
@@ -3073,6 +3097,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       asOfOpen = true;
       host.insertBefore(asOfBar, findOpen ? findBar : scrollArea);
       if (!asOfInput.value) asOfInput.value = localInputNow();
+      syncAsOfBtn();
     }
     asOfInput.focus?.();
     return true;
@@ -3083,6 +3108,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (!asOfOpen) return;
     asOfOpen = false;
     asOfBar.remove();
+    syncAsOfBtn();
+    scrollHost.focus?.();
   }
 
   // `datetime-local` takes and gives local wall-clock time; a ref is UTC.

@@ -2099,6 +2099,14 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   gap: 4px;
 }
 .mkui-history-asof .mkui-icon { width: 13px; height: 13px; }
+/* A toggle: pressed while its bar is up, as the history pane's Unchanged is. */
+.mkui-history-asof.active {
+  color: var(--mkui-accent);
+  border-color: var(--mkui-accent);
+  background: color-mix(in srgb, var(--mkui-accent) 15%, var(--mkui-bg-alt));
+}
+.mkui-history-asof.active:hover { background: color-mix(in srgb, var(--mkui-accent) 25%, var(--mkui-bg-alt)); }
+.mkui-asof-close { margin-left: 4px; }
 /* Reading the past: the rows are history, not the record as it stands. */
 .mkui-table-historic .mkui-table { opacity: 0.82; }
 .mkui-table-historic .mkui-table-asof {

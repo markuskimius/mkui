@@ -733,3 +733,12 @@ test("a folded dialog section hides its body; the head reads as a button", () =>
   assert.equal(declaration(".mkui-dialog-group-summary:empty", "display"), "none");
   assert.equal(declaration(".mkui-dialog-group-summary", "text-transform"), "none", "the pill is not shouted like the header");
 });
+
+// The As of button is a toggle: pressed while its bar is up, in the same
+// accent border every toolbar toggle wears, so the state reads at a glance.
+// The bar's × borrows the find bar's button chrome rather than inventing one.
+test("the As of button reads as pressed while its bar is up", () => {
+  assert.equal(declaration(".mkui-history-asof.active", "border-color"), "var(--mkui-accent)");
+  assert.equal(declaration(".mkui-history-toggle.active", "border-color"), "var(--mkui-accent)");
+  assert.ok(css.includes(".mkui-asof-close"), "the bar has a close of its own");
+});
