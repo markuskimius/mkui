@@ -117,10 +117,16 @@ export function openDialog(spec, context, app, extra = {}) {
     let built = false;       // the dynamic pass waits for the whole form
 
     // A `{ group }` heads a section: every item up to the next one is under
-    // it, so its showWhen hides them and `collapsible` folds them.
+    // it, so its showWhen hides them and `collapsible` folds them. One
+    // carrying `fields` is bounded — it holds those alone, and what follows
+    // it stays where it was (the root, or the open section around it).
     function flattenFields(items, row = null, group = null) {
       for (const item of items) {
-        if (item.group != null) { group = item; continue; }
+        if (item.group != null) {
+          if (Array.isArray(item.fields)) flattenFields(item.fields, null, item);
+          else group = item;
+          continue;
+        }
         if (item.row) { flattenFields(item.row, item, group); continue; }
         if (!item.name) anonKey.set(item, `#${allFields.length}`);
         allFields.push(item);
@@ -461,34 +467,39 @@ export function openDialog(spec, context, app, extra = {}) {
     const body = document.createElement("div");
     body.className = "mkui-dialog-body";
 
-    let target = body; // the body, or the open section's
-    for (const item of spec.fields ?? []) {
-      if (item.group != null) {
-        const sec = renderSection(item);
-        body.appendChild(sec.el);
-        containers.push({ item, el: sec.el });
-        target = sec.body;
-        continue;
-      }
-
-      if (item.row) {
-        const rowDiv = document.createElement("div");
-        rowDiv.className = "mkui-dialog-row";
-        for (const f of item.row) {
-          const el = renderFieldItem(f);
-          if (el) {
-            if (f.width) el.style.flex = `1 1 ${f.width * 100}%`;
-            rowDiv.appendChild(el);
-          }
+    // `target` is the body, or the open section's; a bounded section renders
+    // its own fields into itself and leaves the target alone.
+    function renderItems(items, target) {
+      for (const item of items) {
+        if (item.group != null) {
+          const sec = renderSection(item);
+          target.appendChild(sec.el);
+          containers.push({ item, el: sec.el });
+          if (Array.isArray(item.fields)) renderItems(item.fields, sec.body);
+          else target = sec.body;
+          continue;
         }
-        target.appendChild(rowDiv);
-        containers.push({ item, el: rowDiv });
-        continue;
-      }
 
-      const el = renderFieldItem(item);
-      if (el) target.appendChild(el);
+        if (item.row) {
+          const rowDiv = document.createElement("div");
+          rowDiv.className = "mkui-dialog-row";
+          for (const f of item.row) {
+            const el = renderFieldItem(f);
+            if (el) {
+              if (f.width) el.style.flex = `1 1 ${f.width * 100}%`;
+              rowDiv.appendChild(el);
+            }
+          }
+          target.appendChild(rowDiv);
+          containers.push({ item, el: rowDiv });
+          continue;
+        }
+
+        const el = renderFieldItem(item);
+        if (el) target.appendChild(el);
+      }
     }
+    renderItems(spec.fields ?? [], body);
 
     container.appendChild(body);
 
@@ -547,12 +558,17 @@ export function openDialog(spec, context, app, extra = {}) {
     onFieldChange(null, recallAll());
     snapshotInitial();
     for (const sec of sections) if (sec.item.collapsible) setSectionOpen(sec, initialFold(sec));
+    let seen = false; // the open-time fit may re-center; after it, the title bar is the anchor
     fitFrame();
+    seen = true;
 
     // The frame's height is a guess: when the body has to scroll — at open,
     // or once a section unfolds — grow the frame by the overflow so the
-    // whole form and the footer show, capped at 90% of the workspace, and
-    // re-center vertically. Never shrinks: a fold leaves room, not a jump.
+    // whole form and the footer show, capped at 90% of the workspace.
+    // Never shrinks: a fold leaves room, not a jump. The open-time fit
+    // re-centers vertically, nothing having been seen yet; afterwards the
+    // title bar stays where it is (or where it was dragged) and the frame
+    // grows downward, moving up only by what would fall off the bottom.
     function fitFrame() {
       const bodyOverflow = body.scrollHeight - body.clientHeight;
       if (bodyOverflow <= 0) return;
@@ -563,7 +579,7 @@ export function openDialog(spec, context, app, extra = {}) {
       const newFrac = Math.min((curPx + bodyOverflow) / rect.height, 0.9);
       if (newFrac <= fspec.h) return;
       fspec.h = newFrac;
-      fspec.y = Math.max(0, (1 - newFrac) / 2);
+      fspec.y = seen ? Math.min(fspec.y, 1 - newFrac) : Math.max(0, (1 - newFrac) / 2);
       ws._layoutFrames();
     }
 

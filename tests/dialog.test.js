@@ -398,7 +398,7 @@ function openForm(spec, context = {}, extra = {}, appExtra = {}) {
   walk(body);
   // Fields are found in declaration order; name them from the spec.
   const names = [];
-  const flat = (items) => { for (const i of items) { if (i.group != null) continue; if (i.row) flat(i.row); else if (i.type !== "hidden") names.push(i.name); } };
+  const flat = (items) => { for (const i of items) { if (i.group != null) { if (i.fields) flat(i.fields); } else if (i.row) flat(i.row); else if (i.type !== "hidden") names.push(i.name); } };
   flat(spec.fields);
   const byName = {};
   Object.values(fields).forEach((f, i) => { byName[names[i]] = f; });
@@ -745,18 +745,94 @@ test("validation unfolds the section hiding a failing field, without remembering
   assert.equal(store.has("x"), false);
 });
 
-test("unfolding a section grows the frame, never shrinks it", () => {
+test("a group's `fields` bound its section; what follows returns to the enclosing scope", async () => {
+  const d = openForm({ fields: [
+    { name: "symbol", value: "AAPL" },
+    { group: "Advanced", collapsible: true, collapsed: true, showWhen: "symbol != 'X'",
+      fields: [{ row: [{ name: "expire", value: "" }] }, { name: "save_as", value: "t" }] },
+    { name: "preview", type: "readonly", compute: "Terms: ${symbol}" },
+    { group: "Notes" },
+    { name: "memo", value: "m" },
+    { group: "Inner", collapsible: true, fields: [{ name: "deep", value: "d" }] },
+    { name: "after", value: "a" },
+  ] });
+  const [adv, notes, inner] = d.groups;
+  const holds = (sec, name) => {
+    const el = d.f(name).el;
+    return sec.body._ch.includes(el) || sec.body._ch.some((c) => c._ch?.includes(el));
+  };
+  assert.ok(holds(adv, "expire") && holds(adv, "save_as"));
+  assert.equal(holds(adv, "preview"), false, "the preview follows the folded section at the root");
+  assert.equal(adv.open(), false);
+  assert.equal(d.f("preview").ro.textContent, "Terms: AAPL");
+  assert.ok(holds(notes, "memo"));
+  assert.ok(notes.body._ch.includes(inner.el), "a bounded section nests inside the open one");
+  assert.ok(holds(inner, "deep"));
+  assert.ok(holds(notes, "after") && !holds(inner, "after"), "and the outer section resumes after it");
+  d.type("symbol", "X");
+  assert.equal(adv.el.style.display, "none");
+  assert.equal(d.f("preview").el.style.display, "", "a bounded group's showWhen covers only its own fields");
+  assert.deepEqual(await d.submit(), { symbol: "X", memo: "m", deep: "d", after: "a" });
+});
+
+test("a bounded section folds, remembers, counts edits and unfolds on a validation error like an open-ended one", async () => {
+  const store = new Map();
+  const storage = { getItem: (k) => store.has(k) ? store.get(k) : null, setItem: (k, v) => store.set(k, v) };
+  const spec = { fields: [
+    { name: "symbol", value: "AAPL" },
+    { group: "Advanced", collapsible: true, collapsed: true, remember: "adv",
+      fields: [{ name: "expire", value: "" }, { name: "account", required: true }] },
+    { name: "preview", type: "readonly", compute: "${symbol}" },
+  ] };
+  let d = openForm(spec, {}, { storage });
+  const adv = d.groups[0];
+  assert.equal(adv.open(), false);
+  d.type("expire", "20260914");
+  assert.equal(adv.summary.textContent, "1 changed", "a folded head counts its own fields");
+  d.submit();
+  await Promise.resolve();
+  assert.deepEqual(d.errors(), ["account"]);
+  assert.equal(adv.open(), true, "the error under the bounded head unfolds it");
+  assert.equal(store.has("adv"), false, "an unfold for validation is not a preference");
+  adv.click();
+  assert.equal(store.get("adv"), "closed");
+  d = openForm(spec, {}, { storage });
+  assert.equal(d.groups[0].open(), false, "remembered");
+  d.type("account", "A1");
+  assert.deepEqual(await d.submit(), { symbol: "AAPL", expire: "", account: "A1" }, "folded fields submit; the readonly line does not");
+});
+
+test("unfolding a section grows the frame downward from its title bar, never shrinks it", () => {
   const d = openForm(SECTIONED);
   const frame = d.ws._frames[0];
   assert.equal(frame.h, 0.5, "the folded form fits the initial guess");
+  assert.equal(frame.y, 0.25, "centered at open");
   assert.equal(d.ws.layoutCalls, 0);
   geom = { "mkui-dialog-body": { scrollHeight: 500, clientHeight: 300 } };
   d.groups[0].click();
   assert.equal(frame.h, 0.75, "200px of overflow on a 400px frame in an 800px workspace");
+  assert.equal(frame.y, 0.25, "the title bar stays put; only the bottom edge moves");
   assert.equal(d.ws.layoutCalls, 1);
   d.groups[0].click();
   assert.equal(frame.h, 0.75, "folding leaves the room");
   assert.equal(d.ws.layoutCalls, 1);
+});
+
+test("a dialog dragged low moves up only by what would fall off the bottom when it unfolds", () => {
+  let d = openForm(SECTIONED);
+  let frame = d.ws._frames[0];
+  frame.y = 0.4; // dragged: bottom at 0.9
+  geom = { "mkui-dialog-body": { scrollHeight: 500, clientHeight: 300 } };
+  d.groups[0].click();
+  assert.equal(frame.h, 0.75);
+  assert.equal(frame.y, 0.25, "0.4 + 0.75 overshoots by 0.15, so the top rises by 0.15 — not to center");
+  d = openForm(SECTIONED);
+  frame = d.ws._frames[0];
+  frame.y = 0.1; // dragged up: room below
+  geom = { "mkui-dialog-body": { scrollHeight: 500, clientHeight: 300 } };
+  d.groups[0].click();
+  assert.equal(frame.h, 0.75);
+  assert.equal(frame.y, 0.1, "the top does not move at all");
 });
 
 test("a pinned reset re-baselines what a folded head counts as changed, keeping the fold", async () => {
