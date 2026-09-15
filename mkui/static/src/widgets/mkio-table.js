@@ -5570,11 +5570,19 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (tree && (childVals(row) !== childVals(prev) || parentVals(row) !== parentVals(prev))) {
       // Its place in the tree changed: relink and rebuild (its subtree
       // moves with it; children that named the old values re-home).
+      // render() reuses both parents' elements, so their carets are
+      // synced here: the old one may have lost its last child, the new
+      // one may have just become a parent.
+      const oldPk = parentOf.get(key);
       unlinkRow(prev);
       rows.set(key, row);
       linkRow(row);
       markViewDirty();
       render();
+      const newPk = parentOf.get(key);
+      if (oldPk != null) syncToggle(oldPk);
+      if (newPk != null && newPk !== oldPk) syncToggle(newPk);
+      syncTreeAll();
     } else if (sortChanged || wasVis !== isVis) {
       if (tree) {
         // Sibling order or a subtree's visibility changed: rebuild.

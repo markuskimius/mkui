@@ -6313,6 +6313,20 @@ test("tree: deleting a parent re-homes its children; a re-parenting replace move
   assert.ok(isLeaf(toggleOf(host, "a2")), "losing the last child drops the caret");
 });
 
+test("tree: a re-parenting replace syncs both parents' carets", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
+  const sub = lastSubscribe();
+  assert.ok(isLeaf(toggleOf(host, "b1")), "b1 starts childless");
+  assert.ok(!isLeaf(toggleOf(host, "a2")), "a2 starts with a21");
+  // a21 moves from a2, whose only child it was, under b1, which had none.
+  sub.opts.onUpdate("replace", { _mkio_row: "4", name: "a21", id: "A21", parent: "B1", qty: 1 });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "b1", "a21", "x1"], "a21 sits under b1");
+  assert.ok(!isLeaf(toggleOf(host, "b1")), "b1 gained its first child: the caret shows on the reused row");
+  assert.ok(isLeaf(toggleOf(host, "a2")), "a2 lost its last child: the caret goes");
+  clickToggle(host, "b1");
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "b1", "x1"], "and the new caret collapses b1");
+});
+
 test("tree: a row that descends from itself is shown as a root, once warned", async () => {
   const [host, warned] = await withWarnings(() => treeTable({}, [
     { _mkio_row: "1", name: "p", id: "P", parent: "Q", qty: 1 },
