@@ -11,7 +11,7 @@ import { ensureMkio } from "../mkio-bridge.js";
 import { LayoutManager } from "../layouts.js";
 import { historyCapabilities } from "../lib/history.js";
 import { judgeServer, incompatibleMap } from "../lib/verify.js";
-import { phaseOf, offlineOptions, Outage, offlineTitle, OFFLINE_FAVICON } from "../lib/connection.js";
+import { phaseOf, offlineOptions, Outage, offlineTitle, restoreIconHref, OFFLINE_FAVICON } from "../lib/connection.js";
 import { icon } from "../lib/icons.js";
 import "./menubar.js";
 import "./statusbar.js";
@@ -303,7 +303,7 @@ class MkuiApp extends HTMLElement {
     let tick = null;
     let bannerTimer = null;
     let savedTitle = null;
-    let savedIcon = null;   // { el, href } — the page's icon link, or null when it had none
+    let savedIcon = null;   // { el, href } — the page's icon link; href null when it had none
     this._offline = opts;
 
     const clearTimers = () => {
@@ -358,8 +358,8 @@ class MkuiApp extends HTMLElement {
     const unmarkPage = () => {
       if (savedTitle != null) { document.title = savedTitle; savedTitle = null; }
       if (savedIcon) {
-        if (savedIcon.href == null) savedIcon.el.remove();
-        else savedIcon.el.setAttribute("href", savedIcon.href);
+        // The link stays either way: the tab only repaints on an href change.
+        savedIcon.el.setAttribute("href", restoreIconHref(savedIcon.href, document.baseURI));
         savedIcon = null;
       }
     };

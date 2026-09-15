@@ -888,6 +888,64 @@ test("Enter and Space on a head are consumed, so the dialog's Enter-to-submit ne
   assert.equal(d.groups[0].open(), true, "two toggles: back where it started");
 });
 
+test("ctrl/cmd+Enter submits from anywhere, a textarea included; plain Enter there is a newline", async () => {
+  for (const mod of ["ctrlKey", "metaKey"]) {
+    const d = openForm({ fields: [{ name: "note", type: "textarea", value: "hi" }] });
+    const ta = d.f("note").input;
+    const calls = [];
+    const key = (ev) => d.host.fire("keydown", { key: "Enter", target: ta, preventDefault: () => calls.push("pd"), ...ev });
+    key({});
+    let settled = false;
+    d.promise.then(() => { settled = true; });
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(settled, false, "plain Enter in a textarea does not submit");
+    assert.deepEqual(calls, [], "and keeps its default, the newline");
+    key({ [mod]: true });
+    assert.deepEqual(await d.promise, { note: "hi" }, `${mod}+Enter submits`);
+    assert.deepEqual(calls, ["pd"], "the browser's own Enter handling is stopped");
+  }
+});
+
+test("mod+Enter on a section head submits instead of folding it", async () => {
+  const d = openForm({ fields: [
+    { group: "More", collapsible: true },
+    { name: "a", value: "1" },
+  ] });
+  const calls = [];
+  const ev = { key: "Enter", metaKey: true, target: d.groups[0].head, preventDefault: () => calls.push("pd"), stopPropagation: () => calls.push("sp") };
+  d.groups[0].head.fire("keydown", ev);
+  assert.deepEqual(calls, [], "the head lets a modified Enter bubble");
+  assert.equal(d.groups[0].open(), true, "and does not fold");
+  d.host.fire("keydown", ev);
+  assert.deepEqual(await d.promise, { a: "1" });
+});
+
+test("the OK button's tooltip names the submit shortcut in the platform's spelling", async () => {
+  const { formatShortcut } = await import("../mkui/static/src/lib/shortcut.js");
+  const d = openForm({ fields: [{ name: "a", value: "1" }] });
+  const okBtn = d.footer._ch[2];
+  assert.equal(okBtn.textContent, "OK");
+  assert.equal(okBtn.title, formatShortcut("mod+Enter"));
+  assert.equal(okBtn.title, "Ctrl+Enter", "node has no Apple navigator");
+  d.footer._ch[1].fire("click");
+  assert.equal(await d.promise, null);
+});
+
+test("plain Enter on a footer button is the browser's click, not a submit", async () => {
+  const d = openForm({ fields: [{ name: "a", value: "1" }] });
+  const cancelBtn = d.footer._ch[1];
+  d.host.fire("keydown", { key: "Enter", target: cancelBtn, preventDefault() {} });
+  let settled = false;
+  d.promise.then(() => { settled = true; });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(settled, false, "Enter on Cancel must not submit before the click cancels");
+  cancelBtn.fire("click");
+  assert.equal(await d.promise, null);
+  const d2 = openForm({ fields: [{ name: "a", value: "1" }] });
+  d2.host.fire("keydown", { key: "Enter", target: d2.f("a").input, preventDefault() {} });
+  assert.deepEqual(await d2.promise, { a: "1" }, "Enter in a single-line field still submits");
+});
+
 test("a non-collapsible group ignores collapsed and remember, and a collapsible one with no fields still folds", async () => {
   const store = new Map();
   const storage = { getItem: (k) => store.has(k) ? store.get(k) : null, setItem: (k, v) => store.set(k, v) };

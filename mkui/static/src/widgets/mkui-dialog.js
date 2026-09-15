@@ -1,5 +1,6 @@
 import { resolveExpr, resolveObject, evalExpr, expr } from "../lib/expressions.js";
 import { icon } from "../lib/icons.js";
+import { formatShortcut } from "../lib/shortcut.js";
 import { strptime, parseTime, inputToBound, boundToInput, inputTypeForKind, kindForFormat, detectTimeKind } from "../lib/timeparse.js";
 
 let dialogSeq = 0;
@@ -257,6 +258,7 @@ export function openDialog(spec, context, app, extra = {}) {
         head.addEventListener("click", (ev) => toggleSection(sec, ev.altKey));
         head.addEventListener("keydown", (ev) => {
           if (ev.key !== "Enter" && ev.key !== " ") return;
+          if (ev.ctrlKey || ev.metaKey) return; // mod+Enter submits from anywhere
           ev.preventDefault();
           ev.stopPropagation(); // Enter on the head folds; it never submits
           toggleSection(sec, ev.altKey);
@@ -529,6 +531,7 @@ export function openDialog(spec, context, app, extra = {}) {
     const submitBtn = document.createElement("button");
     submitBtn.className = "mkui-btn mkui-btn-primary";
     submitBtn.textContent = spec.submit?.label ?? "OK";
+    submitBtn.title = formatShortcut("mod+Enter");
     submitBtn.addEventListener("click", submit);
 
     footer.append(cancelBtn, submitBtn);
@@ -539,9 +542,16 @@ export function openDialog(spec, context, app, extra = {}) {
     const firstInput = host.querySelector("input:not([type=hidden]):not([type=checkbox]), select, textarea");
     firstInput?.focus();
 
+    // Enter submits from a single-line field; ctrl/cmd+Enter from anywhere,
+    // a textarea included (there plain Enter is a newline). On a button
+    // Enter is the browser's own click — Enter on Cancel must cancel — and
+    // the modified one is ours alone, so its default (that click) is stopped.
     const onKey = (e) => {
       if (e.key === "Escape") close();
-      if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") submit();
+      if (e.key !== "Enter") return;
+      if (e.ctrlKey || e.metaKey) { e.preventDefault(); submit(); return; }
+      const tag = e.target?.tagName;
+      if (tag !== "TEXTAREA" && tag !== "BUTTON") submit();
     };
     host.addEventListener("keydown", onKey);
 

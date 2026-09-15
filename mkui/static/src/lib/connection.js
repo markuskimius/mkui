@@ -81,6 +81,15 @@ export class Outage {
 export const OFFLINE_FAVICON = "data:image/svg+xml," + encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#d32f2f"/></svg>');
 
+// The icon href to put back on reconnect: the page's own when it had an
+// icon link, else the browser's default location, which is what it was
+// showing before. Removing a link the page never had would not do: a tab
+// keeps the last icon it loaded until an href changes.
+export function restoreIconHref(savedHref, base) {
+  if (savedHref != null) return savedHref;
+  return base ? new URL("/favicon.ico", base).href : "/favicon.ico";
+}
+
 // The tab title while down: the warning glyph, the word, the app's own.
 export function offlineTitle(base) {
   return base ? `⚠ Disconnected · ${base}` : "⚠ Disconnected";

@@ -1427,6 +1427,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const start = Math.max(0, Math.floor(st / rowH) - OVERSCAN);
     const end = Math.min(total, Math.ceil((st + vh) / rowH) + OVERSCAN);
     if (start === renderedStart && end === renderedEnd && viewRev === renderedRev) return;
+    // Every data path (snapshot, live insert/delete, reopen) lands here, so
+    // the header caret follows `expanded` from one place; the per-toggle
+    // calls only make it immediate.
+    if (tree && viewRev !== renderedRev) syncTreeAll();
     renderedStart = start; renderedEnd = end; renderedRev = viewRev;
 
     topSpacerTd.style.height = (start * rowH) + "px";

@@ -6283,6 +6283,29 @@ test("tree: sorting orders roots, then each sibling group; live inserts land in 
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "a15", "b", "b1", "x1", "c"], "unsorted: insertion order per group");
 });
 
+test("tree: the header caret follows the rows the snapshot expanded", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: 1 } });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "b1", "x1"], "roots open per tree.expand");
+  assert.ok(treeAll(host).classList.contains("open"), "header caret open too");
+  assert.equal(treeAll(host).title, "Collapse all");
+  treeAll(host)._ev.click[0]({ stopPropagation() {} });
+  assert.deepEqual(treeNames(host), ["a", "b", "x1"]);
+  assert.ok(!treeAll(host).classList.contains("open"));
+});
+
+test("tree: the header caret follows live changes to what is open", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: 1 } }, [
+    { _mkio_row: "1", name: "a", id: "A", parent: "", qty: 3 },
+  ]);
+  assert.ok(!treeAll(host).classList.contains("open"), "a lone leaf: nothing to collapse");
+  const sub = lastSubscribe();
+  sub.opts.onUpdate("insert", { _mkio_row: "2", name: "a1", id: "A1", parent: "A", qty: 1 });
+  assert.deepEqual(treeNames(host), ["a", "a1"]);
+  assert.ok(treeAll(host).classList.contains("open"), "the first parent arrived open");
+  sub.opts.onUpdate("delete", { _mkio_row: "2", name: "a1", id: "A1", parent: "A", qty: 1 });
+  assert.ok(!treeAll(host).classList.contains("open"), "its last child left");
+});
+
 test("tree: live inserts into an expanded parent show at once, into a collapsed one only mark the caret", async () => {
   const host = await treeTable();
   clickToggle(host, "a");

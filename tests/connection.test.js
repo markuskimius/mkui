@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  phaseOf, formatDownFor, offlineOptions, OFFLINE_DEFAULTS, Outage, offlineTitle, OFFLINE_FAVICON,
+  phaseOf, formatDownFor, offlineOptions, OFFLINE_DEFAULTS, Outage, offlineTitle, restoreIconHref, OFFLINE_FAVICON,
 } from "../mkui/static/src/lib/connection.js";
 
 test("phaseOf: connecting until the first open, disconnected after it", () => {
@@ -69,6 +69,16 @@ test("Outage: one transition per outage under the client's repeated disconnect c
 test("offlineTitle prefixes the app's title, and stands alone without one", () => {
   assert.equal(offlineTitle("Order Book"), "⚠ Disconnected · Order Book");
   assert.equal(offlineTitle(""), "⚠ Disconnected");
+});
+
+test("restoreIconHref: the page's own icon, else the browser's default location", () => {
+  assert.equal(restoreIconHref("/img/app.png", "http://h/app/"), "/img/app.png");
+  // A page without an icon link was showing /favicon.ico; point the link
+  // there rather than removing it, or the red dot stays.
+  assert.equal(restoreIconHref(null, "http://h/app/index.html"), "http://h/favicon.ico");
+  assert.equal(restoreIconHref(undefined, "http://h:8080/"), "http://h:8080/favicon.ico");
+  assert.equal(restoreIconHref(null), "/favicon.ico");
+  assert.notEqual(restoreIconHref(null, "http://h/"), OFFLINE_FAVICON);
 });
 
 test("OFFLINE_FAVICON is an inline SVG data URI", () => {
