@@ -804,11 +804,18 @@ export function openDialog(spec, context, app, extra = {}) {
       resolve(null);
     }
 
+    // After a pinned submit: `pin = "reset"` (the default) restores every
+    // field's default; `pin = "keep"` leaves the entered values — and their
+    // dirty marks, so a compute doesn't take them back — for the next
+    // submit, except fields that say `pin: "reset"` themselves (a save-as
+    // name that must not re-save). Errors clear and "changed" re-baselines
+    // either way.
+    function resets(f) {
+      return f.type !== "readonly" && f.type !== "hidden" && (f.pin ?? spec.pin) !== "keep";
+    }
     function resetForm() {
-      dirty.clear();
+      const reset = allFields.filter(resets);
       for (const f of allFields) {
-        if (f.type === "readonly" || f.type === "hidden") continue;
-        setFieldValue(f, defaultValue(f));
         const el = fieldEls[keyOf(f)];
         if (el) {
           el.classList.remove("mkui-dialog-invalid");
@@ -816,7 +823,13 @@ export function openDialog(spec, context, app, extra = {}) {
           if (err) err.remove();
         }
       }
-      onFieldChange(null, recallAll());
+      for (const f of reset) {
+        dirty.delete(keyOf(f));
+        setFieldValue(f, defaultValue(f));
+      }
+      const filled = [];
+      for (const f of reset) filled.push(...recallField(f));
+      onFieldChange(null, filled);
       snapshotInitial();
       const firstInput = host.querySelector("input:not([type=hidden]):not([type=checkbox]), select, textarea");
       firstInput?.focus();

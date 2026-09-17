@@ -1173,6 +1173,112 @@ test("a pinned submit resets the form and a compute takes the field back", async
   assert.equal(d.f("note").input.value, "Order for GOOG", "and follows again");
 });
 
+/* ── pin: "keep" ──────────────────────────────────────────── */
+// `pin = "keep"` on the spec makes a pinned submit hold the entered values
+// (and their dirty marks, so a compute stays off them) for the next one;
+// a field's own `pin: "reset"` still goes back to its default.
+
+function pinIt(d) {
+  const pin = d.ws._frameEls.get(d.ws._frames[0].id)._extraControls()[0];
+  pin.fire("click", { stopPropagation() {} });
+}
+
+test("pin keep: a pinned submit holds the entered values and a compute stays off them", async () => {
+  const sent = [];
+  const client = { send: async (svc, data) => { sent.push(data); return { type: "ok" }; } };
+  const d = openForm({
+    pin: "keep",
+    submit: { service: "orders" },
+    fields: [{ name: "symbol", value: "AAPL" }, { name: "note", compute: "'Order for ' + symbol" }, { name: "qty", value: "1" }],
+  }, {}, { client });
+  pinIt(d);
+  d.type("note", "custom");
+  d.type("symbol", "MSFT");
+  d.submit();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(sent, [{ symbol: "MSFT", note: "custom", qty: "1" }]);
+  assert.equal(d.f("symbol").input.value, "MSFT", "kept");
+  assert.equal(d.f("note").input.value, "custom", "the typed note is still dirty, so the compute leaves it");
+  d.type("qty", "2");
+  d.submit();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(sent[1], { symbol: "MSFT", note: "custom", qty: "2" }, "the next submit sends the kept terms");
+  assert.equal(d.f("note").input.value, "custom");
+});
+
+test("pin keep: a field's own pin reset goes back to its default while its neighbours keep", async () => {
+  const store = new Map();
+  const storage = { getItem: (k) => store.has(k) ? store.get(k) : null, setItem: (k, v) => store.set(k, v) };
+  const client = {
+    send: async () => ({ type: "ok" }),
+    request: async () => [{ id: 1, name: "big", symbol: "AAPL", qty: "500" }],
+  };
+  const d = openForm({
+    pin: "keep",
+    submit: { service: "orders" },
+    fields: [
+      { name: "_template", type: "select", optionsFrom: { service: "t", params: {}, value: "name", label: "name" },
+        fill: { symbol: "symbol", qty: "qty" },
+        remember: { key: "app.template", value: "IF(COALESCE(save_as, '') != '', save_as, _template)" } },
+      { name: "symbol" },
+      { name: "qty", type: "number" },
+      { name: "save_as", pin: "reset" },
+    ],
+  }, {}, { client, storage });
+  await Promise.resolve();
+  pinIt(d);
+  d.pick("_template", "big");
+  d.type("qty", "7");
+  d.type("save_as", "mine");
+  d.submit();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(store.get("app.template"), "mine", "remember still stores at the submit");
+  assert.equal(d.f("save_as").input.value, "", "the save-as name resets so the next submit does not re-save");
+  assert.equal(d.f("_template").input.value, "big", "the pick stays");
+  assert.equal(d.f("symbol").input.value, "AAPL");
+  assert.equal(d.f("qty").input.value, "7", "the edit over the template stays, and the pick's fill does not run again");
+});
+
+test("pin keep: errors clear, the changed count re-baselines, and an unpinned or refused submit is as before", async () => {
+  const d = openForm({ pin: "keep", fields: [
+    { name: "symbol", value: "AAPL" },
+    { group: "Execution", collapsible: true, collapsed: true },
+    { name: "note" },
+    { name: "account", required: true },
+  ] });
+  pinIt(d);
+  d.groups[0].click();
+  d.type("note", "x");
+  d.groups[0].click();
+  assert.equal(d.groups[0].summary.textContent, "1 changed");
+  d.submit();
+  await Promise.resolve();
+  assert.deepEqual(d.errors(), ["account"], "a refused submit keeps the form as it was");
+  assert.equal(d.f("note").input.value, "x");
+  d.type("account", "A1");
+  d.submit();
+  await Promise.resolve();
+  assert.deepEqual(d.errors(), [], "the confirmed submit clears the error marker");
+  assert.equal(d.f("note").input.value, "x", "kept");
+  assert.equal(d.f("account").input.value, "A1");
+  assert.equal(d.groups[0].summary.textContent, "", "what is kept is the new baseline");
+
+  const plain = openForm({ pin: "keep", fields: [{ name: "symbol", value: "AAPL" }] });
+  plain.type("symbol", "MSFT");
+  assert.deepEqual(await plain.submit(), { symbol: "MSFT" }, "unpinned, keep changes nothing: the dialog closes");
+});
+
+test("pin defaults to reset, and an unknown value resets too", async () => {
+  for (const pin of [undefined, "reset", "bogus"]) {
+    const d = openForm({ pin, fields: [{ name: "symbol", value: "AAPL" }] });
+    pinIt(d);
+    d.type("symbol", "MSFT");
+    d.submit();
+    await Promise.resolve();
+    assert.equal(d.f("symbol").input.value, "AAPL", `pin=${pin}`);
+  }
+});
+
 /* ── submit.then ─────────────────────────────────────────────────────── */
 // A confirmed submit may fire one mkui action with args resolved against
 // what was sent — the way a table's own buttons resolve theirs against the

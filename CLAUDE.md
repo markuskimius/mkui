@@ -202,7 +202,7 @@ Dynamic form: every edit runs `applyDynamic` (`onFieldChange`) over `formScope()
 
 Keys (`onKey`): Escape closes; Enter submits off a single-line field (a textarea or button keeps it); ctrl/cmd+Enter submits anywhere, defaults stopped, section heads letting it bubble. `formatShortcut` (`lib/shortcut.js`) titles OK.
 
-Pin button: `icon("pin")` via `frameEl._extraControls`; pinned, a *confirmed* submit resets the form instead of closing.
+Pin button: `icon("pin")` via `frameEl._extraControls`; pinned, a *confirmed* submit resets the form instead of closing (`resetForm`): `spec.pin = "keep"` holds every field's value and dirty mark, a field's own `pin: "reset"` (or the default) restores its default and re-runs its `remember` recall (`resets`); errors clear and `snapshotInitial` re-baselines either way.
 
 ## Conventions
 
