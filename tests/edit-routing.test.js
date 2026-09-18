@@ -145,6 +145,35 @@ test("ctrl+A routes to selectAll, Escape to clearSelection", () => {
   assert.deepEqual(calls, ["selectAll", "clear"]);
 });
 
+test("Escape prefers a pane's cancel over clearSelection", () => {
+  const calls = [];
+  const ws = makeWorkspace({
+    frames: [{ id: "f1", tree: tabs("dialog") }],
+    focusedId: "f1",
+    paneActions: {
+      dialog: {
+        cancel: () => { calls.push("cancel"); return calls.length > 1; },
+        clearSelection: () => { calls.push("clear"); return true; },
+      },
+    },
+  });
+  // A refused cancel (a pinned dialog) falls through to clearSelection.
+  const e1 = keyEvent({ key: "Escape" });
+  ws._onKeyDown(e1);
+  assert.deepEqual(calls, ["cancel", "clear"]);
+  assert.ok(e1.defaultPrevented);
+  // A handled cancel is the end of it.
+  const e2 = keyEvent({ key: "Escape" });
+  ws._onKeyDown(e2);
+  assert.deepEqual(calls, ["cancel", "clear", "cancel"]);
+  assert.ok(e2.defaultPrevented);
+  // Neither hook → the browser keeps the key.
+  ws._paneEls.set("dialog", { _editActions: {} });
+  const e3 = keyEvent({ key: "Escape" });
+  ws._onKeyDown(e3);
+  assert.equal(e3.defaultPrevented, false);
+});
+
 test("ctrl+F and cmd+F route to find and swallow the browser's find", () => {
   const { ws, calls } = routedWorkspace();
   const e1 = keyEvent({ key: "f", ctrlKey: true });

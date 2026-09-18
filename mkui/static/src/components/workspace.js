@@ -83,7 +83,9 @@ class MkuiWorkspace extends HTMLElement {
     // copy/select-all must keep working.
     if (!inText) {
       if (e.key === "Escape") {
-        if (this.editAction("clearSelection")) e.preventDefault();
+        // A pane that can be dismissed (a dialog) goes first; the rest
+        // clear their selection.
+        if (this.editAction("cancel") || this.editAction("clearSelection")) e.preventDefault();
         return;
       }
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
@@ -145,7 +147,7 @@ class MkuiWorkspace extends HTMLElement {
   }
 
   // Fire an edit action ("copy" | "selectAll" | "clearSelection" | "find" |
-  // "findNext" | "findPrev") on the
+  // "findNext" | "findPrev" | "undo" | "redo" | "cancel") on the
   // active pane's _editActions hook. Returns whether the pane handled it —
   // false means the caller should leave the browser default alone.
   editAction(name) {

@@ -1183,6 +1183,54 @@ function pinIt(d) {
   pin.fire("click", { stopPropagation() {} });
 }
 
+// Escape cancels the dialog unless it is pinned. From a field the form's own
+// keydown handler decides; with focus outside the form the workspace routes
+// the window's Escape to the pane's `_editActions.cancel` — same answer.
+
+function paneOf(d) {
+  return d.ws._paneEls.get(d.ws._frames[0].layout.children[0]);
+}
+
+async function settled(promise) {
+  let done = false;
+  promise.then(() => { done = true; });
+  await new Promise((r) => setTimeout(r, 0));
+  return done;
+}
+
+test("Escape in a field cancels an unpinned dialog and claims the key", async () => {
+  const d = openForm({ fields: [{ name: "a", value: "1" }] });
+  let prevented = false;
+  d.host.fire("keydown", { key: "Escape", target: d.f("a").input, preventDefault() { prevented = true; } });
+  assert.equal(await d.promise, null);
+  assert.equal(prevented, true);
+});
+
+test("Escape in a field does nothing to a pinned dialog", async () => {
+  const d = openForm({ fields: [{ name: "a", value: "1" }] });
+  pinIt(d);
+  let prevented = false;
+  d.host.fire("keydown", { key: "Escape", target: d.f("a").input, preventDefault() { prevented = true; } });
+  assert.equal(await settled(d.promise), false, "still open");
+  assert.equal(prevented, false, "browser default kept (an open select list still shuts)");
+  d.type("a", "2");
+  pinIt(d);
+  d.host.fire("keydown", { key: "Escape", target: d.f("a").input, preventDefault() {} });
+  assert.equal(await d.promise, null, "unpinned again, Escape cancels");
+});
+
+test("the pane's _editActions.cancel closes an unpinned dialog, refuses a pinned one", async () => {
+  const d = openForm({ fields: [{ name: "a", value: "1" }] });
+  const pane = paneOf(d);
+  pinIt(d);
+  assert.equal(pane._editActions.cancel(), false);
+  assert.equal(await settled(d.promise), false, "pinned: still open");
+  pinIt(d);
+  assert.equal(pane._editActions.cancel(), true);
+  assert.equal(await d.promise, null);
+  assert.equal(pane._editActions.cancel(), false, "already closed");
+});
+
 test("pin keep: a pinned submit holds the entered values and a compute stays off them", async () => {
   const sent = [];
   const client = { send: async (svc, data) => { sent.push(data); return { type: "ok" }; } };

@@ -542,12 +542,28 @@ export function openDialog(spec, context, app, extra = {}) {
     const firstInput = host.querySelector("input:not([type=hidden]):not([type=checkbox]), select, textarea");
     firstInput?.focus();
 
+    // Escape cancels — unless pinned: the pin says stay open, whatever the
+    // key, and × is still there. From a field the keydown lands here; with
+    // nothing in the form focused (the title, the pin button, the body
+    // clicked) it reaches the window, whose Escape the workspace routes to
+    // the focused frame's pane through `_editActions.cancel` — the same
+    // decision, so the dialog closes on Escape whenever its frame is the
+    // focused one. A handled Escape is claimed (`preventDefault`) so the
+    // window sees one owner; an ignored one keeps the browser default,
+    // which still shuts an open select list.
+    const cancel = () => {
+      if (pinned || resolved) return false;
+      close();
+      return true;
+    };
+    paneEl._editActions = { cancel };
+
     // Enter submits from a single-line field; ctrl/cmd+Enter from anywhere,
     // a textarea included (there plain Enter is a newline). On a button
     // Enter is the browser's own click — Enter on Cancel must cancel — and
     // the modified one is ours alone, so its default (that click) is stopped.
     const onKey = (e) => {
-      if (e.key === "Escape") close();
+      if (e.key === "Escape") { if (cancel()) e.preventDefault(); return; }
       if (e.key !== "Enter") return;
       if (e.ctrlKey || e.metaKey) { e.preventDefault(); submit(); return; }
       const tag = e.target?.tagName;
