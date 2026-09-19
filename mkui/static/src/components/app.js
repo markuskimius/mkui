@@ -6,7 +6,9 @@
 // The workspace is where all windows live — as floating frames, not a
 // single docked tree. Docking happens inside each frame.
 
-import { App } from "../core.js";
+import { App, VERSION } from "../core.js";
+import { alertSpec, confirmSpec, aboutSpec, resetSuppressed, resetMessage, readSuppressed, SUPPRESS_PREFIX } from "../lib/dialogs.js";
+import { makeCopyStatus } from "../lib/copy.js";
 import { ensureMkio } from "../mkio-bridge.js";
 import { LayoutManager } from "../layouts.js";
 import { historyCapabilities } from "../lib/history.js";
@@ -118,6 +120,38 @@ class MkuiApp extends HTMLElement {
     // Send a table's selected record to a detail window: `args =
     // { pane, from }` — `from` the table, else the focused pane.
     this._app.registerAction("table.record",    (app, a = {}) => ws.showPaneRecord(a.pane ?? null, { from: a.from ?? null }));
+
+    // Dialogs from config: `dialog.open` takes `{ dialog = "<name>" }` (one
+    // under the top-level `dialogs`) or an inline spec, `context` adding to
+    // what its expressions see; the message boxes take a message or
+    // `{ message, title, kind, … }`. Each returns the dialog's promise.
+    this._app.registerAction("dialog.open",     (app, a = {}) =>
+      app.dialog(typeof a === "string" ? a : a?.dialog, (typeof a === "object" && a?.context) || {}));
+    this._app.registerAction("dialog.alert",    (app, a) => app.dialog(alertSpec(a)));
+    this._app.registerAction("dialog.confirm",  (app, a) => app.dialog(confirmSpec(a)));
+    this._app.registerAction("dialog.about",    (app) => app.dialog(aboutSpec(app.config, { version: VERSION })));
+    // Forget "Don't ask again" answers: one `suppress` key, or all of them.
+    // Nothing on screen changes until a box next asks, so the statusbar
+    // says what happened (`status.message`, briefly) — including that
+    // there was nothing to forget.
+    // The answers themselves are mirrored at `dialog.suppressed`
+    // (`{ key: buttonId }`) — here, when a dialog stores one, and when
+    // another tab does — for a menu item's `disabled` to read.
+    const resetStatus = makeCopyStatus(this._app.state, 4000);
+    const store = typeof localStorage !== "undefined" ? localStorage : null;
+    const mirrorSuppressed = () => this._app.state.set("dialog.suppressed", readSuppressed(store));
+    mirrorSuppressed();
+    if (typeof window !== "undefined" && !this._storageHandler) {
+      this._storageHandler = (ev) => { if (ev.key == null || ev.key.startsWith(SUPPRESS_PREFIX)) this._mirrorSuppressed?.(); };
+      window.addEventListener("storage", this._storageHandler);
+    }
+    this._mirrorSuppressed = mirrorSuppressed;
+    this._app.registerAction("dialog.resetSuppressed", (app, key = null) => {
+      const n = resetSuppressed(store, typeof key === "string" ? key : null);
+      mirrorSuppressed();
+      resetStatus(resetMessage(n));
+      return n;
+    });
 
     const hasAuth = !!config.auth;
     const st = this._app.state;

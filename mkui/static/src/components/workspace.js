@@ -146,6 +146,26 @@ class MkuiWorkspace extends HTMLElement {
     return id != null ? this._paneEls.get(id) ?? null : null;
   }
 
+  // What has the focus, for a menu's expressions (lib/menu.js): the
+  // active pane as `{ id, type, title, can }` — `can` the edit actions it
+  // answers (`can.copy`, `can.find`, `can.undo`, …: its `_editActions`) —
+  // and its selection as `{ count, focused }`, null for a pane with no
+  // `_select` hook; or null when no frame is focused.
+  focusInfo() {
+    const el = this.activePaneEl();
+    if (!el) return null;
+    const id = el.getAttribute?.("data-id") ?? el.dataset?.id ?? null;
+    const spec = id != null ? this._panes.get(id) : null;
+    const sel = el._select?.get?.() ?? null;
+    return {
+      pane: {
+        id, type: spec?.type ?? null, title: spec?.title ?? id,
+        can: Object.fromEntries(Object.entries(el._editActions ?? {}).filter(([, fn]) => typeof fn === "function").map(([k]) => [k, true])),
+      },
+      selection: sel ? { count: sel.keys?.length ?? 0, focused: sel.focus != null } : null,
+    };
+  }
+
   // Fire an edit action ("copy" | "selectAll" | "clearSelection" | "find" |
   // "findNext" | "findPrev" | "undo" | "redo" | "cancel") on the
   // active pane's _editActions hook. Returns whether the pane handled it —
@@ -511,13 +531,48 @@ class MkuiWorkspace extends HTMLElement {
       else normal.push(spec);
     }
     const ordered = [...normal, ...onTop];
+    // Two z-steps a frame, so the scrim can sit under the modal one.
+    let modalAt = -1;
     for (let i = 0; i < ordered.length; i++) {
       const el = this._frameEls.get(ordered[i].id);
       if (!el) continue;
-      el.style.zIndex = 10 + i;
+      el.style.zIndex = 10 + 2 * i;
+      if (ordered[i].modal) modalAt = i;
       if (ordered[i].id === this._focusedId) el.setAttribute("data-focused", "");
       else el.removeAttribute("data-focused");
     }
+    this._applyScrim(modalAt < 0 ? null : ordered[modalAt], 10 + 2 * modalAt - 1);
+  }
+
+  // A `modal` frame (a confirm) keeps the pointer off everything under it:
+  // `.mkui-scrim` covers the workspace just below the top-most modal
+  // frame, and the app root's `[modal]` stills the menubar and statusbar
+  // (CSS). A press on the scrim goes nowhere but back to that frame.
+  _applyScrim(spec, z) {
+    const root = this.closest?.("mkui-app") ?? null;
+    if (!spec) {
+      this._scrim?.remove();
+      this._scrim = null;
+      root?.removeAttribute("modal");
+      return;
+    }
+    if (!this._scrim) {
+      this._scrim = document.createElement("div");
+      this._scrim.className = "mkui-scrim";
+      this._scrim.addEventListener("mousedown", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const top = [...this._frames].reverse().find((f) => f.modal);
+        const el = top && this._frameEls.get(top.id);
+        if (!el) return;
+        el.classList.remove("mkui-frame-nudge");
+        void el.offsetWidth;
+        el.classList.add("mkui-frame-nudge");
+      });
+      this.appendChild(this._scrim);
+    }
+    this._scrim.style.zIndex = z;
+    root?.setAttribute("modal", "");
   }
 
   _raiseFrame(frameEl) {
@@ -556,7 +611,10 @@ class MkuiWorkspace extends HTMLElement {
     }
     this._frameEls.delete(id);
     this._frames.splice(idx, 1);
-    // Re-apply z-order so the new top-most frame picks up data-focused.
+    // The focus falls to the new top-most frame — under a closing dialog,
+    // the one it was opened over — so the keyboard and the Edit menu still
+    // have a pane to act on; then z-order paints `data-focused` on it.
+    if (this._focusedId === id) this._focusedId = this._frames[this._frames.length - 1]?.id ?? null;
     this._applyZOrder();
   }
 
@@ -571,6 +629,7 @@ class MkuiWorkspace extends HTMLElement {
       layout: spec.layout,
       stayOnTop: spec.stayOnTop ?? false,
       noDock: spec.noDock ?? false,
+      modal: spec.modal === true,
     };
     this._frames.push(s);
     this._focusedId = s.id;

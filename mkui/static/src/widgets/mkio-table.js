@@ -1,4 +1,5 @@
 import { registerPaneType } from "../core.js";
+import { asks, confirmed } from "../lib/dialogs.js";
 import { ensureMkio } from "../mkio-bridge.js";
 import { resolveExpr, resolveObject, evalExpr, compileExpr, compileTemplate, expr } from "../lib/expressions.js";
 import { icon } from "../lib/icons.js";
@@ -2712,6 +2713,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       state: app.state.get(),
     };
 
+    // `confirm` on a button asks first, its message seeing the selection
+    // (`Cancel ${selection.count} order(s)?`); the action then runs over
+    // the rows that were asked about, whatever has been selected since.
+    if (asks(btnSpec) && !await confirmed(app, btnSpec, ctx)) return;
+
     if (action.type === "transaction") {
       if (cellUnit) {
         for (const cell of cells) {
@@ -2728,7 +2734,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       }
     } else if (action.type === "dialog") {
       let dialogSpec;
-      if (action.dialog) {
+      if (typeof action.dialog === "string") {
+        // A name under the config's `dialogs`: one spec for this button
+        // and for a menu's `dialog.open`.
+        dialogSpec = app.config?.dialogs?.[action.dialog];
+        if (!dialogSpec) console.warn("[mkui-table] unknown dialog:", action.dialog);
+      } else if (action.dialog) {
         dialogSpec = action.dialog;
       } else if (action.dialogService) {
         const reqData = resolveObject(action.dialogService.data ?? {}, ctx);

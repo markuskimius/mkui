@@ -27,14 +27,18 @@
     });
 
     const config = {
-      app: { title: "Library mode demo", theme: "dark" },
+      app: { title: "Library mode demo", theme: "dark", version: "1.0",
+             description: "An mkui app assembled from JavaScript: custom pane types, custom actions, message boxes." },
       state: { status: { message: "Built from JS" } },
       menubar: [
         { label: "App", items: [
           { label: "Ping status", action: "demo.ping" },
           { label: "New Notes", action: "demo.newNotes" },
+          { label: "Close Scratch Pads…", action: "demo.closeNotes" },
+          { label: "Save Changes…", action: "demo.save" },
+          { label: "Simulate an Error", action: "demo.fail" },
           { sep: true },
-          { label: "Quit", action: "app.quit" },
+          { label: "Quit", action: "app.quit", confirm: "Quit the demo?" },
         ]},
         { label: "Window", items: [
           { label: "Clock",  action: "pane.show", args: "clock" },
@@ -45,6 +49,9 @@
           { label: "Tile Vertically",   action: "window.tileV" },
           { label: "Tile Grid",        action: "window.grid" },
           { label: "Cascade",          action: "window.cascade" },
+        ]},
+        { label: "Help", items: [
+          { label: "About", action: "dialog.about" },
         ]},
       ],
       statusbar: {
@@ -78,6 +85,7 @@
         app.state.set("status.message", "Pinged at " + new Date().toLocaleTimeString()),
       );
       let notesCounter = 0;
+      const scratchFrames = [];   // the frames "New Notes" opened
       app.registerAction("demo.newNotes", () => {
         notesCounter += 1;
         const id = `notes-${notesCounter}`;
@@ -87,12 +95,60 @@
         };
         // Rebuild the workspace's pane registry and add a new frame for it.
         root.workspace._panes.set(id, app.config.panes[id]);
-        root.workspace.addFrame({
+        scratchFrames.push(root.workspace.addFrame({
           x: 0.2 + (notesCounter % 4) * 0.03,
           y: 0.25 + (notesCounter % 4) * 0.03,
           w: 0.3, h: 0.3,
           layout: { type: "tabs", active: 0, children: [id] },
+        }));
+      });
+
+      // Message boxes from code. `app.confirm` resolves true on OK;
+      // `app.alert` once acknowledged.
+      app.registerAction("demo.closeNotes", async () => {
+        const open = scratchFrames.filter((id) => root.workspace._frames.some((f) => f.id === id));
+        if (open.length === 0) {
+          await app.alert("There are no scratch pads to close.", { title: "Scratch pads" });
+          return;
+        }
+        const yes = await app.confirm(`Close ${open.length} scratch pad(s)?`, { title: "Scratch pads", kind: "danger", ok: "Close" });
+        if (!yes) return;
+        for (const id of open) root.workspace.closeFrame(id);
+        scratchFrames.length = 0;
+        app.state.set("status.message", `Closed ${open.length} scratch pad(s)`);
+      });
+
+      // An error worth reporting: `details` folds the stack under the
+      // message with a copy button; `id` means a second failure replaces
+      // this box rather than stacking another.
+      app.registerAction("demo.fail", async () => {
+        try {
+          JSON.parse("{ not json");
+        } catch (err) {
+          await app.alert("The notes file could not be read.", {
+            title: "Error", kind: "danger", id: "demo.fail",
+            details: { label: "What happened", text: err.stack },
+          });
+        }
+      });
+
+      // `app.dialog` takes a whole spec. With `buttons` the answer says
+      // which one: { button, data } — or null when dismissed. A button with
+      // `submit: false` answers without validating the form.
+      app.registerAction("demo.save", async () => {
+        const res = await app.dialog({
+          title: "Unsaved changes",
+          kind: "question",
+          message: "Save your notes before closing?",
+          fields: [{ name: "name", label: "Save as", value: "notes.txt", required: true }],
+          buttons: [
+            { label: "Cancel", cancel: true },
+            { id: "discard", label: "Don't Save", submit: false },
+            { id: "save", label: "Save", default: true },
+          ],
         });
+        app.state.set("status.message",
+          res == null ? "Cancelled" : res.button === "save" ? `Saved as ${res.data.name}` : "Discarded");
       });
     });
   </script>

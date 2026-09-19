@@ -21,9 +21,15 @@ export { ensureMkio } from "./mkio-bridge.js";
 // hub the way the built-in ones do (see lib/subject.js).
 export { attachRecord, RecordFollower, parseRecordSpec, recordFilter } from "./lib/subject.js";
 
+// The dialog a custom action opens — a form, or with `message` and
+// `buttons` a message box. `app.dialog` / `app.alert` / `app.confirm` are
+// the short way in; this is the whole signature.
+export { openDialog } from "./widgets/mkui-dialog.js";
+
 // Convenience global for non-module <script> users.
 import * as Mkui from "./core.js";
 import { ensureMkio } from "./mkio-bridge.js";
+import { openDialog } from "./widgets/mkui-dialog.js";
 if (typeof window !== "undefined") {
-  window.mkui = window.Mkui = { ...Mkui, ensureMkio };
+  window.mkui = window.Mkui = { ...Mkui, ensureMkio, openDialog };
 }

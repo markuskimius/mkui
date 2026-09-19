@@ -1,7 +1,13 @@
 {
   "app": {
     "title": "mkui demo",
-    "theme": "dark"
+    "theme": "dark",
+    "version": "1.0",
+    "description": "A workspace of floating frames and dockable panes, built from this JSON file alone: no server, no JavaScript.",
+    "copyright": "MIT licensed.",
+    "links": [
+      { "label": "README", "href": "https://github.com/markuskimius/mkui#readme" }
+    ]
   },
   "state": {
     "status": { "message": "Ready" }
@@ -10,9 +16,14 @@
     {
       "label": "File",
       "items": [
-        { "label": "New Frame", "action": "demo.newFrame" },
+        { "label": "Welcome…", "action": "dialog.open", "args": "welcome" },
+        { "label": "Show a notice", "action": "dialog.alert",
+          "args": { "title": "Notice", "kind": "success", "timeout": 8, "suppress": "demo.notice",
+                    "message": "A message box is one action: dialog.alert, with the message as its args.\nThis one closes itself (timeout) unless you click or type in it, and can be told not to come back (suppress)." } },
+        { "label": "Show Notices Again", "action": "dialog.resetSuppressed", "args": "demo.notice",
+          "showWhen": "state.dialog.suppressed['demo.notice'] != NULL" },
         { "sep": true },
-        { "label": "Quit", "action": "app.quit" }
+        { "label": "Quit", "action": "app.quit", "confirm": "Quit the demo?" }
       ]
     },
     {
@@ -24,7 +35,7 @@
         { "label": "Console",   "action": "pane.show", "args": "console" },
         { "label": "Inspector", "action": "pane.show", "args": "inspector" },
         { "sep": true },
-        { "label": "Cascade", "action": "window.cascade" },
+        { "label": "Cascade", "action": "window.cascade", "disabled": "LEN(panes) < 2", "disabledTitle": "Only one window is open" },
         {
           "label": "Tile",
           "items": [
@@ -38,13 +49,29 @@
     {
       "label": "Help",
       "items": [
-        { "label": "About mkui", "action": "demo.about" }
+        { "label": "About mkui demo", "action": "dialog.about" }
       ]
     }
   ],
   "statusbar": {
     "left":  [{ "type": "text", "bind": "status.message" }],
     "right": [{ "type": "text", "text": "mkui v0.1" }]
+  },
+  "dialogs": {
+    "welcome": {
+      "title": "Welcome",
+      "kind": "info",
+      "heading": "Welcome to ${app.title}",
+      "message": [
+        "Drag a tab out of its frame to tear it off; drop it on another frame's edge to dock it there.",
+        "This box is a named dialog under the config's \"dialogs\" key, opened from the File menu by dialog.open."
+      ],
+      "links": [{ "label": "Configs in the README", "href": "https://github.com/markuskimius/mkui#configs" }],
+      "buttons": [
+        { "label": "Tile the windows", "kind": "primary", "action": "window.grid" },
+        { "label": "Close", "cancel": true, "default": true }
+      ]
+    }
   },
   "panes": {
     "explorer": {
@@ -69,7 +96,10 @@
       "title": "Console",
       "widgets": [
         { "type": "text", "text": "Console log stream would go here." },
-        { "type": "button", "label": "Clear", "action": "demo.clearConsole" }
+        { "type": "button", "label": "Clear", "action": "dialog.confirm",
+          "args": { "title": "Clear console", "kind": "danger", "message": "Clear the console log?\nThis cannot be undone.", "ok": "Clear", "arm": 2,
+                    "details": "A danger confirm: Cancel is the default, Enter never presses Clear,\nand arm keeps Clear shut for two seconds. Like every confirm it is modal.",
+                    "then": { "action": "dialog.alert", "args": { "title": "Console", "kind": "success", "message": "Cleared." } } } }
       ]
     },
     "inspector": {

@@ -56,7 +56,9 @@ globalThis.document = {
     const classes = new Set();
     const el = {
       tagName: tag.toUpperCase(), className: "", textContent: "", style: {}, _ev: {}, _ch: [],
-      classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c) },
+      classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c),
+        toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) },
+      setAttribute() {},
       appendChild(n) { el._ch.push(n); n.parentElement = el; return n; },
       addEventListener(name, fn) { (el._ev[name] ??= []).push(fn); },
       fire(name, ev = {}) { ev.stopPropagation ??= () => {}; for (const fn of el._ev[name] ?? []) fn(ev); },
@@ -64,6 +66,7 @@ globalThis.document = {
     return el;
   },
   createTextNode: (text) => ({ textContent: text, nodeType: 3 }),
+  createElementNS: (_ns, tag) => globalThis.document.createElement(tag),   // a submenu's arrow icon
 };
 
 const { normalize, listPanes } = await import("../mkui/static/src/layout/tree.js");
@@ -630,7 +633,7 @@ test("a layouts marker expands into a submenu of the saved history", () => {
     { label: "Reset", action: "layout.reset" },
   ]);
   assert.deepEqual(items, [
-    { label: "Restore Layout", items: [
+    { label: "Restore Layout", disabledTitle: "No saved layouts", items: [
       { label: "09:07:03", action: "layout.restore", args: 2 },
       { label: "08:00:00", action: "layout.restore", args: 1 },
     ] },
@@ -644,7 +647,11 @@ test("an empty history renders one disabled entry and no refresh without a manag
   const mb = new MkuiMenubar();
   mb._app = app;
   const [item] = mb._expandItems([{ label: "Restore Layout", layouts: true }]);
-  assert.deepEqual(item, { label: "Restore Layout", items: [{ label: "No saved layouts", disabled: true }] });
+  assert.deepEqual(item, { label: "Restore Layout", disabledTitle: "No saved layouts", items: [{ label: "No saved layouts", disabled: true }] });
+  // Nothing live inside: the submenu greys out, and its tooltip says why.
+  const [parent] = mb._buildPopup([{ label: "Restore Layout", layouts: true }], 0)._ch;
+  assert.equal(parent.classList.contains("mkui-menu-item-disabled"), true);
+  assert.equal(parent.title, "No saved layouts");
 });
 
 test("a disabled leaf renders muted and is inert on click", () => {
@@ -666,4 +673,79 @@ test("a disabled leaf renders muted and is inert on click", () => {
   live.fire("mousedown", { button: 0 });
   live.fire("mouseup", { button: 0 });
   assert.deepEqual(fired, [2], "its live sibling still does");
+});
+
+// ── dynamic `disabled` / `showWhen` ─────────────────────────────────
+// Flags are expressions over the menu scope (lib/menu.js), read as the
+// popup is built, again at the click, and — for the state they read —
+// while the menu stays open.
+
+function menuApp(state = {}) {
+  const app = new App({ state });
+  const fired = [];
+  app.registerAction("x.go", (_, a) => fired.push(a));
+  const mb = new MkuiMenubar();
+  mb._app = app;
+  return { app, mb, fired };
+}
+const click = (el) => { el.fire("mousedown", { button: 0 }); el.fire("mouseup", { button: 0 }); };
+
+test("an item disabled by an expression is muted, tooltipped and inert; one hidden by showWhen is gone", () => {
+  const { mb, fired } = menuApp({ dialog: { suppressed: {} }, auth: { role: "viewer" } });
+  const popup = mb._buildPopup([
+    { label: "Ask again", action: "x.go", args: 1, disabled: "state.dialog.suppressed['fill'] == NULL", disabledTitle: "Fill already asks" },
+    { sep: true },
+    { label: "Admin", action: "x.go", args: 2, showWhen: "state.auth.role == 'admin'" },
+    { label: "Go", action: "x.go", args: 3 },
+  ], 0);
+  assert.deepEqual(popup._ch.map((c) => c.className), ["mkui-menu-item", "mkui-menu-sep", "mkui-menu-item"]);
+  const [ask, , go] = popup._ch;
+  assert.equal(ask.classList.contains("mkui-menu-item-disabled"), true);
+  assert.equal(ask.title, "Fill already asks");
+  click(ask); click(go);
+  assert.deepEqual(fired, [3]);
+});
+
+test("the click asks again: state that moved after the popup was built decides", () => {
+  const { app, mb, fired } = menuApp({ ready: true });
+  const [item] = mb._buildPopup([{ label: "Go", action: "x.go", args: 1, disabled: "!state.ready" }], 0)._ch;
+  app.state.set("ready", false);
+  click(item);
+  assert.deepEqual(fired, [], "built enabled, disabled by the time of the click");
+});
+
+test("an open menu follows the state its flags read, and lets go when it closes", () => {
+  const { app, mb, fired } = menuApp({ dialog: { suppressed: {} } });
+  const appended = [];
+  mb.appendChild = (n) => { appended.push(n); n.remove ??= () => {}; return n; };
+  const anchor = { classList: { add() {}, remove() {} }, offsetLeft: 0 };
+  mb._openRoot(anchor, { label: "Help", items: [
+    { label: "Ask again", action: "x.go", args: 1, disabled: "state.dialog.suppressed['fill'] == NULL", disabledTitle: "Nothing to reset" },
+  ] });
+  const item = appended[0]._ch[0];
+  assert.equal(item.classList.contains("mkui-menu-item-disabled"), true);
+  app.state.set("dialog.suppressed", { fill: "ok" });
+  assert.equal(item.classList.contains("mkui-menu-item-disabled"), false, "came alive while open");
+  assert.equal(item.title, "");
+  app.state.set("dialog.suppressed", {});
+  assert.equal(item.classList.contains("mkui-menu-item-disabled"), true);
+  assert.equal(item.title, "Nothing to reset");
+  app.state.set("dialog.suppressed", { fill: "ok" });
+  click(item);
+  assert.deepEqual(fired, [1]);
+  assert.equal([...app.state._subs.values()].reduce((n, set) => n + set.size, 0), 0, "the click closed the menu: unsubscribed");
+});
+
+test("a submenu with nothing live in it does not open on hover", () => {
+  const { mb } = menuApp({});
+  let opened = 0;
+  mb._openSubmenu = () => { opened++; };
+  const [dead, live] = mb._buildPopup([
+    { label: "Dead", items: [{ label: "a", disabled: true }] },
+    { label: "Live", items: [{ label: "b" }] },
+  ], 0)._ch;
+  dead.fire("mouseenter");
+  assert.equal(opened, 0);
+  live.fire("mouseenter");
+  assert.equal(opened, 1);
 });

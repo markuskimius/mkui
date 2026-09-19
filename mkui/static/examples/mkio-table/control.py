@@ -8,6 +8,12 @@ rewires its tables every few seconds: links Pending to All Orders by
 symbol, pauses the link, and clears it again. Every step is an mkui
 action — the same `table.link` / `table.filter` a menu item would fire —
 pushed to every subscribed tab (or one login's tabs with `user=`).
+
+Then it talks to whoever is watching: a notice (`control.alert`), the same
+notice again — which replaces the first rather than stacking, because both
+carry one `id` — and a question (`control.confirm`). A push has no reply,
+so the question's answer comes back as a transaction: the OK button's
+`submit` sends the `ack` op, and the note it writes appears in All Orders.
 """
 
 import argparse
@@ -52,6 +58,22 @@ async def script():
     await asyncio.sleep(5)
     await control.send("table.filter", {"pane": "all-orders", "filters": {"side": ["Buy"]}, "merge": True})
     print("filtered All Orders to Buy")
+    await asyncio.sleep(5)
+    await control.alert("The market closes in 5 minutes.", title="Market", kind="warn", id="close")
+    print("said the market is closing")
+    await asyncio.sleep(4)
+    # Same `id`: this one takes the first one's place, wherever it was dragged.
+    await control.alert(["The market closes in 1 minute.", "Day orders are cancelled at the close."],
+                        title="Market", kind="warn", id="close", timeout=20)
+    print("said it again, in the same box")
+    await asyncio.sleep(5)
+    await control.send("table.filter", {"pane": "all-orders", "filters": {}})
+    n = await control.confirm(
+        "Mark order #1 as seen by the desk?", title="Desk", ok="Mark", cancel="Not now",
+        details="OK sends the `ack` op to the `orders` service; watch order 1's note.",
+        submit={"service": "orders", "op": "ack", "data": {"id": 1, "note": "seen by the desk"}},
+        modal=False, id="ack")
+    print("asked", n, "tab(s) to mark order 1")
 
 
 async def on_started():

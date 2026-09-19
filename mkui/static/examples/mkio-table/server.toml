@@ -32,6 +32,9 @@ new    = [{ table = "orders", op_type = "insert", fields = ["side", "symbol", "q
 child  = [{ table = "orders", op_type = "insert", fields = ["side", "symbol", "qty", "price", "parent_id", "tif", "note"], defaults = { tif = "Day", note = "" } }]
 fill   = [{ table = "orders", op_type = "update", key = ["id"], fields = ["status"], defaults = { status = "filled" } }]
 cancel = [{ table = "orders", op_type = "update", key = ["id"], fields = ["status"], defaults = { status = "cancelled" } }]
+# What control.py's pushed question sends when it is answered: the desk's
+# mark goes into `note`, so the answer shows up in the table as a row change.
+ack    = [{ table = "orders", op_type = "update", key = ["id"], fields = ["note"], defaults = { note = "seen" } }]
 # undo/redo take only the key — the values come from the history table —
 # and record no new version, so a step is always reversible. Undoing
 # version 1 removes the row and keeps its versions, so redo can rebuild it.

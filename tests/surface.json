@@ -12,6 +12,7 @@
       "expr",
       "getPaneType",
       "getWidget",
+      "openDialog",
       "parseRecordSpec",
       "recordFilter",
       "registerExprFunction",
@@ -40,6 +41,11 @@
   "actions": [
     "app.quit",
     "auth.logout",
+    "dialog.about",
+    "dialog.alert",
+    "dialog.confirm",
+    "dialog.open",
+    "dialog.resetSuppressed",
     "edit.copy",
     "edit.find",
     "edit.redo",
@@ -69,6 +75,7 @@
     "auth.authenticated",
     "auth.role",
     "auth.user",
+    "dialog.suppressed",
     "layouts.list",
     "mkio.connected",
     "mkio.downFor",
@@ -131,6 +138,9 @@
   "python": {
     "control": [
       "ControlService",
+      "ControlService.alert",
+      "ControlService.confirm",
+      "ControlService.dialog",
       "ControlService.link",
       "ControlService.on_subscribe",
       "ControlService.on_unsubscribe",

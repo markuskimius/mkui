@@ -18,6 +18,7 @@ them::
         await control.link("orders", broadcast={"order_id": "id"})
         await control.record("order_detail", listen={"order_id": "id"})
         await control.send("table.filter", {"pane": "orders", "filters": {"status": ["open"]}})
+        await control.alert("Market closes in 5 minutes", kind="warn", id="close")
 
     app.on_startup(on_started)
     app.run()
@@ -228,6 +229,103 @@ class ControlService(Service):
             record["title"] = title
         args["record"] = record
         return await self.send("record.follow", args, user=user)
+
+
+    # ── message boxes ───────────────────────────────────────────────
+
+    async def alert(
+        self,
+        message: str | list[str],
+        *,
+        title: str | None = None,
+        kind: str | None = None,
+        details: str | dict[str, Any] | None = None,
+        timeout: float | None = None,
+        id: str | None = None,
+        suppress: str | dict[str, Any] | None = None,
+        user: str | None = None,
+    ) -> int:
+        """Put a notice on screen — the ``dialog.alert`` action.
+
+        ``message`` is a string or a list of paragraphs; ``kind`` is
+        ``info`` (the default), ``success``, ``warn`` or ``danger``.
+        ``details`` folds a long part under it, ``timeout`` closes it after
+        that many seconds unless someone touches it, and ``suppress`` adds
+        a "Don't show this again" box under that key. Give a notice you may
+        push again an ``id``: a second one replaces the first where it
+        stands instead of stacking on it::
+
+            await control.alert("Reconnecting to the exchange…", kind="warn", id="exch")
+        """
+        args = _message_args(message, title=title, kind=kind, details=details,
+                             timeout=timeout, id=id, suppress=suppress)
+        return await self.send("dialog.alert", args, user=user)
+
+    async def confirm(
+        self,
+        message: str | list[str],
+        *,
+        submit: dict[str, Any] | None = None,
+        then: dict[str, Any] | None = None,
+        title: str | None = None,
+        kind: str | None = None,
+        ok: str | None = None,
+        cancel: str | None = None,
+        arm: float | None = None,
+        details: str | dict[str, Any] | None = None,
+        timeout: float | None = None,
+        id: str | None = None,
+        modal: bool | None = None,
+        user: str | None = None,
+    ) -> int:
+        """Ask a question — the ``dialog.confirm`` action.
+
+        A push has no reply, so the answer comes back the way everything
+        else reaches the server: ``submit = {"service", "op", "data"}`` is
+        the transaction the OK button sends (the box stays open, saying
+        why, if it is refused), so the answer is a row the server wrote::
+
+            await control.confirm(
+                "Roll your 3 day orders to tomorrow?", ok="Roll",
+                submit={"service": "orders", "op": "roll", "data": {"desk": "fx"}},
+                user="ann", id="roll")
+
+        ``then = {"action", "args"}`` fires an mkui action in that browser
+        on OK instead (or as well). Cancelling sends and fires nothing.
+        ``kind="danger"`` makes OK a red button that is never the default,
+        ``arm`` keeps it shut for that many seconds; ``modal=False`` lets
+        the workspace stay usable under the question.
+        """
+        args = _message_args(message, title=title, kind=kind, details=details,
+                             timeout=timeout, id=id, ok=ok, cancel=cancel, arm=arm,
+                             modal=modal, submit=submit, then=then)
+        return await self.send("dialog.confirm", args, user=user)
+
+    async def dialog(
+        self,
+        dialog: str | dict[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+        user: str | None = None,
+    ) -> int:
+        """Open a dialog — the ``dialog.open`` action: the name of one under
+        the client config's ``dialogs``, or a whole spec (a form, or with
+        ``message`` and ``buttons`` a message box whose buttons each carry
+        their own ``submit``). ``context`` is what its templates see beside
+        ``state`` and ``app``.
+        """
+        args: dict[str, Any] = {"dialog": dialog}
+        if context is not None:
+            args["context"] = context
+        return await self.send("dialog.open", args, user=user)
+
+
+def _message_args(message: Any, **keys: Any) -> dict[str, Any]:
+    if not isinstance(message, (str, list)) or not message:
+        raise ValueError("message must be a non-empty string or list of strings")
+    args: dict[str, Any] = {"message": message}
+    args.update({k: v for k, v in keys.items() if v is not None})
+    return args
 
 
 def install(app: Any, name: str = DEFAULT_NAME, config: dict[str, Any] | None = None) -> ControlService:

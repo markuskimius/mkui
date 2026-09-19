@@ -4,11 +4,12 @@
 // The state store is intentionally tiny: it's a Proxy over a plain object,
 // supports dot-path get/set, and notifies subscribers per path.
 
-export const VERSION = "1.7.0";
+export const VERSION = "1.8.0";
 export function version() { return VERSION; }
 
 import { registerExprFunction, registerExprLibrary, registerExprType, expr } from "./lib/expressions.js";
 import { LinkHub } from "./lib/links.js";
+import { alertSpec, confirmSpec, needsClient } from "./lib/dialogs.js";
 
 const widgetTypes = new Map();
 const paneTypes = new Map();
@@ -70,6 +71,12 @@ export class State {
       const subs = this._subs.get(p);
       if (subs) for (const fn of subs) fn(this.get(p));
     }
+    // …and everything under it: replacing `a.b` moves `a.b.c` too, and a
+    // subscriber there (an expression reading `state.a.b.c`) must hear it.
+    const under = path + ".";
+    for (const [p, subs] of this._subs) {
+      if (p.startsWith(under)) for (const fn of subs) fn(this.get(p));
+    }
   }
 }
 
@@ -104,6 +111,51 @@ export class App {
       return;
     }
     console.warn("[mkui] unknown action:", name);
+  }
+
+  // Dialogs. `dialog(spec, context)` opens one — a spec, or the name of
+  // one under the config's `dialogs` — and resolves with its answer: the
+  // submitted fields, `{ button, data }` when the spec has `buttons`, null
+  // when dismissed. The spec's expressions see `state` and `app` (the
+  // config's `app` block) under whatever the caller adds. `alert` resolves
+  // once acknowledged, `confirm` with whether OK was the answer; both take
+  // the message and `{ title, kind, ok, cancel, … }`.
+  async dialog(spec, context = {}) {
+    const found = typeof spec === "string" ? this.config?.dialogs?.[spec] : spec;
+    if (!found || typeof found !== "object") {
+      console.warn("[mkui] unknown dialog:", spec);
+      return null;
+    }
+    const { openDialog } = await import("./widgets/mkui-dialog.js");
+    let client = null;
+    if (needsClient(found) && this.config?.mkio?.url) {
+      client = await this._mkioClient();
+      if (!client) {
+        await this.alert("Not connected to the server.", { title: "Offline", kind: "warn" });
+        return null;
+      }
+    }
+    const ctx = { state: this.state.get(), app: this.config?.app ?? {}, ...context };
+    return openDialog(found, ctx, this, { client });
+  }
+  async alert(message, opts = {}) {
+    await this.dialog(alertSpec({ ...opts, message }));
+  }
+  async confirm(message, opts = {}) {
+    const res = await this.dialog(confirmSpec({ ...opts, message, then: null }));
+    return res?.button === "ok";
+  }
+  // The shared mkio client, or null when it cannot be had in time: a
+  // dialog must not wait out an outage to say so.
+  async _mkioClient() {
+    const { ensureMkio } = await import("./mkio-bridge.js");
+    const ms = this.config?.mkio?.timeout ?? 5000;
+    try {
+      return await Promise.race([
+        ensureMkio(this.config.mkio.url),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms)),
+      ]);
+    } catch { return null; }
   }
 
   // Mount the app into a host element. If host is a <mkui-app>, it will

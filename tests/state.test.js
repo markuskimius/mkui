@@ -296,3 +296,15 @@ test("empty string is equivalent to null for style clearing in state maps", () =
   assert.deepEqual(colors, ["#000", "", "#000"]);
   assert.deepEqual(bgs, ["#b8b8b8", "", "#b8b8b8"]);
 });
+
+test("set notifies subscribers under the path: replacing a map moves its keys", () => {
+  const st = new State({ dialog: { suppressed: {} } });
+  const seen = [];
+  st.subscribe("dialog.suppressed.fill", (v) => seen.push(v));
+  st.subscribe("dialogs", (v) => seen.push(["sibling prefix", v]));
+  seen.length = 0;
+  st.set("dialog.suppressed", { fill: "ok" });
+  st.set("dialog.suppressed", {});
+  st.set("dialog", { suppressed: { fill: "yes" } });
+  assert.deepEqual(seen, ["ok", undefined, "yes"], "and a path that merely starts the same is left alone");
+});

@@ -128,6 +128,55 @@ class TestControlService(unittest.TestCase):
                          {"merge": False, "record": {"follow": "orders"}},
                          "no pane: the focused one")
 
+    def test_alert_builds_the_dialog_alert_action(self):
+        svc = make()
+        svc.name = "_mkui"
+        ws = FakeWS(user="mark")
+        run(svc.on_subscribe(ws, {"subid": "s"}))
+        ws.sent.clear()
+        self.assertEqual(run(svc.alert("Saved.")), 1)
+        self.assertEqual(ws.sent[-1]["row"], {"action": "dialog.alert", "args": {"message": "Saved."}},
+                         "only what was given rides the wire")
+        run(svc.alert(["Market closes in 5 minutes", "Day orders will be cancelled."], title="Close", kind="warn",
+                      details={"label": "Orders", "text": "#1, #2"}, timeout=30, id="close", suppress="close.notice"))
+        self.assertEqual(ws.sent[-1]["row"]["args"], {
+            "message": ["Market closes in 5 minutes", "Day orders will be cancelled."],
+            "title": "Close", "kind": "warn", "details": {"label": "Orders", "text": "#1, #2"},
+            "timeout": 30, "id": "close", "suppress": "close.notice",
+        })
+        self.assertEqual(run(svc.alert("x", user="nobody")), 0)
+        for bad in ("", None, 7, []):
+            with self.assertRaises(ValueError):
+                run(svc.alert(bad))
+
+    def test_confirm_carries_what_the_answer_does(self):
+        svc = make()
+        svc.name = "_mkui"
+        ws = FakeWS(user="ann")
+        run(svc.on_subscribe(ws, {"subid": "s"}))
+        ws.sent.clear()
+        submit = {"service": "orders", "op": "roll", "data": {"desk": "fx"}}
+        run(svc.confirm("Roll your day orders?", ok="Roll", cancel="Not now", submit=submit, kind="danger",
+                        arm=2, modal=False, id="roll", then={"action": "pane.show", "args": "orders"}, user="ann"))
+        self.assertEqual(ws.sent[-1]["row"], {"action": "dialog.confirm", "args": {
+            "message": "Roll your day orders?", "kind": "danger", "id": "roll", "ok": "Roll", "cancel": "Not now",
+            "arm": 2, "modal": False, "submit": submit, "then": {"action": "pane.show", "args": "orders"},
+        }})
+        run(svc.confirm("Sure?"))
+        self.assertEqual(ws.sent[-1]["row"]["args"], {"message": "Sure?"})
+
+    def test_dialog_opens_a_named_one_or_a_whole_spec(self):
+        svc = make()
+        svc.name = "_mkui"
+        ws = FakeWS()
+        run(svc.on_subscribe(ws, {"subid": "s"}))
+        ws.sent.clear()
+        run(svc.dialog("new-order"))
+        self.assertEqual(ws.sent[-1]["row"], {"action": "dialog.open", "args": {"dialog": "new-order"}})
+        spec = {"message": "Pick one", "buttons": [{"label": "A", "submit": {"service": "votes", "data": {"v": "a"}}}]}
+        run(svc.dialog(spec, context={"poll": 7}))
+        self.assertEqual(ws.sent[-1]["row"]["args"], {"dialog": spec, "context": {"poll": 7}})
+
     def test_install_registers_and_binds_late(self):
         calls = []
 

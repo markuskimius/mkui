@@ -80,9 +80,14 @@ sql = "SELECT id, saved, layout FROM mkui_layouts WHERE id = :id"
 """
 
 CLIENT_TOML = """\
+# `version`, `description`, `copyright` and `links` are what Help → About
+# shows, beside what the app finds out itself: the server, the connection,
+# who is logged in.
 [app]
 title = "My App"
 theme = "dark"
+version = "0.1.0"
+description = "Built with mkui and mkio."
 
 [state.status]
 message = "Connecting..."
@@ -127,7 +132,8 @@ items = [
   { label = "Save Layout", action = "layout.save" },
   { label = "Restore Layout", layouts = true },
   { sep = true },
-  { label = "Reset to Default", action = "layout.reset" },
+  # `confirm` asks first, in a message box; anything but OK does nothing.
+  { label = "Reset to Default…", action = "layout.reset", confirm = "Return every window to its default place?" },
 ]
 
 [[menubar]]
@@ -146,7 +152,16 @@ items = [
 [[menubar]]
 label = "Account"
 items = [
-  { label = "Log Out", action = "auth.logout" },
+  { label = "Log Out…", action = "auth.logout", confirm = { message = "Log out ${state.auth.user}?", ok = "Log Out" } },
+]
+
+# `dialog.about` needs nothing else. For your own popups see "Message
+# boxes" in the README: `dialog.alert`, `dialog.confirm`, and `dialog.open`
+# with a spec under `[dialogs.<name>]`.
+[[menubar]]
+label = "Help"
+items = [
+  { label = "About My App", action = "dialog.about" },
 ]
 
 # ─── Saved layouts ────────────────────────────────────────────────────

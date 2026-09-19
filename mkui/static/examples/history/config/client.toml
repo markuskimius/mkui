@@ -4,6 +4,9 @@
 [app]
 title = "Record history"
 theme = "dark"
+# What Help → About shows, beside the server and connection it finds itself.
+version = "1.0"
+description = "A versioned table, its audit tape, and the panes that read them."
 
 [state.status]
 message = "Connecting..."
@@ -24,16 +27,18 @@ items = [
   { label = "Show details", action = "table.record", args = { pane = "detail", from = "orders" } },
   { sep = true },
   # The same steps the toolbar's Undo and Redo take, on the focused pane.
-  { label = "Undo record", action = "edit.undo" },
+  { label = "Undo record", action = "edit.undo", disabled = "!pane.can.undo || (selection.count ?? 0) == 0", disabledTitle = "Select a record in Orders" },
   { label = "Redo record", action = "edit.redo" },
 ]
 
 [[menubar]]
 label = "Edit"
 items = [
-  { label = "Copy", action = "edit.copy", shortcut = "mod+C" },
+  # Greyed out over a pane that cannot do it: `pane.can` is the focused
+  # pane's edit actions, read each time the menu opens.
+  { label = "Copy", action = "edit.copy", shortcut = "mod+C", disabled = "!pane.can.copy" },
   { label = "Select All", action = "edit.selectAll", shortcut = "mod+A" },
-  { label = "Find…", action = "edit.find", shortcut = "mod+F" },
+  { label = "Find…", action = "edit.find", shortcut = "mod+F", disabled = "!pane.can.find" },
 ]
 
 [[menubar]]
@@ -62,6 +67,12 @@ items = [
   { sep = true },
   # One item per open pane, rebuilt each time the menu opens.
   { windows = true },
+]
+
+[[menubar]]
+label = "Help"
+items = [
+  { label = "About Record history", action = "dialog.about" },
 ]
 
 # ─── The live table ───────────────────────────────────────────────────

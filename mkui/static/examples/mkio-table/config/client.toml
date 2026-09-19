@@ -1,6 +1,20 @@
+# `version`, `description`, `copyright` and `links` are what Help → About
+# shows (`dialog.about`), beside what the app knows by itself: the server
+# it reached, the connection, mkui's version. `[app.about]` overrides any
+# part of it, and its `facts` add lines of their own.
 [app]
 title = "Order Book"
 theme = "dark"
+version = "1.0"
+description = "A live order blotter over mkio: tables, linked detail windows and record history, from config alone."
+copyright = "An mkui example. MIT licensed."
+links = [
+  { label = "mkui", href = "https://github.com/markuskimius/mkui" },
+  { label = "mkio", href = "https://github.com/markuskimius/mkio" },
+]
+
+[app.about]
+facts = [{ label = "Config", value = "config/client.toml" }]
 
 [state.status]
 message = "Connecting..."
@@ -10,6 +24,10 @@ message = "Connecting..."
 [[menubar]]
 label = "Orders"
 items = [
+  # The form behind All Orders' "+ New Order" button, opened by name.
+  { label = "New Order…", action = "dialog.open", args = "new-order" },
+  { label = "Cancel an Order by Id…", action = "dialog.open", args = "cancel-by-id" },
+  { sep = true },
   { label = "All Orders", action = "pane.show", args = "all-orders" },
   { label = "Pending", action = "pane.show", args = "pending" },
   { label = "Order Tree", action = "pane.show", args = "order-tree" },
@@ -19,10 +37,15 @@ items = [
 [[menubar]]
 label = "Edit"
 items = [
-  { label = "Copy", action = "edit.copy", shortcut = "mod+C" },
+  # `disabled` takes an expression over the menu scope — `state`, `app`,
+  # `pane` (the focused one: `id`, `type`, `title`, and `can`, the edit
+  # actions it answers), `selection` (`count`, `focused`) and `panes` —
+  # read each time the menu opens. These grey out over a pane that cannot
+  # do them (focus Order Detail, then the Child Orders table, and look).
+  { label = "Copy", action = "edit.copy", shortcut = "mod+C", disabled = "!pane.can.copy" },
   { sep = true },
-  { label = "Select All", action = "edit.selectAll", shortcut = "mod+A" },
-  { label = "Find…", action = "edit.find", shortcut = "mod+F" },
+  { label = "Select All", action = "edit.selectAll", shortcut = "mod+A", disabled = "!pane.can.selectAll" },
+  { label = "Find…", action = "edit.find", shortcut = "mod+F", disabled = "!pane.can.find" },
 ]
 
 [[menubar]]
@@ -65,8 +88,8 @@ items = [
   { sep = true },
   # The steps the All Orders toolbar's Undo and Redo take, on the focused
   # pane. Deliberately without a shortcut: this writes to shared state.
-  { label = "Undo record", action = "edit.undo" },
-  { label = "Redo record", action = "edit.redo" },
+  { label = "Undo record", action = "edit.undo", disabled = "!pane.can.undo || (selection.count ?? 0) == 0", disabledTitle = "Select a record in All Orders" },
+  { label = "Redo record", action = "edit.redo", disabled = "!pane.can.redo" },
   { sep = true },
   { label = "Audit Tape", action = "pane.show", args = "audit-tape" },
 ]
@@ -87,7 +110,9 @@ items = [
   { label = "Save Layout", action = "layout.save" },
   { label = "Restore Layout", layouts = true },
   { sep = true },
-  { label = "Reset to Default", action = "layout.reset" },
+  # `confirm` asks first, in a message box titled by the item; anything
+  # but OK fires nothing. A table takes `{ message, kind, ok, cancel }`.
+  { label = "Reset to Default…", action = "layout.reset", confirm = { message = "Return every window to where this config puts it?\nSaved layouts are kept.", ok = "Reset" } },
 ]
 
 [[menubar]]
@@ -101,6 +126,19 @@ items = [
   { windows = true },
 ]
 
+[[menubar]]
+label = "Help"
+items = [
+  { label = "Keyboard Shortcuts", action = "dialog.open", args = "shortcuts" },
+  # Takes back the "Don't ask again" ticked in Fill's confirm (args: the
+  # `suppress` key to forget; none forgets them all). Remembered answers
+  # are mirrored in state at `dialog.suppressed`, so the item is greyed out
+  # — its tooltip saying why — until there is one to take back.
+  { label = "Ask Again Before Filling", action = "dialog.resetSuppressed", args = "orders.fill", disabled = "state.dialog.suppressed['orders.fill'] == NULL", disabledTitle = "Fill already asks: nothing to reset" },
+  { sep = true },
+  { label = "About Order Book", action = "dialog.about" },
+]
+
 # ─── Statusbar ─────────────────────────────────────────────────────────
 
 # The statusbar colours itself by the connection — grey while connecting,
@@ -111,6 +149,119 @@ items = [
 [statusbar]
 left = [{ type = "text", bind = "status.message" }]
 right = [{ type = "text", text = "mkio-table demo" }]
+
+# ─── Dialogs ───────────────────────────────────────────────────────────
+
+# Named dialogs: a menu item opens one with `dialog.open` (args: the name),
+# a table button with `action = { type = "dialog", dialog = "<name>" }`.
+# With `message` and `buttons` a dialog is a message box; `dialog.alert`,
+# `dialog.confirm` and `dialog.about` build the common ones from their args.
+
+# The dialog is live: the title, the read-only notional, and the footer
+# note re-evaluate as the form is edited. `compute` gives a field its value
+# from the others (on an editable field only until the user types in it).
+[dialogs.new-order]
+title = "New ${side} Order"
+width = 420
+footer = { note = "${IF(_filled, NUM(qty * price, digits: 2, group: TRUE) + ' notional', 'Enter quantity and price')}" }
+
+# A `{ group }` heads a section: everything up to the next header sits
+# under it. This one is a plain header — the fields it holds are the
+# order, always in view.
+[[dialogs.new-order.fields]]
+group = "Order"
+
+[[dialogs.new-order.fields]]
+row = [
+  { name = "side", label = "Side", type = "select", width = 0.35, options = ["Buy", "Sell"], required = true },
+  { name = "symbol", label = "Symbol", type = "text", width = 0.65, pattern = "^[A-Z]{1,5}$", placeholder = "e.g. AAPL", required = true },
+]
+
+[[dialogs.new-order.fields]]
+row = [
+  { name = "qty", label = "Quantity", type = "number", width = 0.5, min = 1, required = true },
+  { name = "price", label = "${side} price", type = "number", width = 0.5, step = 0.01, min = 0, required = true },
+]
+
+# A `_`-prefixed field is never submitted: a scratch value for the others.
+# Empty number fields read as NULL, so `??` guards the blanks.
+[[dialogs.new-order.fields]]
+name = "_filled"
+type = "hidden"
+compute = "(qty ?? 0) > 0 && (price ?? 0) > 0"
+
+[[dialogs.new-order.fields]]
+name = "notional"
+label = "Notional"
+type = "readonly"
+compute = "${IF(_filled, NUM(qty * price, digits: 2, group: TRUE), '')}"
+showWhen = "_filled"
+
+# The rarely-touched options fold away behind a collapsible header: a
+# caret marks it, a click (or Enter, Space; alt/option-click for every
+# section at once) opens it, `collapsed` starts it folded, and `remember`
+# keeps the fold in localStorage, so someone who always sets a time in
+# force finds it open next time. Folded fields still submit, and a folded
+# head counts the fields edited under it — "2 changed" — so nothing set
+# here goes unnoticed; a required field left empty unfolds it on submit.
+# Give `summary` a template to say something more specific instead.
+[[dialogs.new-order.fields]]
+group = "Execution"
+collapsible = true
+collapsed = true
+remember = "orders.new.execution"
+
+[[dialogs.new-order.fields]]
+row = [
+  { name = "tif", label = "Time in force", type = "select", width = 0.4, options = ["Day", "GTC", "IOC"], value = "Day" },
+  { name = "note", label = "Note", type = "text", width = 0.6, placeholder = "for the desk" },
+]
+
+[dialogs.new-order.submit]
+label = "Place Order"
+service = "orders"
+op = "new"
+
+# A message box: `kind` picks the icon, `heading` and `message` (a list is
+# one paragraph each) say it, `links` open in a new tab, and `buttons`
+# replace Cancel / OK — a button may fire an action of its own once the
+# box has closed. Escape and × are the `cancel` button; Enter is the
+# `default` one. The text is selectable, and Ctrl/Cmd+C copies all of it.
+# Type-to-confirm: a button's `enable` is an expression over the form, so
+# the red button opens only once the word is typed. `_typed` starts with an
+# underscore, so it is never submitted; the button's `op` is the one sent.
+[dialogs.cancel-by-id]
+title = "Cancel an order"
+kind = "danger"
+modal = true
+width = 380
+message = "Cancels the order with this id, whatever is selected.\nType CANCEL to arm the button."
+fields = [
+  { row = [
+    { name = "id", label = "Order id", type = "number", min = 1, required = true, width = 0.4 },
+    { name = "_typed", label = "Type CANCEL", type = "text", placeholder = "CANCEL", width = 0.6 },
+  ] },
+]
+buttons = [
+  { label = "Keep", cancel = true },
+  { label = "Cancel Order", kind = "danger", op = "cancel", enable = "_typed == 'CANCEL' && (id ?? 0) > 0" },
+]
+submit = { service = "orders", then = { action = "table.select", args = { pane = "all-orders", keys = ["${id}"] } } }
+
+[dialogs.shortcuts]
+title = "Keyboard shortcuts"
+kind = "info"
+width = 460
+heading = "Around a table"
+message = [
+  "Ctrl/Cmd+F finds, Ctrl/Cmd+G (shift: back) steps through the matches. Ctrl/Cmd+C copies the selection as a grid, Ctrl/Cmd+A selects every row. Escape clears the selection.",
+  "Ctrl/Cmd+click a tab to rename it. Alt/Option+click a column's filter button for the tree scopes. Shift+click a header to sort by several columns.",
+]
+links = [{ label = "Interactions in the README", href = "https://github.com/markuskimius/mkui#interactions" }]
+buttons = [
+  { label = "Try Find", action = "edit.find" },
+  { label = "Close", cancel = true, default = true },
+]
 
 # ─── Panes ─────────────────────────────────────────────────────────────
 
@@ -215,78 +366,20 @@ asOf     = "order_as_of"     # the table as it stood at a moment
 label = "+ New Order"
 enable = { connected = true }
 
+# `dialog` names one under `[dialogs]` (an inline table works too): the
+# Orders menu opens the same form through `dialog.open`.
 [panes.all-orders.buttons.action]
 type = "dialog"
+dialog = "new-order"
 
-# The dialog is live: the title, the read-only notional, and the footer
-# note re-evaluate as the form is edited. `compute` gives a field its value
-# from the others (on an editable field only until the user types in it).
-[panes.all-orders.buttons.action.dialog]
-title = "New ${side} Order"
-modal = true
-width = 420
-footer = { note = "${IF(_filled, NUM(qty * price, digits: 2, group: TRUE) + ' notional', 'Enter quantity and price')}" }
-
-# A `{ group }` heads a section: everything up to the next header sits
-# under it. This one is a plain header — the fields it holds are the
-# order, always in view.
-[[panes.all-orders.buttons.action.dialog.fields]]
-group = "Order"
-
-[[panes.all-orders.buttons.action.dialog.fields]]
-row = [
-  { name = "side", label = "Side", type = "select", width = 0.35, options = ["Buy", "Sell"], required = true },
-  { name = "symbol", label = "Symbol", type = "text", width = 0.65, pattern = "^[A-Z]{1,5}$", placeholder = "e.g. AAPL", required = true },
-]
-
-[[panes.all-orders.buttons.action.dialog.fields]]
-row = [
-  { name = "qty", label = "Quantity", type = "number", width = 0.5, min = 1, required = true },
-  { name = "price", label = "${side} price", type = "number", width = 0.5, step = 0.01, min = 0, required = true },
-]
-
-# A `_`-prefixed field is never submitted: a scratch value for the others.
-# Empty number fields read as NULL, so `??` guards the blanks.
-[[panes.all-orders.buttons.action.dialog.fields]]
-name = "_filled"
-type = "hidden"
-compute = "(qty ?? 0) > 0 && (price ?? 0) > 0"
-
-[[panes.all-orders.buttons.action.dialog.fields]]
-name = "notional"
-label = "Notional"
-type = "readonly"
-compute = "${IF(_filled, NUM(qty * price, digits: 2, group: TRUE), '')}"
-showWhen = "_filled"
-
-# The rarely-touched options fold away behind a collapsible header: a
-# caret marks it, a click (or Enter, Space; alt/option-click for every
-# section at once) opens it, `collapsed` starts it folded, and `remember`
-# keeps the fold in localStorage, so someone who always sets a time in
-# force finds it open next time. Folded fields still submit, and a folded
-# head counts the fields edited under it — "2 changed" — so nothing set
-# here goes unnoticed; a required field left empty unfolds it on submit.
-# Give `summary` a template to say something more specific instead.
-[[panes.all-orders.buttons.action.dialog.fields]]
-group = "Execution"
-collapsible = true
-collapsed = true
-remember = "orders.new.execution"
-
-[[panes.all-orders.buttons.action.dialog.fields]]
-row = [
-  { name = "tif", label = "Time in force", type = "select", width = 0.4, options = ["Day", "GTC", "IOC"], value = "Day" },
-  { name = "note", label = "Note", type = "text", width = 0.6, placeholder = "for the desk" },
-]
-
-[panes.all-orders.buttons.action.dialog.submit]
-label = "Place Order"
-service = "orders"
-op = "new"
-
+# `confirm` asks before the action runs, its templates seeing the button's
+# scope (`rows`, `row`, `selection`, `state`). `suppress` adds a "Don't ask
+# again" box: ticked, OK is remembered in this browser and the button stops
+# asking — Help → Ask Again undoes that (`dialog.resetSuppressed`).
 [[panes.all-orders.buttons]]
 label = "Fill"
 enable = { connected = true, when = "LEN(rows) > 0 && ALL(rows, r -> r.status == 'pending')" }
+confirm = { message = "Fill ${selection.count} order${IF(selection.count == 1, '', 's')}?", ok = "Fill", suppress = "orders.fill" }
 action = { type = "transaction", service = "orders", op = "fill", data = { id = "${row.id}" } }
 
 [[panes.all-orders.buttons]]
@@ -302,6 +395,20 @@ style = [
   { bold = true, caps = true },
 ]
 action = { type = "transaction", service = "orders", op = "cancel", data = { id = "${row.id}" } }
+
+# A `danger` confirm: the default button is the one that keeps things as
+# they are, Enter never presses the red one, and `arm` holds it shut for two
+# seconds (counting down in its label) so the double-click that opened the
+# box cannot also answer it. `details` folds the long part away — here the
+# orders about to go — with a copy button of its own. A confirm is modal:
+# the workspace behind it dims and takes no clicks until it is answered.
+[panes.all-orders.buttons.confirm]
+kind = "danger"
+message = "Cancel ${selection.count} order${IF(selection.count == 1, '', 's')}?\nA cancelled order cannot be reopened."
+ok = "Cancel Orders"
+cancel = "Keep"
+arm = 2
+details = { label = "Orders", text = "${JOIN(MAP(rows, r -> '#' + STR(r.id) + '  ' + r.side + ' ' + STR(r.qty) + ' ' + r.symbol + ' @ ' + STR(r.price)), '\n')}" }
 
 # Undo, Redo and "As of…" arrive on their own — the `history` block above
 # is what puts them there. The version timeline does not: it opens through

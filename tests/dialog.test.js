@@ -399,7 +399,7 @@ function openForm(spec, context = {}, extra = {}, appExtra = {}) {
   // Fields are found in declaration order; name them from the spec.
   const names = [];
   const flat = (items) => { for (const i of items) { if (i.group != null) { if (i.fields) flat(i.fields); } else if (i.row) flat(i.row); else if (i.type !== "hidden") names.push(i.name); } };
-  flat(spec.fields);
+  flat(spec.fields ?? []);
   const byName = {};
   Object.values(fields).forEach((f, i) => { byName[names[i]] = f; });
   const submitBtn = footer._ch[2];
@@ -1571,4 +1571,489 @@ test("a plain datetime never degrades to a date: a bare-date default is midnight
   const d = openForm({ fields: [{ name: "at", type: "datetime", value: "2026-09-12" }] });
   assert.equal(d.f("at").input.value, localInput("2026-09-12T00:00:00Z"));
   assert.deepEqual(await d.submit(), { at: "2026-09-12T00:00:00Z" });
+});
+
+/* ── Message boxes and buttons ───────────────────────────────────────── */
+// `message` / `heading` / `facts` / `links` / `kind` lead the body with
+// what the dialog says; `buttons` replace the Cancel / OK pair and the
+// answer becomes `{ button, data }`. A spec with neither is the form it
+// always was (everything above).
+
+import { normalizeButtons, hasMessage } from "../mkui/static/src/widgets/mkui-dialog.js";
+
+const messageOf = (d) => d.host._ch[0]._ch[0]._ch.find((c) => c.className.startsWith("mkui-dialog-message"));
+const buttonsOf = (d) => d.footer._ch.filter((c) => c.tagName === "BUTTON");
+const button = (d, label) => buttonsOf(d).find((b) => b.textContent === label);
+const key = (d, k, target = {}, ev = {}) => {
+  let prevented = false;
+  d.host.fire("keydown", { key: k, target, preventDefault() { prevented = true; }, ...ev });
+  return prevented;
+};
+const deep = (n, cls) => n.className?.split(" ").includes(cls) ? n : n._ch.map((c) => deep(c, cls)).find(Boolean);
+
+test("normalizeButtons: ids, the one cancel, and the default", () => {
+  assert.equal(normalizeButtons({}), null);
+  assert.equal(normalizeButtons({ buttons: [] }), null);
+  const b = normalizeButtons({ buttons: ["Save", { label: "Discard", kind: "danger" }, { id: "no", label: "Cancel", cancel: true }, { label: "Close", cancel: true }] });
+  assert.deepEqual(b.map((x) => x.id), ["save", "discard", "no", "close"]);
+  assert.deepEqual(b.map((x) => x.cancel), [false, false, true, false], "the first cancel is the cancel");
+  assert.deepEqual(b.map((x) => x.default), [true, false, false, false]);
+  assert.equal(b[0].kind, "plain", "a kind was given somewhere: nothing is promoted");
+  const plain = normalizeButtons({ buttons: [{ label: "Cancel", cancel: true }, "OK"] });
+  assert.equal(plain[1].kind, "primary", "with no kind anywhere the default wears primary");
+});
+
+test("normalizeButtons: a danger dialog defaults to Cancel, and never to a danger button", () => {
+  const warn = console.warn; const warned = []; console.warn = (...a) => warned.push(a.join(" "));
+  try {
+    const d = normalizeButtons({ kind: "danger", buttons: [{ label: "Cancel", cancel: true }, { label: "Delete", kind: "danger" }] });
+    assert.deepEqual(d.map((x) => x.default), [true, false]);
+    const forced = normalizeButtons({ buttons: [{ label: "Cancel", cancel: true }, { label: "Delete", kind: "danger", default: true }] });
+    assert.deepEqual(forced.map((x) => x.default), [false, false], "a danger button is no default, said or not");
+    assert.ok(warned.some((w) => w.includes("cannot be the default")));
+    const dup = normalizeButtons({ buttons: ["OK", "ok", { kind: "primary" }] });
+    assert.deepEqual(dup.map((x) => x.id), ["ok"]);
+    assert.equal(warned.filter((w) => w.includes("bad buttons")).length, 2);
+  } finally { console.warn = warn; }
+});
+
+test("hasMessage: any of message, heading, image, facts, links", () => {
+  assert.equal(hasMessage({ fields: [] }), false);
+  assert.equal(hasMessage({ facts: [] }), false);
+  for (const s of [{ message: "" }, { heading: "h" }, { image: "x.png" }, { facts: [{}] }, { links: [{}] }]) assert.equal(hasMessage(s), true);
+});
+
+test("a message box renders its icon, heading, paragraphs, facts and links", () => {
+  const warn = console.warn; const warned = []; console.warn = (...a) => warned.push(a.join(" "));
+  let d;
+  try {
+    d = openForm({
+      kind: "warn", heading: "Hello ${who}", message: ["One", "Two ${n + 1}"],
+      facts: [{ label: "Server", value: "${srv}" }, { label: "Gone", value: "${nope}" }, { label: "Off", value: "x", showWhen: "false" }],
+      links: [{ label: "Site", href: "https://example.com" }, { label: "Bad", href: "javascript:alert(1)" }, { href: "/docs" }],
+      fields: [],
+    }, { who: "Ann", n: 1, srv: "orders 2.1" });
+  } finally { console.warn = warn; }
+  const box = messageOf(d);
+  assert.equal(box.className, "mkui-dialog-message mkui-dialog-kind-warn");
+  assert.equal(deep(box, "mkui-dialog-message-icon")._ch[0]._attrs.class, "mkui-icon mkui-icon-triangle-alert");
+  assert.equal(deep(box, "mkui-dialog-heading").textContent, "Hello Ann");
+  const text = deep(box, "mkui-dialog-message-text");
+  assert.deepEqual(text._ch.filter((c) => c.className === "mkui-dialog-para").map((p) => p.textContent), ["One", "Two 2"]);
+  assert.deepEqual(deep(box, "mkui-dialog-facts")._ch.map((c) => c.textContent), ["Server", "orders 2.1"], "a blank or hidden fact drops its line");
+  const links = deep(box, "mkui-dialog-links")._ch;
+  assert.deepEqual(links.map((a) => [a.textContent, a.href, a.target, a.rel]), [
+    ["Site", "https://example.com", "_blank", "noopener noreferrer"],
+    ["/docs", "/docs", "_blank", "noopener noreferrer"],
+  ]);
+  assert.ok(warned.some((w) => w.includes("bad links[1]")), "javascript: is not a link");
+});
+
+test("a message follows the form, like every other template", () => {
+  const d = openForm({ message: "Delete ${name}?", fields: [{ name: "name" }] });
+  const para = deep(messageOf(d), "mkui-dialog-para");
+  assert.equal(para.textContent, "Delete ?");
+  d.type("name", "AAPL");
+  assert.equal(para.textContent, "Delete AAPL?");
+});
+
+test("a message box opens short and grows to its content; a form keeps its height", () => {
+  geom = {};
+  const ws = makeWorkspace();
+  openDialog({ message: "hi" }, {}, { _element: { workspace: ws } });
+  assert.equal(ws._frames[0].h, 140 / 800);
+  const ws2 = makeWorkspace();
+  openDialog({ message: "hi", height: 320 }, {}, { _element: { workspace: ws2 } });
+  assert.equal(ws2._frames[0].h, 0.4);
+  geom = { "mkui-dialog-body": { scrollHeight: 160, clientHeight: 60 } };
+  const ws3 = makeWorkspace();
+  openDialog({ message: "hi" }, {}, { _element: { workspace: ws3 } });
+  assert.equal(ws3._frames[0].h, 240 / 800, "grown by the overflow");
+  geom = {};
+});
+
+test("buttons replace the pair and the pin; the answer is { button, data }", async () => {
+  const d = openForm({ message: "Save changes?", fields: [{ name: "note", value: "n" }],
+    buttons: [{ label: "Cancel", cancel: true }, { label: "Discard", submit: false }, { label: "Save", default: true }] });
+  assert.deepEqual(buttonsOf(d).map((b) => [b.textContent, b.className]),
+    [["Cancel", "mkui-btn"], ["Discard", "mkui-btn"], ["Save", "mkui-btn mkui-btn-primary"]]);
+  assert.deepEqual(d.ws._frameEls.get(d.ws._frames[0].id)._extraControls(), [], "no pin");
+  button(d, "Save").fire("click");
+  assert.deepEqual(await d.promise, { button: "save", data: { note: "n" } });
+});
+
+test("pin = false drops the pin from a plain form", () => {
+  const d = openForm({ pin: false, fields: [{ name: "a" }] });
+  assert.deepEqual(d.ws._frameEls.get(d.ws._frames[0].id)._extraControls(), []);
+  const e = openForm({ fields: [{ name: "a" }] });
+  assert.equal(e.ws._frameEls.get(e.ws._frames[0].id)._extraControls().length, 1);
+});
+
+test("a submit = false button answers without validating; the others validate", async () => {
+  const spec = { fields: [{ name: "a", required: true }], buttons: [{ label: "Discard", submit: false }, "Save"] };
+  const d = openForm(spec);
+  button(d, "Save").fire("click");
+  assert.equal(await settled(d.promise), false, "a required field holds Save back");
+  assert.deepEqual(d.errors(), ["a"]);
+  button(d, "Discard").fire("click");
+  assert.deepEqual(await d.promise, { button: "discard", data: { a: "" } });
+});
+
+test("Cancel, Escape and the pane's cancel all resolve null and run the cancel button's effects", async () => {
+  for (const how of ["click", "escape", "hook"]) {
+    const fired = [];
+    const d = openForm({ message: "?", buttons: [{ label: "No", cancel: true, action: "demo.no", args: { b: "${button}" } }, "Yes"] },
+      {}, {}, { fireAction: (...a) => fired.push(a) });
+    if (how === "click") button(d, "No").fire("click");
+    else if (how === "escape") assert.equal(key(d, "Escape"), true);
+    else assert.equal(paneOf(d)._editActions.cancel(), true);
+    assert.equal(await d.promise, null);
+    assert.deepEqual(fired, [["demo.no", { b: "no" }]], how);
+  }
+});
+
+test("a button sets state and fires its action after the dialog has answered", async () => {
+  const log = [];
+  const app = { fireAction: (...a) => log.push(["fire", ...a]), state: { set: (p, v) => log.push(["set", p, v]) } };
+  const d = openForm({ fields: [{ name: "qty", type: "number", value: "3" }],
+    submit: { then: { action: "demo.then" } },
+    buttons: [{ label: "Go", set: { "ui.last": "${qty}", "ui.by": "${button}" }, action: "demo.go", args: { n: "${form.qty}", who: "${user}" } }] },
+    { user: "ann" }, {}, app);
+  d.promise.then(() => log.push(["resolved"]));
+  button(d, "Go").fire("click");
+  await d.promise;
+  assert.deepEqual(log, [
+    ["fire", "demo.then", null],
+    ["set", "ui.last", "3"], ["set", "ui.by", "go"],
+    ["fire", "demo.go", { n: "3", who: "ann" }],
+    ["resolved"],
+  ]);
+});
+
+test("a button's op stands in for submit.op", async () => {
+  const sent = [];
+  const client = { send: async (svc, data, opts) => { sent.push([svc, data, opts]); return { type: "ack" }; } };
+  const d = openForm({ fields: [{ name: "id", value: "7" }], submit: { service: "orders", op: "save" },
+    buttons: [{ label: "Cancel", cancel: true }, { label: "Save" }, { label: "Save & fill", op: "fill" }] }, {}, { client });
+  button(d, "Save & fill").fire("click");
+  assert.deepEqual(await d.promise, { button: "save & fill", data: { id: "7" } });
+  assert.deepEqual(sent, [["orders", { id: "7" }, { op: "fill" }]]);
+});
+
+test("a refused send re-enables every button and keeps the dialog open", async () => {
+  const client = { send: async () => ({ type: "error", message: "nope" }) };
+  const d = openForm({ fields: [], submit: { service: "s" }, buttons: [{ label: "Cancel", cancel: true }, "Go"] }, {}, { client });
+  button(d, "Go").fire("click");
+  assert.deepEqual(buttonsOf(d).map((b) => b.disabled), [true, true], "busy while sending");
+  assert.equal(await settled(d.promise), false);
+  assert.deepEqual(buttonsOf(d).map((b) => b.disabled), [false, false]);
+  assert.equal(d.footer._ch[0].textContent, "nope");
+});
+
+test("Enter presses the default button — Cancel in a danger dialog, never the danger button", async () => {
+  const d = openForm({ fields: [{ name: "a" }], buttons: [{ label: "Cancel", cancel: true }, "OK"] });
+  key(d, "Enter", { tagName: "INPUT" });
+  assert.deepEqual(await d.promise, { button: "ok", data: { a: "" } });
+
+  const x = openForm({ kind: "danger", message: "Delete?", buttons: [{ label: "Cancel", cancel: true }, { label: "Delete", kind: "danger" }] });
+  assert.equal(button(x, "Delete").className, "mkui-btn mkui-btn-danger");
+  assert.equal(key(x, "Enter", { tagName: "DIV" }, { ctrlKey: true }), true);
+  assert.equal(await x.promise, null, "ctrl+Enter is the default too: Cancel");
+
+  const y = openForm({ message: "Delete?", buttons: [{ label: "Delete", kind: "danger" }] });
+  key(y, "Enter", { tagName: "DIV" });
+  assert.equal(await settled(y.promise), false, "no default: Enter does nothing");
+});
+
+test("Enter on a button or a link is the browser's own", async () => {
+  const d = openForm({ message: "?", links: [{ href: "/x" }], buttons: [{ label: "Cancel", cancel: true }, "OK"] });
+  key(d, "Enter", { tagName: "BUTTON" });
+  key(d, "Enter", { tagName: "A" });
+  assert.equal(await settled(d.promise), false);
+});
+
+test("the focus starts on the default button when no input takes it, and arrows walk the footer", () => {
+  const focused = [];
+  const d = openForm({ message: "?", buttons: [{ label: "Cancel", cancel: true }, "Maybe", "OK"] });
+  for (const b of buttonsOf(d)) b.focus = () => focused.push(b.textContent);
+  assert.equal(key(d, "ArrowRight", button(d, "OK")), true);
+  assert.equal(key(d, "ArrowLeft", button(d, "OK")), true);
+  assert.equal(key(d, "ArrowLeft", button(d, "Cancel")), true);
+  assert.deepEqual(focused, ["Cancel", "Maybe", "OK"], "wrapping both ways");
+  assert.equal(key(d, "ArrowLeft", { tagName: "INPUT" }), false, "an input keeps its arrows");
+});
+
+test("a message box says what it is to a screen reader", () => {
+  geom = {};
+  const ws = makeWorkspace();
+  const attrs = {};
+  const addFrame = ws.addFrame.bind(ws);
+  ws.addFrame = (spec) => { const id = addFrame(spec); ws._paneEls.get(spec.layout.children[0]).setAttribute = (k, v) => { attrs[k] = v; }; return id; };
+  openDialog({ title: "Careful", kind: "danger", message: "x" }, {}, { _element: { workspace: ws } });
+  assert.equal(attrs.role, "alertdialog");
+  assert.equal(attrs["aria-label"], "Careful");
+  assert.match(attrs["aria-describedby"], /^_dialog-\d+-message$/);
+});
+
+test("copy takes what the box says: the pane's hook, or a copy button that stays open", async () => {
+  const wrote = [];
+  const nav = globalThis.navigator ?? (globalThis.navigator = {});
+  Object.defineProperty(nav, "clipboard", { value: { writeText: async (t) => { wrote.push(t); } }, configurable: true });
+  const d = openForm({ title: "About X", heading: "X 1.2", message: "An app.", facts: [{ label: "mkui", value: "1.8.0" }],
+    links: [{ label: "Site", href: "https://x.test" }],
+    buttons: [{ label: "Copy details", copy: true }, { label: "Copy id", copy: "id=${id}" }, { label: "OK", cancel: true, default: true }] }, { id: 9 });
+  assert.equal(paneOf(d)._editActions.copy(), true);
+  button(d, "Copy details").fire("click");
+  button(d, "Copy id").fire("click");
+  await new Promise((r) => setTimeout(r, 0));
+  const whole = "About X\nX 1.2\nAn app.\nmkui: 1.8.0\nSite: https://x.test";
+  assert.deepEqual(wrote, [whole, whole, "id=9"]);
+  assert.equal(d.footer._ch[0].textContent, "Copied");
+  assert.equal(await settled(d.promise), false, "a copy button leaves the dialog open");
+  assert.equal(openForm({ fields: [{ name: "a" }] }).ws._paneEls.values().next().value._editActions.copy, undefined, "a plain form has no copy");
+});
+
+/* ── Message boxes: enable, arm, timeout, details, suppress, id, live ── */
+
+import { specStatePaths } from "../mkui/static/src/widgets/mkui-dialog.js";
+import { State } from "../mkui/static/src/core.js";
+
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+function memStorage(initial = {}) {
+  const store = new Map(Object.entries(initial));
+  return {
+    store,
+    get length() { return store.size; },
+    key: (i) => [...store.keys()][i] ?? null,
+    getItem: (k) => store.has(k) ? store.get(k) : null,
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+}
+
+test("specStatePaths: every state path a spec reads, templates and expressions alike", () => {
+  const paths = specStatePaths({
+    title: "Hi ${state.auth.user}", message: ["${state.mkio.connected}", "plain state.no"],
+    facts: [{ label: "L", value: "${state.a.b} ${other}", showWhen: "state.flags.x" }],
+    fields: [{ name: "f", compute: "state.c + 1", label: "state.not.an.expr" }],
+    buttons: [{ label: "Go", enable: "state.ready && typed == 'X'" }],
+  });
+  assert.deepEqual([...paths].sort(), ["a.b", "auth.user", "c", "flags.x", "mkio.connected", "ready"]);
+});
+
+test("a button's enable follows the form: type the name to delete it", async () => {
+  const d = openForm({ kind: "danger", message: "Type ${name} to delete it.",
+    fields: [{ name: "typed", label: "Name" }],
+    buttons: [{ label: "Cancel", cancel: true }, { label: "Delete", kind: "danger", enable: "typed == name" }] }, { name: "AAPL" });
+  assert.equal(button(d, "Delete").disabled, true);
+  button(d, "Delete").fire("click");
+  assert.equal(await settled(d.promise), false, "a disabled button does not answer");
+  d.type("typed", "AAPL");
+  assert.equal(button(d, "Delete").disabled, false);
+  d.type("typed", "AAP");
+  assert.equal(button(d, "Delete").disabled, true);
+  d.type("typed", "AAPL");
+  button(d, "Delete").fire("click");
+  assert.deepEqual(await d.promise, { button: "delete", data: { typed: "AAPL" } });
+});
+
+test("Enter does not press a default button its enable has shut", async () => {
+  const d = openForm({ fields: [{ name: "ok", type: "checkbox" }], buttons: [{ label: "Cancel", cancel: true }, { label: "Go", enable: "ok" }] });
+  key(d, "Enter", { tagName: "INPUT" });
+  assert.equal(await settled(d.promise), false);
+  d.check("ok", true);
+  key(d, "Enter", { tagName: "INPUT" });
+  assert.deepEqual(await d.promise, { button: "go", data: { ok: true } });
+});
+
+test("arm keeps a button shut, counting down in its label, then opens it", async () => {
+  const d = openForm({ kind: "danger", message: "Delete?", buttons: [{ label: "Cancel", cancel: true }, { label: "Delete", kind: "danger", arm: 0.3 }] });
+  const del = buttonsOf(d)[1];
+  assert.equal(del.disabled, true);
+  assert.equal(del.textContent, "Delete (1)");
+  assert.equal(buttonsOf(d)[0].disabled, false, "Cancel is never armed");
+  await wait(600);
+  assert.equal(del.disabled, false);
+  assert.equal(del.textContent, "Delete");
+  del.fire("click");
+  assert.deepEqual(await d.promise, { button: "delete", data: {} });
+});
+
+test("timeout presses the default button when it runs out, counting down on it", async () => {
+  const d = openForm({ message: "Saved.", timeout: 0.3, buttons: [{ label: "OK", cancel: true, default: true }] });
+  assert.equal(buttonsOf(d)[0].textContent, "OK (1)");
+  await wait(600);
+  assert.equal(await d.promise, null, "the default here is the cancel button: a dismissal");
+
+  const e = openForm({ message: "Continue?", timeout: 0.3, buttons: [{ label: "Cancel", cancel: true }, "Continue"] });
+  await wait(600);
+  assert.deepEqual(await e.promise, { button: "continue", data: {} });
+});
+
+test("a key or a press in the box calls the timeout off", async () => {
+  for (const how of ["key", "mouse"]) {
+    const d = openForm({ message: "Saved.", timeout: 0.3, buttons: [{ label: "OK", cancel: true, default: true }] });
+    if (how === "key") key(d, "Shift", { tagName: "DIV" }); else d.host.fire("mousedown");
+    assert.equal(buttonsOf(d)[0].textContent, "OK", how);
+    await wait(500);
+    assert.equal(await settled(d.promise), false, how);
+    key(d, "Escape");
+  }
+});
+
+test("details fold under the message, copy on their own, and ride the whole copy", async () => {
+  const wrote = [];
+  const nav = globalThis.navigator ?? (globalThis.navigator = {});
+  Object.defineProperty(nav, "clipboard", { value: { writeText: async (t) => { wrote.push(t); } }, configurable: true });
+  geom = {};
+  const d = openForm({ title: "Failed", kind: "danger", message: "The order was refused.", details: { label: "Server said", text: "E42: ${why}" },
+    buttons: [{ label: "OK", cancel: true, default: true }] }, { why: "limit" });
+  const box = deep(messageOf(d), "mkui-dialog-details");
+  assert.equal(box.classList.contains("mkui-dialog-details-open"), false, "folded at first");
+  const toggle = deep(box, "mkui-dialog-details-toggle");
+  assert.equal(toggle._ch[1].textContent, "Server said");
+  assert.equal(deep(box, "mkui-dialog-details-text").textContent, "E42: limit");
+  toggle.fire("click");
+  assert.equal(box.classList.contains("mkui-dialog-details-open"), true);
+  assert.equal(toggle._attrs["aria-expanded"], "true");
+  deep(box, "mkui-dialog-details-copy").fire("click");
+  paneOf(d)._editActions.copy();
+  await wait(0);
+  assert.deepEqual(wrote, ["E42: limit", "Failed\nThe order was refused.\n\nE42: limit"]);
+
+  const blank = openForm({ message: "x", details: "${nope}", buttons: ["OK"] });
+  assert.equal(deep(messageOf(blank), "mkui-dialog-details").style.display, "none", "blank details show nothing");
+  const open = openForm({ message: "x", details: { text: "t", open: true }, buttons: ["OK"] });
+  assert.equal(deep(messageOf(open), "mkui-dialog-details").classList.contains("mkui-dialog-details-open"), true);
+});
+
+test("suppress: a ticked box remembers the answer, and the next opening gives it without opening", async () => {
+  const storage = memStorage();
+  const fired = [];
+  const spec = { message: "Fill it?", suppress: "fill", buttons: [{ label: "Cancel", cancel: true }, { label: "Fill", action: "demo.fill" }] };
+  const stateSets = [];
+  const appExtra = { fireAction: (...a) => fired.push(a), state: { set: (p, v) => stateSets.push([p, v]) } };
+
+  let d = openForm(spec, {}, { storage }, appExtra);
+  const box = deep(d.host, "mkui-dialog-suppress");
+  assert.equal(box._ch[1].textContent, "Don't ask again");
+  box._ch[0].checked = true;
+  button(d, "Cancel").fire("click");
+  assert.equal(await d.promise, null);
+  assert.equal(storage.store.size, 0, "a cancel is never remembered");
+
+  d = openForm(spec, {}, { storage }, appExtra);
+  button(d, "Fill").fire("click");
+  await d.promise;
+  assert.equal(storage.store.size, 0, "nor an answer given with the box unticked");
+
+  d = openForm(spec, {}, { storage }, appExtra);
+  deep(d.host, "mkui-dialog-suppress")._ch[0].checked = true;
+  button(d, "Fill").fire("click");
+  await d.promise;
+  assert.deepEqual([...storage.store], [["mkui.suppress.fill", "fill"]]);
+  assert.deepEqual(stateSets, [["dialog.suppressed", { fill: "fill" }]], "and the app state hears of it, once");
+
+  geom = {};
+  const ws = makeWorkspace();
+  const res = await openDialog(spec, {}, { _element: { workspace: ws }, ...appExtra }, { storage });
+  assert.deepEqual(res, { button: "fill", data: {}, suppressed: true });
+  assert.equal(ws._frames.length, 0, "nothing opened");
+  assert.equal(fired.length, 3, "the button's action fires each time, suppressed or not");
+
+  storage.store.set("mkui.suppress.fill", "gone");
+  assert.equal(openForm(spec, {}, { storage }).ws._frames.length, 1, "an answer no button gives any more is ignored");
+});
+
+test("suppress: a notice's only button is remembered, as a dismissal", async () => {
+  const storage = memStorage();
+  const spec = { message: "Tip of the day", suppress: { key: "tip", label: "Enough tips" }, buttons: [{ label: "OK", cancel: true, default: true }] };
+  const d = openForm(spec, {}, { storage });
+  const box = deep(d.host, "mkui-dialog-suppress");
+  assert.equal(box._ch[1].textContent, "Enough tips");
+  assert.equal(deep(openForm({ ...spec, suppress: "tip2" }, {}, { storage }).host, "mkui-dialog-suppress")._ch[1].textContent, "Don't show this again");
+  box._ch[0].checked = true;
+  button(d, "OK").fire("click");
+  await d.promise;
+  assert.equal(storage.store.get("mkui.suppress.tip"), "ok");
+  geom = {};
+  const ws = makeWorkspace();
+  assert.equal(await openDialog(spec, {}, { _element: { workspace: ws } }, { storage }), null);
+  assert.equal(ws._frames.length, 0);
+  assert.equal(deep(openForm({ message: "no buttons", suppress: "x" }).host, "mkui-dialog-suppress"), undefined, "a plain form has no such box");
+});
+
+test("id: firing a dialog again replaces the open one where it stands, quietly", async () => {
+  geom = {};
+  const ws = makeWorkspace();
+  const closed = [];
+  ws.closeFrame = (id) => closed.push(id);
+  const fired = [];
+  const app = { _element: { workspace: ws }, fireAction: (...a) => fired.push(a) };
+  const spec = (n) => ({ id: "notice", message: `Retry ${n}`, buttons: [{ label: "OK", cancel: true, action: "demo.dismissed" }] });
+  const first = openDialog(spec(1), {}, app);
+  ws._frames[0].x = 0.1; ws._frames[0].y = 0.2;   // dragged
+  const second = openDialog(spec(2), {}, app);
+  assert.equal(await first, null);
+  assert.deepEqual(fired, [], "replaced is not dismissed: no cancel effects");
+  assert.deepEqual(closed, ["frame-1"]);
+  assert.deepEqual([ws._frames[1].x, ws._frames[1].y], [0.1, 0.2], "the new one stands where the old one stood");
+  const other = openDialog({ ...spec(3), id: "other" }, {}, app);
+  assert.deepEqual(closed, ["frame-1"], "another id stacks");
+  void second; void other;
+});
+
+test("modal rides the frame spec", () => {
+  geom = {};
+  const ws = makeWorkspace();
+  openDialog({ message: "x", modal: true }, {}, { _element: { workspace: ws } });
+  openDialog({ message: "y" }, {}, { _element: { workspace: ws } });
+  assert.deepEqual(ws._frames.map((f) => f.modal), [true, false]);
+});
+
+test("a box follows the app state it reads while open, and lets go when closed", async () => {
+  const state = new State({ mkio: { connected: true }, n: 1 });
+  const d = openForm({ message: "${IF(state.mkio.connected, 'Online', 'Offline')}", facts: [{ label: "n", value: "${state.n}" }],
+    buttons: [{ label: "Cancel", cancel: true }, { label: "Go", enable: "state.mkio.connected" }] }, { state: state.get() }, {}, { state });
+  const para = deep(messageOf(d), "mkui-dialog-para");
+  assert.equal(para.textContent, "Online");
+  state.set("mkio.connected", false);
+  assert.equal(para.textContent, "Offline");
+  assert.equal(button(d, "Go").disabled, true);
+  state.set("n", 2);
+  assert.deepEqual(deep(messageOf(d), "mkui-dialog-facts")._ch.map((c) => c.textContent), ["n", "2"]);
+  button(d, "Cancel").fire("click");
+  await d.promise;
+  assert.equal([...state._subs.values()].reduce((n, set) => n + set.size, 0), 0, "unsubscribed");
+});
+
+/* ── A button's own submit: the answer as a transaction ──────────────── */
+
+test("a button's submit sends its own service, op and data; a refusal keeps the box open", async () => {
+  const sent = [];
+  let refuse = true;
+  const client = { send: async (svc, data, opts) => { sent.push([svc, data, opts]); return refuse ? { type: "error", message: "closed" } : { type: "ack" }; } };
+  const spec = { message: "Roll ${n} orders?", fields: [{ name: "note", value: "eod" }], submit: { service: "ignored", op: "nope" },
+    buttons: [{ label: "No", cancel: true }, { label: "Roll", submit: { service: "orders", op: "roll", data: { desk: "${desk}", by: "${button}", note2: "${note}!" } } }] };
+  const d = openForm(spec, { n: 3, desk: "fx" }, { client });
+  button(d, "Roll").fire("click");
+  assert.equal(await settled(d.promise), false);
+  assert.equal(d.footer._ch[0].textContent, "closed");
+  assert.deepEqual(sent, [["orders", { note: "eod", desk: "fx", by: "roll", note2: "eod!" }, { op: "roll" }]]);
+  refuse = false;
+  button(d, "Roll").fire("click");
+  assert.deepEqual(await d.promise, { button: "roll", data: { note: "eod" } });
+
+  const e = openForm(spec, { n: 1 }, { client });
+  sent.length = 0;
+  button(e, "No").fire("click");
+  assert.equal(await e.promise, null);
+  assert.deepEqual(sent, [], "cancelling sends nothing");
+});
+
+test("a button's submit with nobody to send it to says so instead of pretending", async () => {
+  const d = openForm({ message: "?", buttons: [{ label: "No", cancel: true }, { label: "Yes", submit: { service: "votes" } }] });
+  button(d, "Yes").fire("click");
+  assert.equal(await settled(d.promise), false);
+  assert.equal(d.footer._ch[0].textContent, "Not connected");
 });

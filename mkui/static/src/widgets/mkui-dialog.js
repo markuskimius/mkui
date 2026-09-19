@@ -1,9 +1,17 @@
 import { resolveExpr, resolveObject, evalExpr, expr } from "../lib/expressions.js";
 import { icon } from "../lib/icons.js";
 import { formatShortcut } from "../lib/shortcut.js";
+import { isRich, richText, renderRich } from "../lib/rich.js";
+import { statePaths } from "../lib/expressions.js";
+import { suppressSpec, suppressedAnswer, storeSuppressed, readSuppressed } from "../lib/dialogs.js";
 import { strptime, parseTime, inputToBound, boundToInput, inputTypeForKind, kindForFormat, detectTimeKind } from "../lib/timeparse.js";
 
 let dialogSeq = 0;
+
+// Dialogs open under a spec `id`: firing one again replaces the open one
+// where it stands instead of stacking a second (a server pushing the same
+// notice on every retry).
+const openIds = new Map();
 
 // Temporal fields render as the browser's native pickers. What they hold
 // and submit is canonical: a `date` is `YYYY-MM-DD`, a `time` `HH:MM:SS`,
@@ -78,6 +86,89 @@ function temporalReadPair(date, time) {
 // field value changes, giving up (and warning) after this many rounds.
 export const MAX_COMPUTE_PASSES = 8;
 
+// A message box is a dialog that says something: `message` (a template, or
+// a list of them, one paragraph each), a `heading` over it, `facts`
+// (`[{ label, value }]`, a blank value dropping the line), `links`
+// (`[{ label, href }]`), an `image` URL, and a `kind` picking the icon and
+// its accent. Fields may follow; with none it is an alert, a confirm, an
+// About box.
+export const DIALOG_KINDS = {
+  info: "info", success: "circle-check", warn: "triangle-alert",
+  danger: "octagon-alert", question: "circle-help",
+};
+const BUTTON_KINDS = ["plain", "primary", "danger"];
+
+export const hasMessage = (spec) =>
+  spec?.message != null || spec?.heading != null || spec?.image != null || spec?.details != null
+  || (Array.isArray(spec?.facts) && spec.facts.length > 0)
+  || (Array.isArray(spec?.links) && spec.links.length > 0);
+
+// The app-state paths a spec reads, anywhere in it: `${state.…}` in any
+// string, `state.…` in the keys that hold a bare expression. The dialog
+// re-runs its dynamic pass when one of them changes, so a box follows the
+// app — the connection in an About box, a count in a confirm — while open.
+const EXPR_KEYS = new Set(["showWhen", "enable", "compute", "required", "disabled", "readonly", "collapsed", "options"]);
+export function specStatePaths(spec) {
+  const out = new Set();
+  const walk = (v, key) => {
+    if (typeof v === "string") {
+      const template = v.includes("${");
+      if (!template && !EXPR_KEYS.has(key)) return;
+      for (const p of statePaths(v, { template })) if (p) out.add(p);
+    } else if (Array.isArray(v)) v.forEach((x) => walk(x, key));
+    else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, k);
+  };
+  walk(spec, null);
+  return out;
+}
+
+// `buttons = [{ id, label, kind, default, cancel, submit, op, copy, enable,
+// arm, action, args, set }]` (`submit`: false, or `{ service, op, data }`) replaces the Cancel / OK pair; null without it, and the
+// dialog is the form it always was. A bare string is its label, the id the
+// label in lower case. One button at most cancels (the first to say so):
+// Escape and × are that button. The default — what Enter presses and
+// where the focus starts — is the one saying `default`, else the first
+// that neither cancels nor is dangerous; in a `danger` dialog it is the
+// cancel button unless one says otherwise, and never a `danger` button:
+// Enter must not be how something is destroyed. With no kind given
+// anywhere the default wears `primary`.
+export function normalizeButtons(spec) {
+  const list = spec?.buttons;
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const out = [];
+  let said = null;
+  for (const [i, raw] of list.entries()) {
+    const b = typeof raw === "string" ? { label: raw } : raw;
+    if (!b || typeof b !== "object" || (b.id == null && b.label == null)) {
+      console.warn(`[mkui-dialog] bad buttons[${i}]: expected { id, label }`);
+      continue;
+    }
+    const id = String(b.id ?? String(b.label).toLowerCase());
+    if (out.some((o) => o.id === id)) {
+      console.warn(`[mkui-dialog] bad buttons[${i}]: duplicate id "${id}"`);
+      continue;
+    }
+    out.push({
+      ...b, id,
+      label: b.label ?? id,
+      kind: BUTTON_KINDS.includes(b.kind) ? b.kind : "plain",
+      cancel: b.cancel === true && !out.some((o) => o.cancel),
+      default: false,
+    });
+    if (b.default === true) said ??= out[out.length - 1];
+  }
+  if (out.length === 0) return null;
+  const safe = (b) => b.kind !== "danger" && b.copy == null;
+  if (said && !safe(said)) console.warn(`[mkui-dialog] buttons: "${said.id}" cannot be the default`);
+  const def = (said && safe(said) ? said : null)
+    ?? (spec.kind === "danger" ? out.find((b) => b.cancel) : out.find((b) => !b.cancel && safe(b)));
+  if (def) {
+    def.default = true;
+    if (!def.cancel && out.every((b) => b.kind === "plain")) def.kind = "primary";
+  }
+  return out;
+}
+
 export function openDialog(spec, context, app, extra = {}) {
   return new Promise((resolve) => {
     const ws = app._element?.workspace ?? app._element?._workspace;
@@ -104,6 +195,22 @@ export function openDialog(spec, context, app, extra = {}) {
     const pendingRecall = new Set(); // selects whose remembered value awaits their options
     const wanted = {};       // key → value asked of an optionsFrom select before its options arrived
     const storage = extra?.storage ?? (typeof localStorage !== "undefined" ? localStorage : null);
+    // `buttons`, early: a suppressed box answers before anything is built.
+    const btnSpecs = normalizeButtons(spec);
+    const suppress = suppressSpec(spec, btnSpecs);
+    if (suppress) {
+      const id = suppressedAnswer(storage, suppress.key);
+      const b = id == null ? null : btnSpecs.find((x) => x.id === id && suppress.remembers(x));
+      if (b) {
+        // A remembered cancel (a notice's only button) is a dismissal.
+        resolve(b.cancel ? null : { button: b.id, data: {}, suppressed: true });
+        effects(b, b.cancel ? null : {});
+        return;
+      }
+    }
+    const openId = spec.id == null ? null : String(spec.id);
+    const place = openId == null ? null : openIds.get(openId)?.replace() ?? null;
+
     const rememberKey = (f) => typeof f.remember === "string" ? f.remember : f.remember?.key;
     const dirty = new Set(); // keys the user has typed into (compute stays off them)
     const allFields = [];
@@ -422,12 +529,20 @@ export function openDialog(spec, context, app, extra = {}) {
     });
     let currentTitle = resolveExpr(spec.title ?? "Dialog", context);
 
+    // `buttons` replace the footer pair (and the pin: a box that answers a
+    // question has nothing to stay open for); a message box opens at its
+    // content's height — a short guess `fitFrame` grows — rather than a
+    // form's.
+    const messaged = hasMessage(spec);
+    const pinnable = !btnSpecs && spec.pin !== false;
+
     const widthPx = spec.width ?? 400;
+    const heightPx = spec.height ?? (messaged ? 140 : 400);
     const wsRect = ws.getBoundingClientRect();
     const wFrac = Math.min(widthPx / wsRect.width, 0.9);
-    const hFrac = Math.min(0.6, 400 / wsRect.height);
-    const xFrac = Math.max(0, (1 - wFrac) / 2);
-    const yFrac = Math.max(0, (1 - hFrac) / 2);
+    const hFrac = Math.min(0.6, heightPx / wsRect.height);
+    const xFrac = place?.x ?? Math.max(0, (1 - wFrac) / 2);
+    const yFrac = place?.y ?? Math.max(0, (1 - hFrac) / 2);
 
     let pinned = false;
     function makePinBtn() {
@@ -449,12 +564,29 @@ export function openDialog(spec, context, app, extra = {}) {
       x: xFrac, y: yFrac, w: wFrac, h: hFrac,
       stayOnTop: true,
       noDock: true,
+      modal: spec.modal === true,
       layout: { type: "tabs", active: 0, children: [paneId] },
     });
+    // Fired again under the same `id`, this one goes — quietly: no answer,
+    // no cancel effects — and says where it stood.
+    const me = {
+      replace() {
+        const f = ws._frames.find((x) => x.id === frameId);
+        const at = f ? { x: f.x, y: f.y } : null;
+        if (!resolved) {
+          resolved = true;
+          ws.closeFrame(frameId);
+          cleanup();
+          resolve(null);
+        }
+        return at;
+      },
+    };
+    if (openId != null) openIds.set(openId, me);
 
     const frameEl = ws._frameEls.get(frameId);
     if (frameEl) {
-      frameEl._extraControls = () => [makePinBtn()];
+      frameEl._extraControls = () => pinnable ? [makePinBtn()] : [];
       frameEl._renderInternal();
     }
 
@@ -501,7 +633,187 @@ export function openDialog(spec, context, app, extra = {}) {
         if (el) target.appendChild(el);
       }
     }
+    // The message block leads the body: the kind's icon (or `image`)
+    // beside the heading, the paragraphs, the facts and the links. Its
+    // text is templates over the form scope, rewritten by the dynamic pass
+    // only where it changed; a rich value renders as one. It is selectable,
+    // and copied whole by the pane's `copy`.
+    const msg = { paras: [], shown: {} };
+    const putText = (el, key, v) => {
+      const text = isRich(v) ? richText(v) : (v == null ? "" : String(v));
+      if (msg.shown[key] === text) return text;
+      msg.shown[key] = text;
+      el.textContent = "";
+      if (isRich(v)) renderRich(el, v);
+      else el.textContent = text;
+      return text;
+    };
+    const paragraphs = () => spec.message == null ? [] : [].concat(spec.message);
+    function currentFacts() {
+      const out = [];
+      for (const f of Array.isArray(spec.facts) ? spec.facts : []) {
+        if (!f || typeof f !== "object" || !shown(f.showWhen)) continue;
+        const value = resolveExpr(f.value ?? "", formScope());
+        const text = isRich(value) ? richText(value) : (value == null ? "" : String(value));
+        if (text.trim() === "") continue;
+        out.push({ label: String(resolveExpr(f.label ?? "", formScope()) ?? ""), value, text: text.trim() });
+      }
+      return out;
+    }
+    function syncMessage() {
+      if (!messaged) return;
+      if (msg.heading) putText(msg.heading, "heading", resolveExpr(spec.heading, formScope()));
+      paragraphs().forEach((p, i) => putText(msg.paras[i], `p${i}`, resolveExpr(p, formScope())));
+      if (msg.details) {
+        const t = putText(msg.details.text, "details", resolveExpr(detailsSpec.text ?? "", formScope()));
+        msg.details.el.style.display = t.trim() === "" ? "none" : "";
+      }
+      if (!msg.facts) return;
+      const facts = currentFacts();
+      const key = JSON.stringify(facts.map((f) => [f.label, f.text]));
+      if (key === msg.factsKey) return;
+      msg.factsKey = key;
+      msg.list = facts;
+      msg.facts.innerHTML = "";
+      msg.facts.style.display = facts.length ? "" : "none";
+      for (const f of facts) {
+        const dt = document.createElement("dt");
+        dt.textContent = f.label;
+        const dd = document.createElement("dd");
+        if (isRich(f.value)) renderRich(dd, f.value);
+        else dd.textContent = f.text;
+        msg.facts.append(dt, dd);
+      }
+    }
+    // `details = "<template>"` (or `{ text, label, open }`): the long part —
+    // a stack trace, the rows a confirm is about — folded under the
+    // message, with a copy button of its own.
+    const detailsSpec = spec.details == null ? null
+      : typeof spec.details === "object" ? spec.details : { text: spec.details };
+    function dialogText() {
+      const lines = [currentTitle];
+      if (msg.heading) lines.push(msg.shown.heading ?? "");
+      paragraphs().forEach((_, i) => lines.push(msg.shown[`p${i}`] ?? ""));
+      for (const f of msg.list ?? []) lines.push(`${f.label}: ${f.text}`);
+      for (const l of msg.links ?? []) lines.push(l.label === l.href ? l.href : `${l.label}: ${l.href}`);
+      const said = lines.filter((l) => l !== "").join("\n");
+      const details = (msg.shown.details ?? "").trim();
+      return msg.details && details !== "" ? `${said}\n\n${details}` : said;
+    }
+    if (messaged) {
+      const kindIcon = DIALOG_KINDS[spec.kind];
+      const box = document.createElement("div");
+      box.className = "mkui-dialog-message" + (kindIcon ? ` mkui-dialog-kind-${spec.kind}` : "");
+      if (spec.image != null || kindIcon) {
+        const mark = document.createElement("div");
+        mark.className = "mkui-dialog-message-icon";
+        if (spec.image != null) {
+          const img = document.createElement("img");
+          img.alt = "";
+          // The picture arrives after the first fit.
+          img.addEventListener("load", () => fitFrame());
+          img.src = String(resolveExpr(spec.image, context) ?? "");
+          mark.appendChild(img);
+        } else {
+          mark.appendChild(icon(kindIcon));
+        }
+        box.appendChild(mark);
+      }
+      const text = document.createElement("div");
+      text.className = "mkui-dialog-message-text";
+      text.id = `${paneId}-message`;
+      if (spec.heading != null) {
+        msg.heading = document.createElement("div");
+        msg.heading.className = "mkui-dialog-heading";
+        text.appendChild(msg.heading);
+      }
+      for (const _ of paragraphs()) {
+        const p = document.createElement("p");
+        p.className = "mkui-dialog-para";
+        msg.paras.push(p);
+        text.appendChild(p);
+      }
+      if (Array.isArray(spec.facts) && spec.facts.length) {
+        msg.facts = document.createElement("dl");
+        msg.facts.className = "mkui-dialog-facts";
+        text.appendChild(msg.facts);
+      }
+      if (detailsSpec) {
+        const el = document.createElement("div");
+        el.className = "mkui-dialog-details";
+        const head = document.createElement("div");
+        head.className = "mkui-dialog-details-head";
+        const toggle = document.createElement("button");
+        toggle.className = "mkui-dialog-details-toggle";
+        toggle.type = "button";
+        const caret = document.createElement("span");
+        caret.className = "mkui-dialog-caret";
+        caret.appendChild(icon("chevron-right"));
+        const label = document.createElement("span");
+        label.textContent = String(resolveExpr(detailsSpec.label ?? "Details", context) ?? "");
+        toggle.append(caret, label);
+        const copyBtn = document.createElement("button");
+        copyBtn.className = "mkui-dialog-details-copy";
+        copyBtn.type = "button";
+        copyBtn.title = "Copy details";
+        copyBtn.appendChild(icon("copy"));
+        copyBtn.addEventListener("click", () => writeClip(msg.shown.details ?? ""));
+        head.append(toggle, copyBtn);
+        const pre = document.createElement("pre");
+        pre.className = "mkui-dialog-details-text";
+        const setOpen = (open) => {
+          el.classList.toggle("mkui-dialog-details-open", open);
+          toggle.setAttribute("aria-expanded", String(open));
+          if (open && built) fitFrame();
+        };
+        toggle.addEventListener("click", () => setOpen(!el.classList.contains("mkui-dialog-details-open")));
+        setOpen(detailsSpec.open === true);
+        el.append(head, pre);
+        text.appendChild(el);
+        msg.details = { el, text: pre };
+      }
+      // A link opens in a new tab, and only a web, mail or same-site
+      // address is one: a spec may come from a server (`dialogService`, the
+      // control channel), and `javascript:` is not a place to go.
+      msg.links = [];
+      for (const [i, l] of (Array.isArray(spec.links) ? spec.links : []).entries()) {
+        const href = String(resolveExpr(l?.href ?? "", context) ?? "");
+        if (!/^(https?:|mailto:|[/.#])/i.test(href)) {
+          console.warn(`[mkui-dialog] bad links[${i}]: expected an http(s), mailto or relative href`);
+          continue;
+        }
+        msg.links.push({ href, label: String(resolveExpr(l.label ?? href, context) ?? href) });
+      }
+      if (msg.links.length) {
+        const row = document.createElement("div");
+        row.className = "mkui-dialog-links";
+        for (const l of msg.links) {
+          const a = document.createElement("a");
+          a.href = l.href;
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          a.textContent = l.label;
+          row.appendChild(a);
+        }
+        text.appendChild(row);
+      }
+      box.appendChild(text);
+      body.appendChild(box);
+    }
+
     renderItems(spec.fields ?? [], body);
+
+    let suppressBox = null;
+    if (suppress) {
+      const label = document.createElement("label");
+      label.className = "mkui-dialog-suppress";
+      suppressBox = document.createElement("input");
+      suppressBox.type = "checkbox";
+      const span = document.createElement("span");
+      span.textContent = suppress.label;
+      label.append(suppressBox, span);
+      body.appendChild(label);
+    }
 
     container.appendChild(body);
 
@@ -523,24 +835,96 @@ export function openDialog(spec, context, app, extra = {}) {
       status.className = "mkui-dialog-status";
     }
 
-    const cancelBtn = document.createElement("button");
-    cancelBtn.className = "mkui-btn";
-    cancelBtn.textContent = spec.cancel?.label ?? "Cancel";
-    cancelBtn.addEventListener("click", close);
+    // The footer's buttons: the Cancel / OK pair, or the spec's own.
+    // `footerBtns` is what a send disables and the arrow keys walk;
+    // `defaultBtn` is what Enter presses and where the focus starts when
+    // the form has no input to take it.
+    const footerBtns = [];
+    const btnRecs = [];   // { spec, el, label, armUntil } per button
+    let defaultBtn = null;
+    let pressDefault = () => submit();
+    if (btnSpecs) {
+      for (const b of btnSpecs) {
+        const el = document.createElement("button");
+        el.className = "mkui-btn" + (b.kind === "plain" ? "" : ` mkui-btn-${b.kind}`);
+        const label = String(resolveExpr(b.label, context) ?? "");
+        el.textContent = label;
+        if (b.default && !b.cancel) el.title = formatShortcut("mod+Enter");
+        el.addEventListener("click", () => press(b));
+        footerBtns.push(el);
+        btnRecs.push({ spec: b, el, label, armUntil: Number(b.arm) > 0 ? Date.now() + Number(b.arm) * 1000 : 0 });
+        if (b.default) defaultBtn = el;
+      }
+      const def = btnSpecs.find((b) => b.default);
+      pressDefault = () => { if (def) press(def); };
+    } else {
+      const cancelBtn = document.createElement("button");
+      cancelBtn.className = "mkui-btn";
+      cancelBtn.textContent = spec.cancel?.label ?? "Cancel";
+      cancelBtn.addEventListener("click", close);
 
-    const submitBtn = document.createElement("button");
-    submitBtn.className = "mkui-btn mkui-btn-primary";
-    submitBtn.textContent = spec.submit?.label ?? "OK";
-    submitBtn.title = formatShortcut("mod+Enter");
-    submitBtn.addEventListener("click", submit);
+      const submitBtn = document.createElement("button");
+      submitBtn.className = "mkui-btn mkui-btn-primary";
+      submitBtn.textContent = spec.submit?.label ?? "OK";
+      submitBtn.title = formatShortcut("mod+Enter");
+      submitBtn.addEventListener("click", () => submit());
 
-    footer.append(cancelBtn, submitBtn);
+      footerBtns.push(cancelBtn, submitBtn);
+      for (const el of footerBtns) btnRecs.push({ spec: {}, el, label: el.textContent, armUntil: 0 });
+      defaultBtn = submitBtn;
+    }
+
+    // A button is off while a send is out, while its `enable` (a boolean
+    // or an expression over the form: type the name to delete it) says
+    // so, and while it is arming: `arm = 2` keeps it shut for two seconds
+    // after the box opens, counting down in its label, so a double-click
+    // that opened the box cannot also answer it. `timeout = 10` on the
+    // spec presses the default button (or dismisses) when it runs out,
+    // counting down there; a key or a click in the box calls it off.
+    let busy = false;
+    let deadline = Number(spec.timeout) > 0 ? Date.now() + Number(spec.timeout) * 1000 : 0;
+    const defaultRec = btnRecs.find((r) => r.el === defaultBtn) ?? null;
+    const secsLeft = (t) => Math.max(0, Math.ceil((t - Date.now()) / 1000));
+    function syncButtons() {
+      for (const r of btnRecs) {
+        const arming = r.armUntil ? secsLeft(r.armUntil) : 0;
+        const counting = deadline && r === defaultRec ? secsLeft(deadline) : 0;
+        r.el.disabled = busy || arming > 0 || (r.spec.enable != null && !truthy(r.spec.enable));
+        const text = r.label + (arming > 0 ? ` (${arming})` : counting > 0 ? ` (${counting})` : "");
+        if (r.el.textContent !== text) r.el.textContent = text;
+      }
+    }
+    const setBusy = (b) => { busy = b; syncButtons(); };
+    let ticker = null;
+    function tick() {
+      if (resolved) { stopTicker(); return; }
+      for (const r of btnRecs) if (r.armUntil && Date.now() >= r.armUntil) r.armUntil = 0;
+      const ran = deadline && Date.now() >= deadline;
+      if (ran) deadline = 0;
+      syncButtons();
+      if (!deadline && !btnRecs.some((r) => r.armUntil)) stopTicker();
+      if (ran) { if (defaultRec) pressDefault(); else close(); }
+    }
+    function stopTicker() { if (ticker != null) { clearInterval(ticker); ticker = null; } }
+    function callOffTimeout() { if (deadline) { deadline = 0; syncButtons(); } }
+    if (deadline || btnRecs.some((r) => r.armUntil)) ticker = setInterval(tick, 200);
+    host.addEventListener("mousedown", callOffTimeout);
+
+    footer.append(...footerBtns);
     container.appendChild(footer);
 
     host.appendChild(container);
 
+    // What the dialog is, for a screen reader: a warning interrupts.
+    paneEl.setAttribute?.("role", spec.kind === "warn" || spec.kind === "danger" ? "alertdialog" : "dialog");
+    paneEl.setAttribute?.("aria-label", currentTitle);
+    if (messaged) paneEl.setAttribute?.("aria-describedby", `${paneId}-message`);
+
+    // The focus goes to the first input, else the default button, and back
+    // to whatever held it once the dialog is gone.
+    const opener = document.activeElement;
     const firstInput = host.querySelector("input:not([type=hidden]):not([type=checkbox]), select, textarea");
-    firstInput?.focus();
+    (firstInput ?? defaultBtn ?? footerBtns[0])?.focus();
 
     // Escape cancels — unless pinned: the pin says stay open, whatever the
     // key, and × is still there. From a field the keydown lands here; with
@@ -556,32 +940,72 @@ export function openDialog(spec, context, app, extra = {}) {
       close();
       return true;
     };
-    paneEl._editActions = { cancel };
+    // Copy, with no text selected, takes what a message box says — the
+    // title, the message, the facts, the links — as plain text.
+    const copy = () => {
+      if (!messaged || resolved) return false;
+      writeClip(dialogText());
+      return true;
+    };
+    paneEl._editActions = messaged ? { cancel, copy } : { cancel };
 
     // Enter submits from a single-line field; ctrl/cmd+Enter from anywhere,
     // a textarea included (there plain Enter is a newline). On a button
     // Enter is the browser's own click — Enter on Cancel must cancel — and
-    // the modified one is ours alone, so its default (that click) is stopped.
+    // the modified one is ours alone, so its default (that click) is stopped;
+    // on a link it follows the link. With `buttons` both press the default
+    // one. Left/right walk the footer's buttons, and Tab stays in the dialog.
     const onKey = (e) => {
+      callOffTimeout();
       if (e.key === "Escape") { if (cancel()) e.preventDefault(); return; }
+      if (e.key === "Tab") { trapTab(e); return; }
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        const i = footerBtns.indexOf(e.target);
+        if (i < 0) return;
+        const n = footerBtns.length;
+        footerBtns[(i + (e.key === "ArrowRight" ? 1 : n - 1)) % n].focus();
+        e.preventDefault();
+        return;
+      }
       if (e.key !== "Enter") return;
-      if (e.ctrlKey || e.metaKey) { e.preventDefault(); submit(); return; }
+      if (e.ctrlKey || e.metaKey) { e.preventDefault(); pressDefault(); return; }
       const tag = e.target?.tagName;
-      if (tag !== "TEXTAREA" && tag !== "BUTTON") submit();
+      if (tag !== "TEXTAREA" && tag !== "BUTTON" && tag !== "A") pressDefault();
     };
+    function trapTab(e) {
+      const els = [...(host.querySelectorAll?.("input:not([type=hidden]), select, textarea, button, a[href], [tabindex]:not([tabindex='-1'])") ?? [])]
+        .filter((el) => !el.disabled && el.offsetParent !== null);
+      if (els.length === 0) return;
+      const first = els[0], last = els[els.length - 1];
+      const at = document.activeElement;
+      if (e.shiftKey ? (at === first || !host.contains(at)) : (at === last || !host.contains(at))) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      }
+    }
     host.addEventListener("keydown", onKey);
 
     paneEl.addEventListener("mkui-pane-close", () => {
       if (!resolved) {
         resolved = true;
         host.removeEventListener("keydown", onKey);
+        teardown();
         queueMicrotask(() => ws.unregisterPane(paneId));
         resolve(null);
+        dismissed();
       }
     });
 
     built = true;
     onFieldChange(null, recallAll());
+    // Follow the app state the spec reads (`subscribe` answers at once:
+    // those first calls are not changes).
+    const unsubs = [];
+    if (typeof app?.state?.subscribe === "function") {
+      let live = false;
+      for (const path of specStatePaths(spec)) unsubs.push(app.state.subscribe(path, () => { if (live) applyDynamic(); }));
+      live = true;
+    }
     snapshotInitial();
     for (const sec of sections) if (sec.item.collapsible) setSectionOpen(sec, initialFold(sec));
     let seen = false; // the open-time fit may re-center; after it, the title bar is the anchor
@@ -720,8 +1144,11 @@ export function openDialog(spec, context, app, extra = {}) {
       if (title !== currentTitle) {
         currentTitle = title;
         ws.renamePane?.(paneId, title);
+        paneEl.setAttribute?.("aria-label", title);
       }
+      syncMessage();
       syncNote();
+      syncButtons();
     }
 
     // Static `options` with per-option `showWhen`, or an expression yielding
@@ -807,17 +1234,99 @@ export function openDialog(spec, context, app, extra = {}) {
       }
     }
 
+    function teardown() {
+      stopTicker();
+      for (const off of unsubs.splice(0)) off?.();
+      if (openId != null && openIds.get(openId) === me) openIds.delete(openId);
+    }
     function cleanup() {
+      teardown();
       host.removeEventListener("keydown", onKey);
       ws.unregisterPane(paneId);
+      if (opener?.isConnected) opener.focus?.();
     }
 
+    // Dismissed — Cancel, Escape, × — a dialog resolves null. With
+    // `buttons` that is the cancel button however it came about, so what
+    // that button sets or fires happens for all three.
     function close() {
       if (resolved) return;
       resolved = true;
       ws.closeFrame(frameId);
       cleanup();
       resolve(null);
+      dismissed();
+    }
+    // "Don't ask again", ticked: keep the answer, and tell the app state
+    // (`dialog.suppressed`) so a menu's "ask again" item comes alive.
+    function rememberAnswer(b) {
+      if (!suppress || !suppressBox?.checked || !suppress.remembers(b)) return;
+      storeSuppressed(storage, suppress.key, b.id);
+      app?.state?.set?.("dialog.suppressed", readSuppressed(storage));
+    }
+    function dismissed() {
+      const b = btnSpecs?.find((x) => x.cancel);
+      if (!b) return;
+      rememberAnswer(b);
+      effects(b, null);
+    }
+
+    // What a button does besides answering: `set = { "state.path": value }`
+    // writes app state, `action` (+ `args`) fires an mkui action — both
+    // resolved against the submitted fields over the opening context, as
+    // `submit.then` is, and both after the dialog has closed.
+    function effects(b, data) {
+      const scope = { ...context, ...(data ?? {}), form: data ?? {}, button: b.id };
+      try {
+        if (b.set && typeof b.set === "object" && app?.state?.set) {
+          for (const [path, v] of Object.entries(resolveObject(b.set, scope))) app.state.set(path, v);
+        }
+        if (b.action && typeof app?.fireAction === "function") {
+          app.fireAction(b.action, resolveObject(b.args ?? null, scope));
+        }
+      } catch (e) {
+        console.warn(`[mkui-dialog] button ${b.id} failed: ${e.message}`);
+      }
+    }
+
+    function writeClip(text) {
+      const done = (ok) => {
+        status.textContent = ok ? "Copied" : "Copy failed";
+        status.className = "mkui-dialog-status" + (ok ? "" : " mkui-dialog-status-error");
+        lastNote = undefined;
+      };
+      try {
+        Promise.resolve(navigator.clipboard.writeText(text)).then(() => done(true), () => done(false));
+      } catch { done(false); }
+    }
+
+    // A button press. `copy` (true = what the dialog says, or a template)
+    // fills the clipboard and stays; `cancel` dismisses; `submit = false`
+    // answers with the form as it stands — a Discard has nothing to
+    // validate or send; anything else is a submit under its id, its `op`
+    // standing in for `submit.op`.
+    function press(b) {
+      if (resolved || btnRecs.find((r) => r.spec === b)?.el.disabled) return;
+      if (b.copy != null && b.copy !== false) {
+        writeClip(b.copy === true ? dialogText() : String(resolveExpr(b.copy, formScope()) ?? ""));
+        return;
+      }
+      if (b.cancel) { close(); return; }
+      if (b.submit === false) { finish(b, collectData()); return; }
+      submit(b);
+    }
+
+    // The dialog is answered: closed, resolved — the data, or with
+    // `buttons` `{ button, data }` — then `submit.then` and the button's
+    // own effects.
+    function finish(b, data) {
+      if (b) rememberAnswer(b);
+      resolved = true;
+      ws.closeFrame(frameId);
+      cleanup();
+      resolve(btnSpecs ? { button: b.id, data } : data);
+      if (b?.submit !== false) follow(data);
+      if (b) effects(b, data);
     }
 
     // After a pinned submit: `pin = "reset"` (the default) restores every
@@ -885,30 +1394,44 @@ export function openDialog(spec, context, app, extra = {}) {
       }
     }
 
-    async function submit() {
+    async function submit(btn = null) {
       if (resolved) return;
       if (!validate()) return;
       const data = collectData();
 
+      // A button's own `submit = { service, op, data }` is where its answer
+      // goes — a question the server pushed, answered by a transaction —
+      // in place of the spec's: the fields, plus `data` resolved against
+      // them, `button` and the opening context. With nobody to send it to
+      // the box stays open and says so; the spec's own submit keeps its
+      // old leniency (no client: resolve at once).
       const client = extra.client;
-      const svc = spec.submit?.service;
+      const own = btn?.submit && typeof btn.submit === "object" ? btn.submit : null;
+      const svc = own ? own.service : spec.submit?.service;
+      const op = own ? (own.op ?? btn.op) : (btn?.op ?? spec.submit?.op);
+      const payload = own?.data == null ? data
+        : { ...data, ...resolveObject(own.data, { ...context, ...data, form: data, button: btn.id }) };
+      if (own && !(svc && client?.send)) {
+        status.textContent = svc ? "Not connected" : "No service to send to";
+        status.className = "mkui-dialog-status mkui-dialog-status-error";
+        return;
+      }
       if (svc && client?.send) {
-        submitBtn.disabled = true;
-        cancelBtn.disabled = true;
+        setBusy(true);
         status.textContent = "Sending...";
         status.className = "mkui-dialog-status";
         try {
           const sends = [];
-          if (spec.submitPerRow && context.rows?.length > 0) {
+          if (!own && spec.submitPerRow && context.rows?.length > 0) {
             for (const row of context.rows) {
               const rowCtx = { ...context, row };
               const perRowData = resolveObject(spec.rowData ?? {}, rowCtx);
-              sends.push(client.send(svc, { ...data, ...perRowData }, { op: spec.submit.op }));
+              sends.push(client.send(svc, { ...data, ...perRowData }, { op }));
             }
           } else {
-            sends.push(client.send(svc, data, { op: spec.submit.op }));
+            sends.push(client.send(svc, payload, { op }));
           }
-          const timeout = spec.submit?.timeout ?? 5000;
+          const timeout = own?.timeout ?? spec.submit?.timeout ?? 5000;
           const withTimeout = (p) => Promise.race([
             p,
             new Promise((_, rej) => setTimeout(() => rej(new Error("Timed out")), timeout)),
@@ -918,41 +1441,32 @@ export function openDialog(spec, context, app, extra = {}) {
           if (err) {
             status.textContent = err.message || err.data?.message || "Transaction failed";
             status.className = "mkui-dialog-status mkui-dialog-status-error";
-            submitBtn.disabled = false;
-            cancelBtn.disabled = false;
+            setBusy(false);
             return;
           }
           storeRemembered();
           if (pinned) {
             status.textContent = "OK";
             status.className = "mkui-dialog-status";
-            submitBtn.disabled = false;
-            cancelBtn.disabled = false;
+            setBusy(false);
             resetForm();
+            follow(data);
           } else {
-            resolved = true;
-            ws.closeFrame(frameId);
-            cleanup();
-            resolve(data);
+            finish(btn, data);
           }
-          follow(data);
         } catch (e) {
           status.textContent = e.message || "Transaction failed";
           status.className = "mkui-dialog-status mkui-dialog-status-error";
-          submitBtn.disabled = false;
-          cancelBtn.disabled = false;
+          setBusy(false);
         }
       } else {
         storeRemembered();
         if (pinned) {
           resetForm();
+          follow(data);
         } else {
-          resolved = true;
-          ws.closeFrame(frameId);
-          cleanup();
-          resolve(data);
+          finish(btn, data);
         }
-        follow(data);
       }
     }
 

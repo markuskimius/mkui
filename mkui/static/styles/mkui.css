@@ -1721,6 +1721,125 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   font-size: 13px;
 }
 
+/* Under a modal dialog: the scrim takes every press in the workspace, and
+   the bars outside it go still. A press on the scrim nudges the dialog. */
+.mkui-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+}
+mkui-app[modal] mkui-menubar,
+mkui-app[modal] mkui-statusbar { pointer-events: none; opacity: 0.6; }
+@keyframes mkui-frame-nudge {
+  0%, 100% { transform: none; }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+.mkui-frame-nudge { animation: mkui-frame-nudge 160ms ease-in-out 2; }
+
+/* A message box: the kind's icon (or the app's image) beside what it
+   says. The text is selectable (the app shell is not) so a version or an
+   error can be copied out of it. */
+.mkui-dialog-message {
+  display: flex;
+  gap: 12px;
+  padding: 8px 6px 6px;
+  align-items: flex-start;
+}
+.mkui-dialog-message-icon { flex: none; color: var(--mkui-accent); line-height: 0; }
+.mkui-dialog-message-icon .mkui-icon { width: 28px; height: 28px; stroke-width: 1.75; }
+.mkui-dialog-message-icon img { width: 48px; height: 48px; object-fit: contain; }
+.mkui-dialog-kind-success .mkui-dialog-message-icon { color: #3a9d5d; }
+.mkui-dialog-kind-warn .mkui-dialog-message-icon { color: var(--mkui-warn); }
+.mkui-dialog-kind-danger .mkui-dialog-message-icon { color: var(--mkui-danger); }
+.mkui-dialog-message-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--mkui-fg);
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: auto;
+  overflow-wrap: anywhere;
+}
+.mkui-dialog-heading { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+.mkui-dialog-para { margin: 0 0 6px; white-space: pre-line; }
+.mkui-dialog-para:last-child { margin-bottom: 0; }
+.mkui-dialog-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+.mkui-dialog-facts dt { color: var(--mkui-fg-mute); }
+.mkui-dialog-facts dd { margin: 0; font-variant-numeric: tabular-nums; }
+.mkui-dialog-links { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 12px; }
+.mkui-dialog-links a { color: var(--mkui-accent); text-decoration: none; }
+.mkui-dialog-links a:hover,
+.mkui-dialog-links a:focus-visible { text-decoration: underline; }
+/* `details`: folded under the message; a caret, a copy button, and the
+   text in a scrolling monospace block. */
+.mkui-dialog-details { margin-top: 8px; }
+.mkui-dialog-details-head { display: flex; align-items: center; gap: 6px; }
+.mkui-dialog-details-toggle,
+.mkui-dialog-details-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  background: none;
+  border: 0;
+  border-radius: 3px;
+  color: var(--mkui-fg-mute);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mkui-dialog-details-toggle:hover,
+.mkui-dialog-details-copy:hover { color: var(--mkui-fg); background: var(--mkui-bg-hover); }
+.mkui-dialog-details-toggle:focus-visible,
+.mkui-dialog-details-copy:focus-visible { outline: 1px solid var(--mkui-accent); }
+.mkui-dialog-details-copy { visibility: hidden; }
+.mkui-dialog-details-copy .mkui-icon { width: 13px; height: 13px; }
+.mkui-dialog-details-open .mkui-dialog-details-copy { visibility: visible; }
+.mkui-dialog-details-open .mkui-dialog-caret { transform: rotate(90deg); }
+.mkui-dialog-details-text {
+  display: none;
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  max-height: 180px;
+  overflow: auto;
+  background: var(--mkui-bg-alt);
+  border: 1px solid var(--mkui-border);
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mkui-dialog-details-open .mkui-dialog-details-text { display: block; }
+
+/* "Don't ask again", under whatever the box holds. */
+.mkui-dialog-suppress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 6px 2px;
+  font-size: 12px;
+  color: var(--mkui-fg-mute);
+  cursor: pointer;
+}
+/* …lined up with the message's text when an icon stands beside it. */
+.mkui-dialog-message:has(.mkui-dialog-message-icon) ~ .mkui-dialog-suppress { margin-left: 46px; }
+.mkui-dialog-suppress input { margin: 0; accent-color: var(--mkui-accent); }
+
+.mkui-dialog-message + .mkui-dialog-field,
+.mkui-dialog-message + .mkui-dialog-row,
+.mkui-dialog-message + .mkui-dialog-section { margin-top: 6px; }
+
 .mkui-dialog-footer {
   display: flex;
   justify-content: flex-end;
@@ -1747,8 +1866,26 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   border-color: var(--mkui-accent);
 }
 .mkui-btn-primary:hover {
+  background: var(--mkui-accent);
   filter: brightness(1.15);
 }
+.mkui-btn-danger {
+  background: var(--mkui-danger);
+  color: var(--mkui-danger-fg);
+  border-color: var(--mkui-danger);
+}
+.mkui-btn-danger:hover {
+  background: var(--mkui-danger);
+  filter: brightness(1.15);
+}
+/* The footer's buttons take the keyboard, and the focused one is what
+   Enter presses: it shows however the dialog was opened (`:focus-visible`
+   stays quiet when a mouse click on a button led here). */
+.mkui-dialog-footer .mkui-btn:focus {
+  outline: 2px solid var(--mkui-accent);
+  outline-offset: 1px;
+}
+.mkui-dialog-footer .mkui-btn:disabled { opacity: 0.5; cursor: default; }
 
 .mkui-dialog-pin { opacity: 0.4; transition: transform 0.15s ease, opacity 0.15s ease; }
 .mkui-dialog-pin .mkui-icon { width: 13px; height: 13px; }

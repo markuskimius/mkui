@@ -110,6 +110,25 @@ class TestInit(unittest.TestCase):
         self.assertIn("status.message", config["auth"]["connected"])
         self.assertIn("status.message", config["auth"]["disconnected"])
 
+    def test_client_toml_has_help_about_and_asks_before_it_discards(self):
+        """A new app starts with the popups wired: Help → About fed by the
+        `app` block, and a `confirm` on the two items that throw work away."""
+        target = os.path.join(self.tmpdir, "myapp")
+        subprocess.run(["python", "-m", "mkui", "init", target], capture_output=True)
+
+        with open(os.path.join(target, "config", "client.toml"), "rb") as f:
+            config = tomllib.load(f)
+        self.assertTrue(config["app"].get("version"))
+        self.assertTrue(config["app"].get("description"))
+        items = [i for m in config["menubar"] for i in m.get("items", []) if isinstance(i, dict)]
+        by_action = {i.get("action"): i for i in items}
+        self.assertIn("dialog.about", by_action)
+        self.assertEqual([m["label"] for m in config["menubar"]][-1], "Help", "Help comes last")
+        for action in ("layout.reset", "auth.logout"):
+            confirm = by_action[action].get("confirm")
+            message = confirm if isinstance(confirm, str) else (confirm or {}).get("message")
+            self.assertTrue(message, f"{action} asks first")
+
     def test_client_toml_has_account_menu(self):
         target = os.path.join(self.tmpdir, "myapp")
         subprocess.run(["python", "-m", "mkui", "init", target], capture_output=True)

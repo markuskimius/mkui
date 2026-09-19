@@ -678,6 +678,38 @@ class TestMenubarWiring(unittest.TestCase):
                         f"so nothing can open it",
                     )
 
+    def test_every_menu_flag_compiles(self):
+        """`disabled` / `showWhen` expressions: one that does not compile
+        warns in the console and leaves the item enabled and shown, which
+        reads as a flag that was never written. Compiled by mkio's own
+        expression language — the one the browser runs — so it needs mkio."""
+        try:
+            from mkio.expr import compile as compile_expr
+        except ImportError:
+            self.skipTest("mkio is not installed")
+        seen = 0
+        for name, client in all_clients():
+            for item in menu_items(client):
+                for key in ("disabled", "showWhen"):
+                    src = item.get(key)
+                    if not isinstance(src, str):
+                        continue
+                    seen += 1
+                    with self.subTest(example=name, item=item.get("label"), key=key):
+                        try:
+                            compile_expr(src)
+                        except Exception as e:  # ExprError
+                            self.fail(f"{name}: {item.get('label')!r} {key} = {src!r}: {e}")
+        self.assertTrue(seen, "no example shows a dynamic menu flag any more")
+
+    def test_a_disabled_title_has_something_to_explain(self):
+        for name, client in all_clients():
+            for item in menu_items(client):
+                if "disabledTitle" not in item:
+                    continue
+                with self.subTest(example=name, item=item.get("label")):
+                    self.assertIn("disabled", item, "a tooltip for an item that is never off")
+
     def test_menu_labels_are_unique(self):
         """Two dropdowns with one name is a config mistake, not a feature."""
         for name, _server, client in examples():
@@ -688,6 +720,220 @@ class TestMenubarWiring(unittest.TestCase):
                     f"{name}: duplicate menubar labels {labels}",
                 )
                 self.assertTrue(all(labels), f"{name}: a menu has no label")
+
+
+def all_clients():
+    """(name, client config) for every example with a config file — the
+    served ones (`config/client.toml`) and the static ones (`client.json`),
+    which no server-facing test above ever reads."""
+    out = [(name, client) for name, _server, client in examples()]
+    for d in sorted(p for p in EXAMPLES.iterdir() if p.is_dir()):
+        path = d / "client.json"
+        if path.exists():
+            out.append((d.name, json.loads(path.read_text())))
+    return out
+
+
+def page_actions(name):
+    """Built-ins plus what the example registers, in a script or in its page."""
+    names = set(BUILTIN_ACTIONS)
+    for path in sorted((EXAMPLES / name).rglob("*")):
+        if path.suffix in (".js", ".html"):
+            names |= set(re.findall(r'registerAction\(\s*"([^"]+)"', path.read_text()))
+    return names
+
+
+def widget_actions(client):
+    """(pane id, action) for every inline widget that fires one."""
+    out = []
+    for pid, spec in panes(client).items():
+        for w in (spec.get("widgets") if isinstance(spec, dict) else None) or []:
+            if isinstance(w, dict) and w.get("action"):
+                out.append((pid, w["action"]))
+    return out
+
+
+def dialog_refs(client):
+    """(where, name) for every dialog a config opens by name: a menu item's
+    `dialog.open`, a table button's `action.dialog`."""
+    out = []
+    for item in menu_items(client):
+        if item.get("action") != "dialog.open":
+            continue
+        args = item.get("args")
+        ref = args if isinstance(args, str) else (args or {}).get("dialog")
+        if isinstance(ref, str):
+            out.append((f"menu item {item.get('label')!r}", ref))
+    for pid, spec in panes(client).items():
+        for btn in (spec.get("buttons") if isinstance(spec, dict) else None) or []:
+            act = btn.get("action")
+            if isinstance(act, dict) and isinstance(act.get("dialog"), str):
+                out.append((f"{pid}'s {btn.get('label')!r} button", act["dialog"]))
+    return out
+
+
+def suppress_keys(node):
+    """Every `suppress` key anywhere in a config (a string, or `{ key }`)."""
+    out = set()
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "suppress" and isinstance(v, str):
+                out.add(v)
+            elif k == "suppress" and isinstance(v, dict) and isinstance(v.get("key"), str):
+                out.add(v["key"])
+            else:
+                out |= suppress_keys(v)
+    elif isinstance(node, list):
+        for v in node:
+            out |= suppress_keys(v)
+    return out
+
+
+def dialog_buttons(spec):
+    return [b for b in spec.get("buttons") or [] if isinstance(b, dict)]
+
+
+class TestDialogWiring(unittest.TestCase):
+    """Dialogs a config opens by name, and the message boxes it builds.
+
+    An unknown dialog name warns in the console and opens nothing; an unknown
+    action on a message box's button closes the box and does nothing. `demo.about`
+    sat in the standalone example's Help menu for exactly that reason — nothing
+    registered it, and nothing read `client.json` to notice.
+    """
+
+    def test_the_examples_open_dialogs_by_name(self):
+        """Guards the rest of this class against passing vacuously."""
+        self.assertTrue([r for _n, c in all_clients() for r in dialog_refs(c)])
+        self.assertTrue([n for n, _c in all_clients() if n == "standalone-json"])
+
+    def test_every_named_dialog_exists(self):
+        for name, client in all_clients():
+            known = set(client.get("dialogs", {}))
+            for where, ref in dialog_refs(client):
+                with self.subTest(example=name, where=where):
+                    self.assertIn(
+                        ref, known,
+                        f"{name}: {where} opens dialog {ref!r}, "
+                        f"which no [dialogs.*] declares",
+                    )
+
+    def test_every_declared_dialog_is_opened_by_something(self):
+        for name, client in all_clients():
+            used = {ref for _where, ref in dialog_refs(client)}
+            for did in client.get("dialogs", {}):
+                with self.subTest(example=name, dialog=did):
+                    self.assertIn(did, used, f"{name}: nothing opens [dialogs.{did}]")
+
+    def test_every_action_in_a_static_example_is_registered(self):
+        """The menu and widget actions of the `client.json` examples; the
+        served ones are covered by TestMenubarWiring."""
+        seen = 0
+        for name, client in all_clients():
+            known = page_actions(name)
+            fired = [(f"menu item {i.get('label')!r}", i.get("action")) for i in menu_items(client)]
+            fired += [(f"{pid}'s widget", a) for pid, a in widget_actions(client)]
+            for where, action in fired:
+                if action is None:
+                    continue
+                seen += 1
+                with self.subTest(example=name, where=where):
+                    self.assertIn(
+                        action, known,
+                        f"{name}: {where} fires {action!r}, which nothing registers",
+                    )
+        self.assertTrue(seen)
+
+    def test_every_dialog_button_action_is_registered(self):
+        for name, client in all_clients():
+            known = page_actions(name)
+            for did, spec in client.get("dialogs", {}).items():
+                for btn in dialog_buttons(spec):
+                    with self.subTest(example=name, dialog=did, button=btn.get("label")):
+                        if btn.get("action") is not None:
+                            self.assertIn(btn["action"], known)
+
+    def test_a_dialog_with_buttons_has_a_way_out(self):
+        """Escape and × are the `cancel` button; without one a dismissal
+        still resolves, but nothing in the footer says so."""
+        for name, client in all_clients():
+            for did, spec in client.get("dialogs", {}).items():
+                buttons = dialog_buttons(spec)
+                if not buttons:
+                    continue
+                with self.subTest(example=name, dialog=did):
+                    self.assertEqual(
+                        len([b for b in buttons if b.get("cancel") is True]), 1,
+                        f"{name}: [dialogs.{did}] needs exactly one cancel button",
+                    )
+
+    def test_every_dialog_submit_names_a_real_service_and_op(self):
+        for name, server, client in examples():
+            for did, spec in client.get("dialogs", {}).items():
+                submit = spec.get("submit") or {}
+                if not submit.get("service"):
+                    continue
+                # A button's `op` stands in for `submit.op` when it submits.
+                ops = {b["op"] for b in dialog_buttons(spec) if b.get("op")}
+                if submit.get("op") or not ops:
+                    ops.add(submit.get("op"))
+                for op in sorted(ops, key=str):
+                    with self.subTest(example=name, dialog=did, op=op):
+                        self.assertTrue(
+                            op_types(server, submit["service"], op),
+                            f"{name}: [dialogs.{did}] submits {op!r} to "
+                            f"{submit['service']!r}, which server.toml does not define",
+                        )
+
+    def test_every_pushed_submit_names_a_real_service_and_op(self):
+        """control.py pushes questions whose answer is a transaction; the
+        `{"service": …, "op": …}` it names is a promise like any other."""
+        seen = 0
+        for name, server, _client in examples():
+            script = EXAMPLES / name / "control.py"
+            if not script.exists():
+                continue
+            for svc, op in re.findall(r'"service":\s*"([^"]+)",\s*"op":\s*"([^"]+)"', script.read_text()):
+                seen += 1
+                with self.subTest(example=name, service=svc, op=op):
+                    self.assertTrue(
+                        op_types(server, svc, op),
+                        f"{name}: control.py submits {op!r} to {svc!r}, "
+                        f"which server.toml does not define",
+                    )
+        self.assertTrue(seen, "no control.py pushes a question any more")
+
+    def test_a_suppress_key_can_be_reset_from_a_menu(self):
+        """A "Don't ask again" nobody can take back is a trap: every
+        `suppress` key needs a `dialog.resetSuppressed` item that covers it."""
+        seen = 0
+        for name, client in all_clients():
+            resets = [i.get("args") for i in menu_items(client) if i.get("action") == "dialog.resetSuppressed"]
+            for key in sorted(suppress_keys(client)):
+                seen += 1
+                with self.subTest(example=name, key=key):
+                    self.assertTrue(
+                        any(r is None or r == key for r in resets),
+                        f"{name}: nothing resets the suppressed answer {key!r}",
+                    )
+        self.assertTrue(seen, "no example shows `suppress` any more")
+
+    def test_a_confirm_is_a_message_or_a_table(self):
+        for name, client in all_clients():
+            asking = list(menu_items(client))
+            for spec in panes(client).values():
+                if isinstance(spec, dict):
+                    asking += (spec.get("buttons") or []) + (spec.get("widgets") or [])
+            for item in asking:
+                if not isinstance(item, dict) or "confirm" not in item:
+                    continue
+                with self.subTest(example=name, item=item.get("label")):
+                    c = item["confirm"]
+                    self.assertTrue(
+                        isinstance(c, str) or (isinstance(c, dict) and c.get("message")),
+                        f"{name}: {item.get('label')!r} has a confirm with no message",
+                    )
+                    self.assertIsNotNone(item.get("action"), "a confirm gates an action")
 
 
 if __name__ == "__main__":

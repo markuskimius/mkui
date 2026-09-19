@@ -412,11 +412,30 @@ Item keys:
 | `sep` | boolean | `true` renders a horizontal separator line |
 | `windows` | boolean | `true` expands into one `pane.show` entry per open pane |
 | `layouts` | boolean | `true` makes this a submenu of the saved layouts (see [Layouts](#layouts)) |
-| `disabled` | boolean | `true` renders an inert, muted entry |
+| `disabled` | boolean / expression | Renders an inert, muted entry: `true`, or an expression over the menu scope (below) — `disabled = "!pane.can.copy"`. A submenu with nothing live in it greys out by itself |
+| `disabledTitle` | string | Tooltip of the item while it is disabled, saying why |
+| `showWhen` | boolean / expression | Hides the item while false — `showWhen = "state.auth.role == 'admin'"`. Separators left leading, trailing or doubled by hidden items are dropped, and a submenu with nothing shown goes with them |
+| `confirm` | string / object | Ask before firing `action`: a message, or `{ message, title, kind, ok, cancel }` — see [Message boxes](#message-boxes) |
 | `shortcut` | string | Right-aligned shortcut hint, e.g. `"mod+C"` — `mod` renders as ⌘ on Apple platforms and Ctrl elsewhere (display only; handlers accept either modifier everywhere) |
 
 Any item with an `items` array is a submenu; submenus nest arbitrarily.
 Leaf items (no `items`) fire `action` on click via `app.fireAction()`.
+
+**The menu scope.** `disabled` and `showWhen` expressions are read each
+time a menu opens, again at the click, and — for the app state they read
+— while the menu stays open, so an item greys out under the pointer when
+the connection drops. They see:
+
+| Name | |
+|---|---|
+| `state` | The app state: `state.mkio.connected`, `state.auth.role`, `state.dialog.suppressed['key']`, your own paths |
+| `app` | The config's `app` block |
+| `pane` | The focused frame's active pane — `{ id, type, title, can }` — or `NULL` with nothing focused. `can` is the edit actions that pane answers: `can.copy`, `can.selectAll`, `can.find`, `can.undo`, `can.redo`, so `disabled = "!pane.can.find"` greys Find… out over a pane that has no find |
+| `selection` | That pane's selection, `{ count, focused }` — the rows it implies, and whether a cursor row stands — or `NULL` for a pane with nothing to select |
+| `panes` | The ids of the panes open in a frame: `LEN(panes) < 2`, `'orders' IN panes` |
+
+An expression that does not compile warns once in the console and leaves
+the item enabled and shown.
 
 **Built-in actions:** `app.quit`, `pane.show` (takes a pane ID as
 `args` — switches to that pane's tab and raises its frame, or opens a
@@ -443,8 +462,10 @@ primary key; an empty list clears the selection, `focus = false` selects
 without moving the cursor; it returns which keys it took), `table.link` (`args
 = { pane = "<id>", link = { broadcast, listen, broadcasting, listening },
 merge = false }` — or those four keys flat — configures a table's links,
-see Table linking; no link clears them), and the `layout.*`
-actions (`save`, `restore`, `reset` — see [Layouts](#layouts)).
+see Table linking; no link clears them), the `layout.*`
+actions (`save`, `restore`, `reset` — see [Layouts](#layouts)), and the
+`dialog.*` actions (`open`, `alert`, `confirm`, `about` — see
+[Message boxes](#message-boxes)).
 Register custom actions with `app.registerAction(name, fn)`.
 
 A typical Edit menu:
@@ -480,6 +501,131 @@ Tabs can be renamed in place: ctrl+click (or cmd+click on macOS) a tab,
 edit the title, and press Enter (Escape cancels). The new title is
 stored on the pane spec, so tab bars and the Window menu both reflect
 it.
+
+## Message boxes
+
+A popup that says something and takes an answer — an About box, a notice,
+an "are you sure?" — is a [dialog](#built-in-widgets-and-pane-types-v1)
+with a `message` and its own `buttons`, and four actions open one from a
+menu item, a button, or the [control channel](#driving-the-app-from-python):
+
+```toml
+[[menubar]]
+label = "Help"
+items = [
+  { label = "Keyboard Shortcuts", action = "dialog.open", args = "shortcuts" },
+  { label = "About", action = "dialog.about" },
+]
+
+[[menubar]]
+label = "Layout"
+items = [
+  { label = "Reset to Default…", action = "layout.reset", confirm = "Return every window to its default place?" },
+]
+```
+
+| Action | `args` | Opens |
+|---|---|---|
+| `dialog.about` | — | The About box, built from the `app` block (below) |
+| `dialog.alert` | a message, or `{ message, title, kind, ok, details, timeout, suppress, id }` | One OK button; resolves once acknowledged |
+| `dialog.confirm` | a message, or `{ message, title, kind, ok, cancel, then = { action, args }, submit = { service, op, data }, arm, enable, details, suppress, modal, fields }` | Cancel / OK, modal; `then` fires on OK only |
+| `dialog.resetSuppressed` | a `suppress` key, or nothing for all of them | Nothing: forgets "Don't ask again" answers (below), and says so in `status.message` for a few seconds — "Will ask again (1 remembered answer forgotten)", or that there was nothing to reset — since nothing else changes until a box next asks |
+| `dialog.open` | a name under the top-level `dialogs`, or `{ dialog = "<name>" \| { …spec }, context = { … } }` | Any dialog — a message box or a form — from a menu |
+
+**`confirm`** gates an action behind a confirm titled by what carries it
+— a menu item, an `mkio-table` toolbar button, a `button` widget:
+`confirm = "Quit?"`, or a table with any of `dialog.confirm`'s keys,
+`confirm = { message, kind = "danger", ok = "Delete", arm = 2 }`. Anything
+but OK fires nothing. On a table button the message sees the button's
+scope — `"Cancel ${selection.count} order(s)?"`, `details = "${JOIN(MAP(rows,
+r -> STR(r.id)), ', ')}"` — and the action runs over the rows that were
+asked about, whatever has been selected since.
+
+**About.** `dialog.about` needs no configuration: it shows `app.title`
+and, when the `app` block has them, `version`, `description`,
+`copyright`, `icon` (an image URL, in place of the info icon) and `links`
+(`[{ label, href }]`), over the lines a bug report wants, kept current
+while the box is open — the mkio
+server's name and version, the mkio library's, the connection, the
+logged-in user and role, mkui's own version — each shown only when
+known. **Copy details** puts all of it on the clipboard. `[app.about]`
+overrides any part (`title`, `heading`, `message`, `image`, `links`,
+`width`); its `facts = [{ label, value }]` add lines ahead of the
+built-in ones, and `builtins = false` drops those.
+
+**The spec.** A message box is a dialog spec, under `[dialogs.<name>]` or
+inline, with any of:
+
+| Key | Description |
+|---|---|
+| `message` | What it says: a `${…}` template, or a list of them, one paragraph each. A newline breaks the line; a [rich](#expressions) value renders as one |
+| `heading` | A larger line over the message |
+| `kind` | `info`, `success`, `warn`, `danger` or `question`: the icon and its colour. `warn` and `danger` announce themselves to a screen reader as alerts |
+| `image` | An image URL shown in place of the kind's icon |
+| `facts` | `[{ label, value, showWhen }]` — a two-column list under the message; a line whose value comes out blank is dropped |
+| `links` | `[{ label, href }]` — opened in a new tab; `http(s)`, `mailto` and same-site addresses only |
+| `details` | The long part — a stack trace, the rows a confirm is about — folded under the message behind a caret, with a copy button of its own: a template, or `{ text, label = "Details", open = false }`. Blank text shows nothing |
+| `suppress` | `"key"` (or `{ key, label }`) adds a **Don't ask again** checkbox to a box with `buttons`. Ticked, the answer is kept in the browser's localStorage and given at once next time, without anything opening — its button's `action` and `set` still fire. Cancelling is never remembered, except by a notice whose only button it is. `dialog.resetSuppressed` forgets it; give users a menu item for that. The remembered answers are mirrored in app state at `dialog.suppressed` (`{ key: buttonId }`, kept current across tabs), so that item can be off until there is something to take back: `disabled = "state.dialog.suppressed['orders.fill'] == NULL"` |
+| `timeout` | Seconds until the default button presses itself (with none, the box is dismissed), counted down in its label — for a notice that should not wait for anyone. A key or a click in the box calls it off |
+| `modal` | `true` dims the workspace under the dialog and keeps the pointer off it, the menubar and the statusbar until it is answered. `dialog.confirm` and every `confirm` key default to it; nothing else does |
+| `id` | Opening a dialog whose `id` is already open replaces that one where it stands instead of stacking a second — for a notice a server may push again |
+| `buttons` | The footer, in place of Cancel / OK (below) |
+| `width`, `height` | Pixels. A message box opens at its content's height; a form's default is 400 |
+| `pin` | `false` drops the pin button from a form (a dialog with `buttons` never has one) |
+
+Templates see the dialog's fields, `state`, `app` (the config's `app`
+block) and whatever `context` the opener added, and follow the form as it
+is edited, like every other template in a dialog — and the app: a dialog
+re-evaluates when a `state.…` path it reads changes, so an open About box
+shows the connection dropping and a button's `enable = "state.mkio.connected"`
+shuts it. `fields` still work —
+a confirm that asks for a reason is a message, a `textarea` and two
+buttons.
+
+**Buttons.** `buttons = ["Save", …]` or a list of tables:
+
+| Key | Description |
+|---|---|
+| `label`, `id` | The text, and the name the answer carries — the label in lower case when omitted |
+| `kind` | `primary`, `danger`, or plain. With none given anywhere, the default button is `primary` |
+| `cancel` | `true` on the one button that dismisses: Escape and the frame's × are this button |
+| `default` | `true` on the button Enter presses and the focus starts on. Without it: the first button that neither cancels nor is `danger`. In a `kind = "danger"` dialog the default is the cancel button, and a `danger` button is never the default — Enter must not be how something is destroyed |
+| `submit` | `false` answers with the form as it stands, skipping validation and `submit.service` — a "Don't Save" |
+| `op` | Stands in for `submit.op` when this button submits — "Save" and "Save & Fill" over one service |
+| `submit = { service, op, data }` | This button's own transaction, in place of the dialog's `submit`: the fields plus `data` (templates over the fields, `button` and the context). How a box pushed from a server ([`control.confirm`](#driving-the-app-from-python)) answers it; an error stays in the box |
+| `enable` | A boolean or an expression over the form; while false the button is shut, and Enter passes it by. `enable = "typed == row.name"` beside a `typed` field is type-to-confirm |
+| `arm` | Seconds the button stays shut after the box opens, counting down in its label — so the double-click that opened a `danger` confirm cannot also answer it |
+| `copy` | `true` copies what the box says (title, message, facts, links) and leaves it open; a template copies its result |
+| `action`, `args`, `set` | Fired once the box has closed: an [action](#menubar), and/or `set = { "state.path" = value }` written to app state — both resolved against the submitted fields, `button` (the id) and the opening context. On the `cancel` button they run for Escape and × too |
+
+Keys: Enter presses the default button (ctrl/cmd+Enter from anywhere),
+Escape the cancel button, ←/→ walk the footer, Tab stays inside the
+dialog, and Ctrl/Cmd+C with nothing selected copies the whole message —
+its text is selectable too. When the box closes the focus returns to
+where it was, and the frame under it is the focused frame again.
+
+**From JavaScript** (library mode, a custom action):
+
+```js
+if (await app.confirm("Close 3 scratch pads?", { kind: "danger", ok: "Close" })) closeThem();
+await app.alert("Saved.", { kind: "success" });
+
+const res = await app.dialog({            // or the name of one under `dialogs`
+  message: "Save your notes before closing?",
+  fields: [{ name: "name", label: "Save as", required: true }],
+  buttons: [{ label: "Cancel", cancel: true }, { id: "discard", label: "Don't Save", submit: false }, { id: "save", label: "Save" }],
+});
+// null when dismissed, else { button: "save", data: { name: "…" } }
+```
+
+`app.dialog(spec, context)` resolves with the submitted fields for a
+plain form, `{ button, data }` when the spec has `buttons`, and `null`
+when dismissed. `openDialog(spec, context, app, extra)` is exported for
+callers that bring their own mkio client or storage.
+
+A table button opens a named dialog the same way — `action = { type =
+"dialog", dialog = "<name>" }` — so one `[dialogs.new-order]` can serve a
+toolbar button (with the selection as its context) and a menu item.
 
 ## Layouts
 
@@ -803,6 +949,7 @@ root.workspace.addFrame({ x: 0.5, y: 0.1, w: 0.4, h: 0.4,
   - **As of a moment** — `history.asOf` (a reqrep service name, or `{ service, param }`) puts an *As of…* button on a query table's toolbar. Pick a time and the table shows what it held then: for each record, the newest version recorded at or before the cutoff, which the service reads from the history table in one indexed range scan (the example's `order_as_of` is the SQL). The view is read-only — the live subscription is dropped while it is up, so nothing arrives to overwrite what you are reading, every toolbar button is shut because a historical row is not one to act on, and the strip says `as at 14:32 · read-only` until *Live* re-subscribes. The button reads as pressed while the strip is up; its ×, Escape in the time field, or the button again put it away, going live if a view is up. Worth knowing what it reconstructs: recorded versions, which is not quite what the table showed at the time, because undo and redo move a record's cursor without recording anything — a row undone this afternoon still reads, as of this morning, as whatever its newest version by then was.
   - `mkio-history` — one record's recorded versions **as an ordinary table**, with a panel under it for what changed, for a table whose rows mkio [versions](../mkio/README.md#versioned-tables). The versions are rows like any other, so they come with everything a table has: sort them, filter them, pick the columns, find in them, select and copy them. They arrive oldest first — the chain in the order it happened, which is the direction the diff names it in — and a click on any header re-sorts them. The pane points that table at the `feed` service and narrows it, server-side, to the record — and re-aims the same table as you move from record to record, so the columns, sort and filters you set stay where you put them. A `history` block on the table pane says where its history lives — mkio advertises no history table and writes no service for one, so an application configures the services it wants exposed: `versions` (a reqrep service returning one record's chain, keyed by the record's primary key), optionally `state` (`{ current, top }` — which version the row sits on, for a service that does not pass `_mkio_version` through), `feed` (a query or stream service over the history table: the audit tape), `undo` / `redo` (a transaction service and its op names, for the phase that uses them), `key` (the primary key columns — asked of the server when omitted), `columns` (which fields to diff), `fields` (where a service renamed a meta column), and `table` (the base table, which the client checks against the server's list of versioned ones and warns about when it does not match). The bar between the table and the panel drags, as the ones between panes do, so either can have the room. The pane follows the table it was opened from, and the panel follows the versions table's own selection: one version diffs against its predecessor, a range diffs its ends, and the version the record currently sits on is what it opens on and selects — not the newest recorded, which for an undone record is the redo branch rather than its present. Unchanged fields are hidden until asked for. The panel says where the record stands in its chain — `v2 of 3` — beside what it is diffing, and the record's own name is the tab's, so several history windows tell themselves apart. A **Blame** view beside the diff reads the same chain the other way: one line per field with its value and the version that last set it — `qty 750 · v2 · alice · 14:31` — so "who last touched this, and when" is one click rather than a walk through the versions; clicking a line selects the version that set it in the table above, and a field never set says so. Values render through the table's own `labels` and `display` templates, so a badge in a cell is a badge in the diff, The view controls — *Diff*, *Blame* and *Show unchanged* — sit in the versions table's toolbar, the row between the tab and the table where a table's buttons go; *Copy* sits with what it copies, at the right of the panel's own header, and takes whichever view is showing as TSV and HTML — the lines it took pulse, the button says *Copied*, and the statusbar says how many fields before putting back what it was showing; a copy that the browser refuses says *Failed* rather than pretending. Ctrl/Cmd+C belongs to the table above and copies the version rows. Open it with the `table.history` action (`{ pane, keys }` — `keys` selects that record first, so a menu item can name the record it means) or `workspace.showPaneHistory(paneId, keys)`; one history pane per table, re-pointed rather than re-opened, and it follows the selection as it moves. Which record it is about is the same `record` block a detail window takes (see [Detail windows](#detail-windows)): configured with `record.listen` it follows a broadcast name instead of a table's selection — and then needs no table pane open at all — and its toolbar carries the same pin, which freezes it on one record while you go on clicking elsewhere.
 - Dialogs:
+  - **Message boxes** — a dialog with a `message` and its own `buttons` is an alert, a confirm, an About box; `dialog.open` / `dialog.alert` / `dialog.confirm` / `dialog.about` open one from a menu and `app.alert` / `app.confirm` / `app.dialog` from code. See [Message boxes](#message-boxes).
   - `openDialog(spec, context, app, extra)` — config-driven modal dialog with typed fields (text, number, select, checkbox, textarea, date, time, datetime, readonly, hidden), validation, async service-backed options (`optionsFrom`), and RPC submission with error handling. The dialog floats as a non-docking frame whose title text doubles as a drag handle; if the rendered form is taller than the initial frame, the frame grows to fit it (capped at 90% of the workspace) and re-centers. A **pin button** (SVG pin icon) in the titlebar keeps the dialog open after successful submission — when active, the pin rotates 45° counterclockwise with a smooth transition; the form resets to defaults only after the server confirms success; errors leave the form intact for retry. `pin = "keep"` on the spec makes a pinned submit hold the entered values instead (and their edits, so a compute stays off them) for the next one, clearing errors and re-baselining what counts as changed; a field's own `pin: "reset"` still returns to its default, for a save-as name that must not re-save. **Keys:** Enter submits from a single-line field, ctrl/cmd+Enter submits from anywhere in the form — a textarea, where Enter is a newline, a select, a section head — and Escape cancels, from a field or with the dialog merely the focused frame, unless it is pinned: a pinned dialog ignores Escape (the pin says stay open; × still closes it); the OK button's tooltip shows the shortcut in the platform's own spelling. `submit.then = { action, args }` fires one [action](#menubar) once a submit has gone through — `table.select` on the pane that owns what the dialog just wrote, so the workspace follows the new record and the panes linked to that one follow with it, wherever it was filed — with `args` resolved against the submitted fields over the opening context (`keys = ["${task_id}"]` names the record the server received); a refused submit fires nothing, a pinned dialog fires on every confirmation.
   - **The form is live.** Every edit re-evaluates the spec against the current field values, so a dialog's shape follows what is typed into it. `showWhen = "<expr>"` shows or hides a field, a `{ row }`, a `{ group }` — the header and every item under it, up to the next header — or a single select option; `required`, `disabled`, and `readonly` take a boolean or an expression; `label`, `placeholder`, the group text, the `title`, the `footer.note`, `invalidMessage`, and `min`/`max`/`step`/`pattern` are `${...}` templates; `options` may be an expression yielding the list (strings, or `{ value, label }`); and `optionsFrom` re-fetches whenever a `${field.X}` parameter changes, keeping the value the field was given before the list arrived — a default, a compute, another select's `fill` — when the list holds it. `fill = { field = "column", … }` on an `optionsFrom` select copies the picked row's columns into the named fields — a Template dropdown filling an order form from a saved row — skipping blank columns, so a template can leave a field to the user; a filled field counts as edited, so a `compute` on it yields to the pick, and a later pick overrides what was typed. `remember = "key"` keeps a field across openings in the browser's localStorage: a confirmed submit stores its value and the next opening starts from it — a service-backed select once its options hold the value, running its `fill` as a pick would; `remember = { key, value = "<expr>" }` stores the expression's result instead, so a Template pick can be remembered as the name typed into a Save-as field when there is one. `value` is a field's one-time default; `compute = "<expr>"` gives it a value that recalculates on every change — always for a `hidden` or `readonly` field (a `_`-prefixed hidden field is a scratch value that is never submitted, the place for an intermediate result), and for an editable field only until the user types in it, so a suggested default yields to a manual override and returns after a pinned dialog resets. Computed fields may build on each other in any order; a cycle stops after a few rounds with one console warning. Number fields read as numbers in expressions, an empty one as `NULL`, so `(qty ?? 0) > 0` guards a blank. The field set and each field's type stay as declared — declare the superset and gate the variants with `showWhen`. **Sections** — `{ group = "Execution", collapsible = true, collapsed = true }` folds the fields under a header away, for options that are rarely touched or that belong together: the head wears a caret and takes a click, Enter or Space (alt/option-click folds or unfolds every section at once), `collapsed` — a boolean or an expression read once at open — picks where it starts, `remember = "key"` keeps the fold in the browser's localStorage as it changes, and a folded head shows how many of its fields have been edited since the dialog opened (or `summary = "${tif} · ${note}"`, a template, in its place) so a closed section never hides a change. Folded fields are still part of the form — they submit, and a validation error under a folded head unfolds it — and unfolding grows the frame downward from its title bar (the first paint centers it; after that the top stays where it is, or where it was dragged, and rises only by what would fall off the bottom); a plain `{ group }` without `collapsible` stays the static header it always was. A header claims every item after it up to the next header, so a section normally runs to the end of the form; give it `fields = [...]` of its own and it holds those alone — `{ group = "Advanced", collapsible = true, collapsed = true, fields = [...] }` followed by a summary line keeps the line in view under the folded section — and what follows it returns to the enclosing scope, the root or the open section around it. A field needs no `name` when nothing reads or submits it — a `readonly` confirmation line such as `{ type = "readonly", value = "Delete ${row.id}?" }` — and its `value`, `compute`, and `showWhen` still apply. **Temporal fields** use the browser's native pickers and hold canonical values: a `date` is `YYYY-MM-DD`, a `time` is `HH:MM:SS`, and a `datetime` is an ISO-8601 UTC instant (`2026-09-12T21:00:00Z`, with milliseconds when the picker gave them) — the picker shows the browser's local wall clock and the dialog converts, since only the browser knows its zone. `step = 1` on a `datetime` lets the picker take seconds. `time = "optional"` on a `datetime` puts a date picker beside a time picker under the one name: with the time blank the field holds and submits the bare date (`2026-09-12`), with both it submits the instant, so one field can mean "that day" or "that moment" and the server tells which by the shape. A default (or a compute or a reset) is an ISO string or mkio ref, naive meaning UTC as everywhere in mkui; `parse = "%Y%m%d-%H:%M:%S"` (or a list of formats tried in turn, read in `tz`, UTC by default) prefills from a value kept in another format, so a row's own stamp can seed the picker. What the server receives is one shape whatever the browser's zone; formatting it for a wire is the server's job.
 
@@ -839,6 +986,7 @@ the pane. Each surface supplies its own scope:
 | `values.<col>`, `styles.<col>`, `display.<col>` | `value` (the cell's value — raw for `values`, derived for `styles`/`display`), `row`, `col`, `state`, then the row's fields by name |
 | `rowStyle` | `row`, `state`, then the row's fields |
 | `enable.when` | `rows` (the rows the selection implies), `row` (the first), `cells`, `selection` (`count`, `rowCount`, `cellCount`, `unit`), `connected`, `state` |
+| menubar item `disabled`, `showWhen` | `state`, `app`, `pane` (`id`, `type`, `title`, `can`), `selection` (`count`, `focused`), `panes` — see [Menubar](#menubar) |
 | dialog `showWhen`, `compute`, `required`/`disabled`/`readonly`, `options`, field `value`, `label`, `title`, `footer.note`, … | the form's fields by name (number fields as numbers, blank → `NULL`), `form`, plus the opening context (`row`, `rows`, `cell`, `cells`, `selection`, `state`) |
 | action `data`, `dialogService.data`, `rowData` | `row`, `rows`, `cell`, `cells`, `selection`, `state` (raw row fields — never derived values) |
 | statusbar / text widget `text` | `state` — the widget re-renders when any `state.<path>` it reads changes |
@@ -979,6 +1127,9 @@ async def on_started():
     await control.record("order_detail", {"id": 4711})        # or just: show this one
     await control.send("table.filter", {"pane": "orders", "filters": {"status": ["open"]}})
     await control.send("pane.show", "executions", user="mark")  # one login's tabs only
+    await control.alert("Market closes in 5 minutes", kind="warn", id="close")   # a notice
+    await control.confirm("Roll your day orders to tomorrow?", ok="Roll", user="ann",
+                          submit={"service": "orders", "op": "roll", "data": {"desk": "fx"}})
 
 app.on_startup(on_started)
 app.run()
@@ -991,7 +1142,18 @@ configuration, so `link(pane, merge=False)` clears it);
 `record(pane, key)` shows one record in a detail window and
 `record(pane, listen=/follow=/state=/pin=/retain=/title=)` says where
 that window gets its records; `subscribers`
-and `users()` say who is listening. Nothing is queued for a tab that
+and `users()` say who is listening. `alert(message, title=, kind=,
+details=, timeout=, id=, suppress=)` puts a [message box](#message-boxes)
+on screen — give one you may push again an `id`, and the second replaces
+the first where it stands instead of stacking on it. `confirm(message,
+submit=, then=, ok=, cancel=, kind=, arm=, details=, timeout=, id=,
+modal=)` asks a question. A push has no reply, so the answer comes back
+the way everything else reaches a server: `submit = {"service", "op",
+"data"}` is the transaction the OK button sends — refused, the box stays
+open and says why; cancelled, nothing is sent — and `then = {"action",
+"args"}` fires an action in that browser on OK. `dialog(spec_or_name,
+context=)` opens anything else: a form from the client's `dialogs`, or a
+whole spec whose buttons each carry a `submit` of their own. Nothing is queued for a tab that
 connects later — push from an `on_connect` hook, or whenever your own
 state changes. The service's default config is `{ protocol = "subpub",
 access = "auth" }`; pass `config={"access": "open"}` to `install` for
@@ -1010,6 +1172,21 @@ python3 -m http.server 8000
 # http://localhost:8000/examples/library-js/
 ```
 
+Both show message boxes. The standalone one does it from JSON alone:
+Help → About (`dialog.about`, reading the `app` block), File → Welcome…
+(a named dialog under `dialogs`, one of its buttons firing an action),
+File → Show a notice (`dialog.alert` with a `timeout` that closes it and a
+`suppress` box that stops it coming back; Show Notices Again, which a
+`showWhen` keeps out of the menu until then, is `dialog.resetSuppressed`), File → Quit (a menu item's `confirm`, modal like
+every confirm), and the Console pane's Clear button — a `danger` confirm
+whose default is Cancel and whose red button is `arm`ed for two seconds,
+with `details` folded under it, chained to a notice through `then`. The library one does
+it from code: App → Close Scratch Pads… is `app.confirm` and `app.alert`,
+App → Save Changes… an `app.dialog` with a field and three buttons whose
+answer lands in the statusbar, and App → Simulate an Error an `app.alert`
+with the stack under `details` and an `id`, so a second failure replaces
+the box instead of stacking another.
+
 The mkio-table example requires [mkio](https://pypi.org/project/mkio/) 1.x
 (its `orders` table is versioned):
 
@@ -1023,6 +1200,23 @@ mkui serve . -p 9000   # …or on another port: the page's `url = "/ws"` follows
 python seed.py 9000    # the seeder takes the port (or host:port, or a ws:// URL)
 ```
 
+Its Help menu has the About box — here with the server's name and version,
+mkio's, and the connection beside the app's own lines, and **Copy details**
+for a bug report — and Keyboard Shortcuts, a `[dialogs.shortcuts]` message
+box with a link and a button that opens Find. Orders → New Order… opens
+the form behind the All Orders toolbar's **+ New Order** by name
+(`[dialogs.new-order]`: one spec, two ways in), and Layout → Reset to
+Default… asks first. The toolbar asks too: **Cancel** is a `danger` confirm
+over the selection — modal, its red button armed for two seconds, the
+orders about to go listed under `details` — and **Fill** a plain one with
+**Don't ask again** (Help → Ask Again Before Filling takes that back).
+That item is greyed out, its tooltip saying why, until the box has been
+ticked (`disabled` reading `state.dialog.suppressed`), and the Edit and
+Record menus grey out what the focused pane cannot do (`pane.can`): focus
+Order Detail and open Edit. Orders → Cancel an Order by Id… is type-to-confirm: the red button opens
+once CANCEL is typed. Stop the server with About open and its Connection
+line changes as you watch.
+
 The history example needs [mkio](https://pypi.org/project/mkio/) 1.x — versioned tables are what it is about — and shows what one gives you:
 
 ```
@@ -1034,7 +1228,7 @@ python seed.py      # four orders: one amended and filled, one undone
 
 Its `orders` table is `versioned = true`, so mkio records every version of every row in `orders__history`, and `server.toml` writes the four services that expose it — one record's chain, where a record sits in it, the live tape, and the table as at a moment. Its `note` column is `unversioned`: a note records no version, the history pane shows no column for it, and the detail window dims its label to say so. The **Orders** pane shows `_mkio_version` beside the data and carries a `history` block naming those services; the **Audit tape** is an ordinary query pane over the history table, showing mkio's own `_mkio_op` / `_mkio_user` / `_mkio_ref` columns because it names them. Select a change on the tape and the Orders table narrows to that record (the tape broadcasts the id, the table listens); *Go to order* selects it there instead of filtering, which is what a custom action's `args` resolving against the selection is for. Record → History… opens the version timeline with its diff and blame views, Undo and Redo step the selected record along its versions with a confirmation that says what will change, and *As of…* shows the table as it stood before the seeder's edits.
 
-**All Orders** broadcasts the selected orders' `id` and `symbol`; the **Child Orders** frame listens for the id on its `parent_id` column and **Pending** for the symbol, so a selection filters both (the chips on each toolbar show and pause the links, and a saved layout keeps them). `python control.py` serves the example in place of `mkio serve` and rewires those links from Python a few seconds after a browser connects. The seeder places child orders under pending parents (and some under other children), so the **Order Tree** tab shows the same orders nested by `parent_id`: expand a parent with its caret, place a child order under the selected row with *+ Child Order*, and try the View menu's expand/collapse actions and alt/option-clicking a filter button for the scope row. The toolbar buttons show both styling forms: the **Pending** tab's Fill and Cancel wear a plain `style` map (green, and black on red in capitals) at all times, while the All Orders Cancel turns red only once a pending order is selected, through a rule conditioned on `enabled`.
+**All Orders** broadcasts the selected orders' `id` and `symbol`; the **Child Orders** frame listens for the id on its `parent_id` column and **Pending** for the symbol, so a selection filters both (the chips on each toolbar show and pause the links, and a saved layout keeps them). `python control.py` serves the example in place of `mkio serve` and rewires those links from Python a few seconds after a browser connects — then pushes a notice (`control.alert`), pushes it again under the same `id` so it replaces the first instead of stacking, and asks a question (`control.confirm`) whose **Mark** button answers with the `ack` transaction: order 1's note changes in All Orders as the box closes. The seeder places child orders under pending parents (and some under other children), so the **Order Tree** tab shows the same orders nested by `parent_id`: expand a parent with its caret, place a child order under the selected row with *+ Child Order*, and try the View menu's expand/collapse actions and alt/option-clicking a filter button for the scope row. The toolbar buttons show both styling forms: the **Pending** tab's Fill and Cancel wear a plain `style` map (green, and black on red in capitals) at all times, while the All Orders Cancel turns red only once a pending order is selected, through a rule conditioned on `enabled`.
 
 The `orders` table is `versioned = true`, so mkio records every version of every row in `orders__history`, and `server.toml` writes the four services that expose it — one record's chain, where a record sits in it, the live tape, and the table as at a moment. **All Orders** names them in a `history` block and shows `_mkio_version` beside the data, which puts *Undo*, *Redo* and *As of…* on its toolbar: filling or cancelling an order moves it to a second version, Undo steps it back with a confirmation that says what will change, and *As of…* shows the book as it stood before the seeder's last few minutes, read-only until *Live* re-subscribes. Undo, Redo and *As of…* arrive with the block; the version timeline does not, so All Orders adds a **History** button of its own beside them — a `table.history` action over one selected record — and Record → History… is the same step from the menubar. Either opens that order's version timeline with its diff and blame views. Record → Audit Tape opens a parked query pane over the history table — every recorded version, newest first, live as they land — whose *Go to order* selects the record in All Orders rather than filtering it (a key All Orders' `status` and `notional` filters hide is reported back rather than revealed). The **Order** window beside them is an `mkio-record` detail pane listening for the same `order_id` the tape broadcasts: click a change and the table narrows, the detail window fills, and its tab takes the record's name — pin it from its toolbar and it stays on that order while you keep clicking. An existing `orders.db` picks all this up on the next start: `auto_migrate = "safe"` creates the history table and records every live row as its baseline version.
 
@@ -1059,6 +1253,7 @@ mkui/                    Python package (pip install mkui)
         layouts.js       saved-layout format, validation, and the localStorage / mkio stores
         links.js         table-link hub: retained named values, queued delivery
         icons.js         SVG icon library (vendored Lucide paths)
+        dialogs.js       message-box specs: alert, confirm, About, a menu item's confirm
       components/
         app.js           <mkui-app> — the shell
         menubar.js       <mkui-menubar>
@@ -1094,7 +1289,8 @@ tests/
   copy.test.js           Clipboard grids: TSV quoting and HTML (node:test)
   timeparse.test.js      Time detection, parsing, bounds, presets (node:test)
   icons.test.js          Icon library: every name resolves to an SVG (node:test)
-  dialog.test.js         Dialog expression + submission tests (node:test)
+  dialog.test.js         Dialog expression + submission tests, message boxes and buttons (node:test)
+  popup.test.js          dialog.* action specs, App.dialog/alert/confirm, the menubar's confirm (node:test)
   auth.test.js           Authentication module + state lifecycle tests (node:test)
   expressions.test.js    Expression conformance fixtures + mkui wrapper tests (node:test)
   vendor-sync.test.js    lib/expr.js and expr_cases.json match the installed mkio (node:test)
@@ -1138,16 +1334,17 @@ The compatibility promise covers the public surface an application built
 on mkui depends on:
 
 - The client config format — the top-level keys, the pane specs and their
-  keys, the `mkio`, `auth`, `layouts`, `menubar` and `statusbar` blocks,
+  keys, the `mkio`, `auth`, `layouts`, `menubar`, `statusbar` and `dialogs` blocks,
   the expression scopes each surface evaluates in — and the meaning of
   existing keys.
 - The library-mode API exported by `src/index.js` and `src/core.js`
   (`App`, `State`, `LinkHub`, the `register*` and `get*` functions,
-  `ensureMkio`, `attachRecord` and the record subject); the built-in
+  `ensureMkio`, `attachRecord` and the record subject, `openDialog` and
+  `App`'s `dialog` / `alert` / `confirm`); the built-in
   actions (`app.*`, `pane.*`, `window.*`, `edit.*`, `table.*`, `record.*`,
-  `layout.*`, `auth.*`) and their `args`; the documented state paths
+  `layout.*`, `auth.*`, `dialog.*`) and their `args`; the documented state paths
   (`mkio.*` including `mkio.downSince` / `mkio.downFor`, `auth.*`,
-  `layouts.list`, `link.<name>`, `status.message`);
+  `layouts.list`, `link.<name>`, `status.message`, `dialog.suppressed`);
   and the pane hooks a custom pane type may implement (`_editActions`,
   `_filters`, `_sort`, `_columns`, `_link`, `_select`, `_tree`, `_source`,
   `_data`, `_toolbar`, `_record`, `_history`).

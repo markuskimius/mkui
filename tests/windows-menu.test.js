@@ -310,3 +310,85 @@ test("showPane activates the tab and marks its group active", () => {
   assert.equal(el.renders, 1);
   assert.equal(ws._focusedId, "f1");
 });
+
+// ── closeFrame hands the focus on ───────────────────────────────────
+// A closed frame cannot stay the focused one: `activePaneEl` would find
+// nothing, and Ctrl/Cmd+F, the Edit menu and a dialog button's `edit.*`
+// action would have no pane to act on until a frame was clicked.
+
+test("closing the focused frame focuses the top-most one left", () => {
+  const ws = makeWorkspace(
+    [{ id: "f1", tree: tabs("a") }, { id: "f2", tree: tabs("b") }, { id: "dlg", tree: tabs("d"), noDock: true }],
+    { a: { title: "A" }, b: { title: "B" }, d: { title: "D" } },
+  );
+  const attrs = {};
+  for (const [id, el] of ws._frameEls) {
+    Object.assign(el, { style: {}, bodyEl: { children: [] }, remove() {},
+      setAttribute(k) { (attrs[id] ??= new Set()).add(k); }, removeAttribute(k) { attrs[id]?.delete(k); } });
+  }
+  ws._paneEls = new Map([["b", { dataset: { id: "b" } }]]);
+  ws._focusedId = "dlg";
+  ws.closeFrame("dlg");
+  assert.equal(ws._focusedId, "f2");
+  assert.ok(attrs.f2.has("data-focused"));
+  assert.equal(ws.activePaneEl(), ws._paneEls.get("b"));
+
+  ws.closeFrame("f1");
+  assert.equal(ws._focusedId, "f2", "closing an unfocused frame moves nothing");
+  ws.closeFrame("f2");
+  assert.equal(ws._focusedId, null);
+});
+
+// ── The modal scrim ─────────────────────────────────────────────────
+// A `modal` frame puts `.mkui-scrim` just under itself — frames take two
+// z-steps each so it fits — and stamps `[modal]` on the app root, which
+// stills the menubar and statusbar (CSS). Closing the frame takes both away.
+
+test("a modal frame gets a scrim right under it; closing it removes the scrim", () => {
+  const ws = makeWorkspace(
+    [{ id: "f1", tree: tabs("a") }, { id: "f2", tree: tabs("b") }, { id: "dlg", tree: tabs("d"), noDock: true }],
+    { a: {}, b: {}, d: {} },
+  );
+  ws._frames[2].stayOnTop = true;
+  ws._frames[2].modal = true;
+  for (const el of ws._frameEls.values()) {
+    Object.assign(el, { style: {}, bodyEl: { children: [] }, remove() {}, setAttribute() {}, removeAttribute() {} });
+  }
+  const rootAttrs = new Set();
+  const appended = [];
+  ws.closest = () => ({ setAttribute: (k) => rootAttrs.add(k), removeAttribute: (k) => rootAttrs.delete(k) });
+  ws.appendChild = (n) => { appended.push(n); n.remove = () => appended.splice(appended.indexOf(n), 1); return n; };
+
+  ws._applyZOrder();
+  const z = (id) => ws._frameEls.get(id).style.zIndex;
+  assert.deepEqual([z("f1"), z("f2"), z("dlg")], [10, 12, 14]);
+  assert.equal(appended.length, 1);
+  assert.equal(appended[0].className, "mkui-scrim");
+  assert.equal(appended[0].style.zIndex, 13, "between the dialog and everything under it");
+  assert.ok(rootAttrs.has("modal"));
+
+  ws._applyZOrder();
+  assert.equal(appended.length, 1, "one scrim, reused");
+
+  ws.closeFrame("dlg");
+  assert.equal(appended.length, 0);
+  assert.equal(rootAttrs.has("modal"), false);
+});
+
+// ── focusInfo: what a menu's expressions know about the focus ────────
+
+test("focusInfo names the focused pane and sums up its selection", () => {
+  const ws = makeWorkspace(
+    [{ id: "f1", tree: tabs("orders", "notes") }],
+    { orders: { title: "Orders", type: "mkio-table" }, notes: { title: "Notes" } },
+  );
+  assert.equal(ws.focusInfo(), null, "nothing focused");
+  ws._focusedId = "f1";
+  ws._paneEls = new Map([
+    ["orders", { getAttribute: () => "orders", _editActions: { copy() {}, find() {}, redo: null }, _select: { get: () => ({ keys: ["1", "2"], focus: { id: 1 } }) } }],
+    ["notes", { getAttribute: () => "notes" }],
+  ]);
+  assert.deepEqual(ws.focusInfo(), { pane: { id: "orders", type: "mkio-table", title: "Orders", can: { copy: true, find: true } }, selection: { count: 2, focused: true } });
+  ws._frameEls.get("f1").tree.active = 1;
+  assert.deepEqual(ws.focusInfo(), { pane: { id: "notes", type: null, title: "Notes", can: {} }, selection: null });
+});
