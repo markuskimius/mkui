@@ -99,7 +99,7 @@ function collect() {
         // reachable through the install() handle as well
         ...matches(svcBody, /^    (?:async )?def ([a-z][a-z_]*)\(/gm).map((m) => `ControlService.${m}`),
       ]),
-      cli: uniq(matches(cli, /add_parser\("([a-z]+)"/g)),
+      cli: uniq(matches(cli, /add_parser\(\s*"([a-z]+)"/g)),
     },
   };
 }

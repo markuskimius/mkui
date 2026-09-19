@@ -49,7 +49,7 @@ Paths are under `mkui/static/src/` unless they start `mkui/`.
 
 ## Commands
 
-- `mkui serve [dir] [-p PORT]` — serve a project via mkio
+- `mkui serve [dir] [-p PORT] [-o]` — serve a project (mkio)
 - `node --test tests/*.test.js` — JS unit tests (`version.test.js` pins the four version strings; `surface.test.js` pins the public surface in `tests/surface.json`: `SURFACE_UPDATE=1` regenerates)
 - `python -m pytest tests/` — CLI, control and example-config tests (`test_examples.py` checks each `[mkio.expect]`, pane service and `history` block against its server); `python -m build && twine upload dist/*` releases
 - `examples/mkio-table`, `examples/history`: `python -m mkui serve .` + `python seed.py`; both `versioned`

@@ -382,26 +382,70 @@ def cmd_serve(args):
 
 
 def main():
+    raw = argparse.RawDescriptionHelpFormatter
     parser = argparse.ArgumentParser(
         prog="mkui",
+        formatter_class=raw,
         description="Config-driven web GUI framework — scaffold and serve projects",
+        epilog=(
+            "quick start:\n"
+            "  mkui init myapp        create a starter project in ./myapp\n"
+            "  mkui serve myapp -o    serve it and open the browser\n"
+            "\n"
+            "`mkui <command> -h` describes a command.\n"
+            "Docs: https://github.com/markuskimius/mkui"
+        ),
     )
     parser.add_argument(
         "-V", "--version", action="version", version=f"mkui {__version__}"
     )
-    sub = parser.add_subparsers(dest="command")
+    sub = parser.add_subparsers(dest="command", title="commands", metavar="<command>")
 
-    p_init = sub.add_parser("init", help="Create a starter project")
+    p_init = sub.add_parser(
+        "init",
+        formatter_class=raw,
+        help="Create a starter project",
+        description=(
+            "Create a starter project: a working app to edit, with two live\n"
+            "tables and a menubar.\n"
+            "\n"
+            "Runs `mkio init`, so mkio must be installed (pip install 'mkui[mkio]').\n"
+            "Writes into dir, creating it if needed:\n"
+            "  server.toml          the mkio server: tables, services, routing\n"
+            "  config/client.toml   the mkui app: menubar, panes, frames\n"
+            "  static/index.html    the page hosting <mkui-app>\n"
+            "\n"
+            "Refuses when config/client.toml already exists."
+        ),
+        epilog="Next: mkui serve [dir]",
+    )
     p_init.add_argument(
         "dir", nargs="?", default=".", help="target directory (default: .)"
     )
 
-    p_serve = sub.add_parser("serve", help="Serve a project directory")
+    p_serve = sub.add_parser(
+        "serve",
+        formatter_class=raw,
+        help="Serve a project directory",
+        description=(
+            "Serve a project at http://localhost:PORT/ through mkio, in the\n"
+            "foreground (Ctrl+C stops it).\n"
+            "\n"
+            "dir must hold a server.toml (`mkui init` writes one); the browser\n"
+            "reads config/client.toml as /config/client.json, so edits to it\n"
+            "need only a page reload.\n"
+            f"Needs mkio {MKIO_MAJOR}.x (pip install 'mkui[mkio]')."
+        ),
+    )
     p_serve.add_argument(
         "dir", nargs="?", default=".", help="directory to serve (default: .)"
     )
     p_serve.add_argument(
-        "-p", "--port", type=int, default=None, help="port (default: from server.toml)"
+        "-p",
+        "--port",
+        type=int,
+        default=None,
+        help="port (default: `port` in server.toml, else 8080)",
     )
     p_serve.add_argument(
         "-o", "--open", action="store_true", help="open browser automatically"

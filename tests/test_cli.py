@@ -443,6 +443,43 @@ class TestServe(unittest.TestCase):
         self.assertIn("--port", r.stdout)
         self.assertIn("--open", r.stdout)
 
+    def test_command_help_says_what_it_does(self):
+        from mkui.__main__ import MKIO_MAJOR
+        # add_parser(help=) feeds only the parent's list; each command
+        # needs its own description
+        needles = {
+            # every file init writes, its mkio dependency, and its refusal
+            "init": ("server.toml", "config/client.toml", "static/index.html",
+                     "mkio init", "already exists", "mkui serve"),
+            # what serve needs, where it answers, and the port's real fallback
+            "serve": ("server.toml", "mkui init", "http://localhost:", "8080",
+                      f"mkio {MKIO_MAJOR}.x"),
+        }
+        for cmd, expected in needles.items():
+            r = subprocess.run(["python", "-m", "mkui", cmd, "--help"], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0)
+            self.assertEqual(r.stderr, "")
+            for needle in expected:
+                with self.subTest(cmd=cmd, needle=needle):
+                    self.assertIn(needle, r.stdout)
+
+    def test_top_level_help(self):
+        r = subprocess.run(["python", "-m", "mkui", "--help"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0)
+        # the commands under their own heading, not argparse's `{init,serve}`
+        self.assertIn("commands:", r.stdout)
+        self.assertNotIn("{init,serve}", r.stdout)
+        # the quick start keeps its line breaks (RawDescriptionHelpFormatter)
+        self.assertIn("\n  mkui init myapp ", r.stdout)
+        self.assertIn("\n  mkui serve myapp -o ", r.stdout)
+        self.assertIn("mkui <command> -h", r.stdout)
+
+    def test_help_names_the_port_serve_falls_back_to(self):
+        # the help says 8080; cmd_serve must agree
+        import inspect
+        from mkui.__main__ import cmd_serve
+        self.assertIn('config.get("port", 8080)', inspect.getsource(cmd_serve))
+
 
 class TestTemplateConsistency(unittest.TestCase):
     """Verify that the scaffold templates are internally consistent."""

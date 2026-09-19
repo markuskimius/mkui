@@ -905,9 +905,10 @@ browser reports one as an incompatible server (see
 ### CLI
 
 ```
-mkui init [dir]               # scaffold a new project (default: .)
-mkui serve [dir] [-p PORT]    # serve with mkio backend (default port from server.toml)
+mkui init [dir]                  # scaffold a new project (default: .)
+mkui serve [dir] [-p PORT] [-o]  # serve with mkio backend (port: server.toml, else 8080); -o opens the browser
 mkui --version
+mkui <command> -h                # what a command does, writes and needs
 ```
 
 `serve` reads `server.toml` in the project directory, resolves the
