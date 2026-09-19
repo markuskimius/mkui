@@ -149,7 +149,7 @@ Minimal config:
     }
   ],
 
-  "mkio": { "url": "ws://localhost:8080/ws" }
+  "mkio": { "url": "/ws" }
 }
 ```
 
@@ -177,7 +177,21 @@ null to support TOML configs, which have no null literal.
 ## mkio connection state
 
 When `config.mkio.url` is set, `<mkui-app>` automatically connects to the
-mkio server and verifies its identity. Connection is two-phase:
+mkio server and verifies its identity.
+
+`url` is read against the page. mkio serves the page and its socket from
+one port, so a relative URL follows the server to whatever host, port and
+scheme it is served on — `mkui serve -p 9000`, a browser on another
+machine, an https proxy in front:
+
+| `mkio.url` | Connects to |
+| --- | --- |
+| `"/ws"` | the page's host and port (`wss` on an https page) |
+| `":9000/ws"` | the page's host, another port |
+| `"//host:9000/ws"` | another host, the page's scheme |
+| `"ws://host:9000/ws"` | exactly that — a server elsewhere, or a page opened from a file, which has no host to follow |
+
+Connection is two-phase:
 
 1. **Connect** — WebSocket opens, `mkio.connected` becomes `true`, and the
    `connected` state map is applied immediately.
@@ -189,7 +203,7 @@ mkio server and verifies its identity. Connection is two-phase:
 
 ```json
 "mkio": {
-  "url": "ws://localhost:8080/ws",
+  "url": "/ws",
   "expect": {
     "name": "order-book",
     "version": "1.0",
@@ -906,15 +920,22 @@ browser reports one as an incompatible server (see
 
 ```
 mkui init [dir]                  # scaffold a new project (default: .)
-mkui serve [dir] [-p PORT] [-o]  # serve with mkio backend (port: server.toml, else 8080); -o opens the browser
+mkui serve [dir] [-p PORT] [-H HOST] [-o]
+                                 # serve with mkio backend; -o opens the browser
+                                 # port: server.toml, else 8080; host: server.toml, else 0.0.0.0
 mkui --version
 mkui <command> -h                # what a command does, writes and needs
 ```
 
 `serve` reads `server.toml` in the project directory, resolves the
 `<mkui.static_dir>` placeholder to the installed package path, and
-delegates to `mkio.create_app()`. The `--port` flag overrides the
-port in `server.toml`.
+delegates to `mkio.create_app()`. `--port` and `--host` override `port`
+and `host` in `server.toml`; the page and its websocket (`/ws`) are one
+listener, so both move together, and a client config with `url = "/ws"`
+follows them. Bound to every interface (`0.0.0.0`, the default) `serve`
+prints the LAN address beside `localhost`; `-H 127.0.0.1` keeps the app to
+this machine. A `client.toml` that still names this machine on another
+port (`ws://localhost:8080/ws` under `-p 9000`) gets a warning at startup.
 
 ### Library usage
 
@@ -939,7 +960,7 @@ config names it.
 ```toml
 # config/client.toml
 [mkio]
-url = "ws://localhost:8080/ws"
+url = "/ws"
 control = "_mkui"
 ```
 
@@ -997,6 +1018,9 @@ cd mkui/static/examples/mkio-table
 mkio serve          # starts on port 8080 (configured in server.toml)
 python seed.py      # (optional) populates sample orders in a loop
 # http://localhost:8080/
+
+mkui serve . -p 9000   # …or on another port: the page's `url = "/ws"` follows
+python seed.py 9000    # the seeder takes the port (or host:port, or a ws:// URL)
 ```
 
 The history example needs [mkio](https://pypi.org/project/mkio/) 1.x — versioned tables are what it is about — and shows what one gives you:

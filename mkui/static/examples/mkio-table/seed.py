@@ -3,10 +3,14 @@
 Most orders are top-level; some are child orders placed under a recent
 pending order (and now and then under a child, so the Order Tree pane has
 a third level to expand).
+
+    python seed.py            # the server on port 8080
+    python seed.py 9000       # `mkui serve . -p 9000`; also host:port, ws://…
 """
 
 import asyncio
 import random
+import sys
 
 from mkio.client import MkioClient
 
@@ -15,8 +19,17 @@ SYMBOLS = ["AAPL", "GOOG", "MSFT", "AMZN", "TSLA", "NVDA"]
 SIDES = ["Buy", "Sell"]
 
 
+def server_url(arg=None):
+    """`9000` -> that port here, `host:9000` -> there, a ws:// URL as given."""
+    if not arg:
+        return URL
+    if "://" in arg:
+        return arg
+    return f"ws://localhost:{arg}/ws" if arg.isdigit() else f"ws://{arg}/ws"
+
+
 async def main():
-    async with MkioClient(URL) as client:
+    async with MkioClient(server_url(*sys.argv[1:2])) as client:
         # Pick up where the table left off: pending orders can take children,
         # and ids continue from the highest one (this is the only writer).
         placed = []    # orders still pending: [(id, symbol, side, parent_id)]

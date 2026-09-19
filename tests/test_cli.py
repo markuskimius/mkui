@@ -378,6 +378,57 @@ class TestServe(unittest.TestCase):
             proc.terminate()
             proc.wait(timeout=5)
 
+    def test_host_and_port_move_the_page_and_the_socket_together(self):
+        """One listener: `-H`/`-p` move `/ws` with the page, the scaffolded
+        client follows (`url = "/ws"`), and the banner names the address."""
+        target = os.path.join(self.tmpdir, "myapp")
+        subprocess.run(["python", "-m", "mkui", "init", target], capture_output=True)
+
+        proc = subprocess.Popen(
+            ["python", "-m", "mkui", "serve", target, "-H", "127.0.0.1", "-p", "18794"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            cwd=target,
+        )
+        try:
+            import asyncio, json, time, urllib.request
+            from mkio.client import MkioClient
+            time.sleep(3)
+            r = urllib.request.urlopen("http://127.0.0.1:18794/config/client.json")
+            self.assertEqual(json.loads(r.read())["mkio"]["url"], "/ws")
+
+            async def dial():
+                async with MkioClient("ws://127.0.0.1:18794/ws"):
+                    return True
+            self.assertTrue(asyncio.run(asyncio.wait_for(dial(), 5)))
+        finally:
+            proc.terminate()
+            out, err = proc.communicate(timeout=5)
+        self.assertIn("http://127.0.0.1:18794/", out)
+        self.assertNotIn("Network:", out)
+        self.assertNotIn("warning:", err)
+
+    def test_warns_when_the_client_dials_another_port(self):
+        target = os.path.join(self.tmpdir, "myapp")
+        subprocess.run(["python", "-m", "mkui", "init", target], capture_output=True)
+        client = Path(target, "config", "client.toml")
+        client.write_text(
+            client.read_text(encoding="utf-8").replace('url = "/ws"', 'url = "ws://localhost:8080/ws"'),
+            encoding="utf-8",
+        )
+        proc = subprocess.Popen(
+            ["python", "-m", "mkui", "serve", target, "-p", "18795"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            cwd=target,
+        )
+        try:
+            import time
+            time.sleep(2)
+        finally:
+            proc.terminate()
+            out, err = proc.communicate(timeout=5)
+        self.assertIn("warning:", err)
+        self.assertIn("port 8080, not 18795", err)
+
     def test_resolves_mkui_static_dir_placeholder(self):
         """The serve command resolves <mkui.static_dir> so mkio gets a real path."""
         target = os.path.join(self.tmpdir, "myapp")
@@ -441,6 +492,7 @@ class TestServe(unittest.TestCase):
         r = subprocess.run(["python", "-m", "mkui", "serve", "--help"], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0)
         self.assertIn("--port", r.stdout)
+        self.assertIn("--host", r.stdout)
         self.assertIn("--open", r.stdout)
 
     def test_command_help_says_what_it_does(self):
@@ -453,7 +505,7 @@ class TestServe(unittest.TestCase):
                      "mkio init", "already exists", "mkui serve"),
             # what serve needs, where it answers, and the port's real fallback
             "serve": ("server.toml", "mkui init", "http://localhost:", "8080",
-                      f"mkio {MKIO_MAJOR}.x"),
+                      "0.0.0.0", "/ws", f"mkio {MKIO_MAJOR}.x"),
         }
         for cmd, expected in needles.items():
             r = subprocess.run(["python", "-m", "mkui", cmd, "--help"], capture_output=True, text=True)
@@ -479,6 +531,84 @@ class TestServe(unittest.TestCase):
         import inspect
         from mkui.__main__ import cmd_serve
         self.assertIn('config.get("port", 8080)', inspect.getsource(cmd_serve))
+
+    def test_help_names_the_host_serve_falls_back_to(self):
+        # the help says 0.0.0.0, mkio's own default; cmd_serve must agree
+        import inspect
+        from mkui.__main__ import cmd_serve
+        self.assertIn('config.get("host", "0.0.0.0")', inspect.getsource(cmd_serve))
+
+
+class TestServeAddress(unittest.TestCase):
+    """Where `serve` says it is, and what it says about a client that
+    would not find it there."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def project(self, url):
+        root = Path(self.tmpdir)
+        (root / "config").mkdir(exist_ok=True)
+        (root / "config" / "client.toml").write_text(
+            f'[mkio]\nurl = "{url}"\n' if url is not None else '[app]\ntitle = "x"\n',
+            encoding="utf-8",
+        )
+        return root, {"config": {"/config": "./config"}}
+
+    def test_every_interface_is_localhost_and_the_lan(self):
+        from mkui.__main__ import serve_urls
+        for host in ("0.0.0.0", "::", ""):
+            self.assertEqual(
+                serve_urls(host, 9000, lan=lambda: "192.168.1.20"),
+                ("http://localhost:9000/", "http://192.168.1.20:9000/"),
+            )
+        self.assertEqual(serve_urls("0.0.0.0", 9000, lan=lambda: None), ("http://localhost:9000/", None))
+
+    def test_one_address_is_the_only_one(self):
+        from mkui.__main__ import serve_urls
+        boom = lambda: self.fail("no LAN lookup for a named host")
+        self.assertEqual(serve_urls("127.0.0.1", 8080, lan=boom), ("http://127.0.0.1:8080/", None))
+        self.assertEqual(serve_urls("192.168.1.20", 8080, lan=boom), ("http://192.168.1.20:8080/", None))
+        self.assertEqual(serve_urls("::1", 8080, lan=boom), ("http://[::1]:8080/", None))
+
+    def test_lan_address_never_raises(self):
+        from mkui.__main__ import lan_address
+        addr = lan_address()
+        self.assertTrue(addr is None or (isinstance(addr, str) and not addr.startswith("127.")))
+
+    def test_a_client_dialing_another_port_is_warned_about(self):
+        from mkui.__main__ import client_url_warnings
+        for url in ("ws://localhost:8080/ws", "ws://127.0.0.1:8080/ws", "ws://[::1]:8080/ws", "ws://localhost/ws"):
+            root, config = self.project(url)
+            with self.subTest(url=url):
+                got = client_url_warnings(root, config, "0.0.0.0", 9000)
+                self.assertEqual(len(got), 1)
+                self.assertIn(os.path.join("config", "client.toml"), got[0])
+                self.assertIn("9000", got[0])
+                self.assertIn('url = "/ws"', got[0])
+
+    def test_the_bind_address_counts_as_this_server(self):
+        from mkui.__main__ import client_url_warnings
+        root, config = self.project("ws://192.168.1.20:8080/ws")
+        self.assertEqual(len(client_url_warnings(root, config, "192.168.1.20", 9000)), 1)
+        self.assertEqual(client_url_warnings(root, config, "0.0.0.0", 9000), [])
+
+    def test_a_client_that_will_find_the_server_is_not(self):
+        from mkui.__main__ import client_url_warnings
+        for url in ("/ws", ":9000/ws", "ws://localhost:9000/ws", "wss://mkio.example.com/ws",
+                    "ws://otherhost:8080/ws", "not a url", None):
+            root, config = self.project(url)
+            with self.subTest(url=url):
+                self.assertEqual(client_url_warnings(root, config, "0.0.0.0", 9000), [])
+
+    def test_no_config_route_no_warnings(self):
+        from mkui.__main__ import client_url_warnings
+        self.assertEqual(client_url_warnings(Path(self.tmpdir), {}, "0.0.0.0", 9000), [])
+        self.assertEqual(
+            client_url_warnings(Path(self.tmpdir), {"config": {"/config": "./missing"}}, "0.0.0.0", 9000), [])
 
 
 class TestTemplateConsistency(unittest.TestCase):
@@ -525,10 +655,14 @@ class TestTemplateConsistency(unittest.TestCase):
         with open(os.path.join(self.target, "config", "client.toml"), "rb") as f:
             client = tomllib.load(f)
 
+        # Relative to the page, so it follows `serve -p`; a URL that does
+        # name a port must name the server's.
+        from urllib.parse import urlsplit
         ws_url = client.get("mkio", {}).get("url", "")
-        server_port = server.get("port")
-        if ws_url and server_port:
-            self.assertIn(str(server_port), ws_url)
+        self.assertEqual(ws_url, "/ws")
+        named = urlsplit(ws_url).port
+        if named is not None:
+            self.assertEqual(named, server.get("port"))
 
     def test_client_pane_ids_match_frame_layouts(self):
         """Every pane referenced in frames.layout must exist in panes."""

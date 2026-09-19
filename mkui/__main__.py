@@ -3,10 +3,12 @@
 import argparse
 import importlib.metadata
 import shutil
+import socket
 import subprocess
 import sys
 import webbrowser
 from pathlib import Path
+from urllib.parse import urlsplit
 
 try:
     import tomllib
@@ -247,8 +249,12 @@ layout = { type = "tabs", active = 0, children = ["feed"] }
 
 # ─── mkio connection ──────────────────────────────────────────────────
 
+# Relative to the page, so the app follows the server to whatever host and
+# port it is served on (`mkui serve -p 9000`, a browser on another machine).
+# A server elsewhere is named in full: url = "ws://host:8080/ws"
+
 [mkio]
-url = "ws://localhost:8080/ws"
+url = "/ws"
 
 [mkio.connected]
 "status.message" = "Connected"
@@ -329,6 +335,76 @@ def check_mkio(version=None):
     return None
 
 
+# Bind addresses that mean "every interface", and the ones that mean "this
+# machine only": neither is an address a browser elsewhere can be given.
+WILDCARD_HOSTS = ("", "0.0.0.0", "::")
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def _http_url(host, port):
+    if ":" in host:  # an IPv6 literal
+        host = f"[{host}]"
+    return f"http://{host}:{port}/"
+
+
+def lan_address():
+    """This machine's address on its default route, or ``None``.
+
+    A UDP socket is only aimed, never written to: nothing is sent.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            addr = s.getsockname()[0]
+    except OSError:
+        return None
+    return None if addr.startswith("127.") or addr == "0.0.0.0" else addr
+
+
+def serve_urls(host, port, lan=lan_address):
+    """``(local, network)``: where a browser finds a server bound to ``host``.
+
+    ``local`` is the one ``-o`` opens. Bound to every interface the server
+    answers on localhost and on the LAN address (``network``, ``None``
+    when there is none); bound to one address it answers only there.
+    """
+    if host in WILDCARD_HOSTS:
+        addr = lan()
+        return _http_url("localhost", port), _http_url(addr, port) if addr else None
+    return _http_url(host, port), None
+
+
+def client_url_warnings(project_dir, config, host, port):
+    """A warning per client config that dials this machine on another port.
+
+    ``mkio.url = "ws://localhost:8080/ws"`` names a port of its own, so
+    serving on another one leaves the page up and its socket dead. Only
+    URLs aimed at this server are judged: a relative one follows the page,
+    and one naming another machine is somebody else's server.
+    """
+    here = set(LOOPBACK_HOSTS) | {host}
+    warnings = []
+    for rel in (config.get("config") or {}).values():
+        for path in sorted((project_dir / str(rel)).glob("*.toml")):
+            try:
+                with open(path, "rb") as f:
+                    mkio = tomllib.load(f).get("mkio")
+                url = mkio.get("url") if isinstance(mkio, dict) else None
+                if not isinstance(url, str):
+                    continue
+                parts = urlsplit(url)
+                theirs = parts.port or {"ws": 80, "http": 80, "wss": 443, "https": 443}.get(parts.scheme)
+            except (OSError, ValueError):
+                continue
+            if parts.hostname in here and theirs is not None and theirs != port:
+                shown = path.relative_to(project_dir) if path.is_relative_to(project_dir) else path
+                warnings.append(
+                    f"{shown} connects to port {theirs}, "
+                    f'not {port}: set [mkio] url = "/ws" to follow the server'
+                )
+    return warnings
+
+
 def cmd_serve(args):
     problem = check_mkio()
     if problem:
@@ -357,13 +433,20 @@ def cmd_serve(args):
 
     if args.port is not None:
         config["port"] = args.port
+    if args.host is not None:
+        config["host"] = args.host
 
     port = config.get("port", 8080)
-    url = f"http://localhost:{port}/"
+    host = config.get("host", "0.0.0.0")
+    url, network = serve_urls(host, port)
 
     print(f"mkui v{__version__} — serving {args.dir}")
-    print(f"  Local: {url}")
+    print(f"  Local:   {url}")
+    if network:
+        print(f"  Network: {network}")
     print()
+    for warning in client_url_warnings(project_dir, config, host, port):
+        print(f"warning: {warning}", file=sys.stderr)
 
     if args.open:
         webbrowser.open(url)
@@ -429,7 +512,8 @@ def main():
         help="Serve a project directory",
         description=(
             "Serve a project at http://localhost:PORT/ through mkio, in the\n"
-            "foreground (Ctrl+C stops it).\n"
+            "foreground (Ctrl+C stops it). The page and its websocket (/ws)\n"
+            "share the port; a client.toml with `url = \"/ws\"` follows both.\n"
             "\n"
             "dir must hold a server.toml (`mkui init` writes one); the browser\n"
             "reads config/client.toml as /config/client.json, so edits to it\n"
@@ -446,6 +530,15 @@ def main():
         type=int,
         default=None,
         help="port (default: `port` in server.toml, else 8080)",
+    )
+    p_serve.add_argument(
+        "-H",
+        "--host",
+        default=None,
+        help=(
+            "address to listen on (default: `host` in server.toml, else 0.0.0.0, "
+            "every interface); 127.0.0.1 keeps it to this machine"
+        ),
     )
     p_serve.add_argument(
         "-o", "--open", action="store_true", help="open browser automatically"

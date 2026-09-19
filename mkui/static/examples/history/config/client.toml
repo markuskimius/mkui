@@ -186,8 +186,10 @@ layout = { type = "tabs", active = 0, children = ["detail"] }
 
 # ─── Connection ───────────────────────────────────────────────────────
 
+# Relative to the page: the app follows the server to whatever host and
+# port it is served on (`mkui serve . -p 9000`).
 [mkio]
-url = "ws://localhost:8080/ws"
+url = "/ws"
 connected    = { "status.message" = "Connected" }
 disconnected = { "status.message" = "Disconnected" }
 

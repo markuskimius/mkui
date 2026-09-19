@@ -1,6 +1,7 @@
 """Drive the running app from Python through the control channel.
 
     python control.py            # instead of `mkui serve .`
+    python control.py -p 9000    # …on another port (-H for the address)
 
 Serves the example like `mkui serve` does, and once a browser is open
 rewires its tables every few seconds: links Pending to All Orders by
@@ -9,6 +10,7 @@ action — the same `table.link` / `table.filter` a menu item would fire —
 pushed to every subscribed tab (or one login's tabs with `user=`).
 """
 
+import argparse
 import asyncio
 import tomllib
 from pathlib import Path
@@ -24,6 +26,14 @@ with open(HERE / "server.toml", "rb") as f:
 for key, value in config.get("static", {}).items():
     if value == "<mkui.static_dir>":
         config["static"][key] = str(mkui.static_dir)
+
+# Read before the app is made, as `mkui serve` does: the page and its socket
+# share the port, and client.toml's `url = "/ws"` follows both.
+parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+parser.add_argument("-p", "--port", type=int, default=config.get("port", 8080))
+parser.add_argument("-H", "--host", default=config.get("host", "0.0.0.0"))
+args = parser.parse_args() if __name__ == "__main__" else parser.parse_args([])
+config["port"], config["host"] = args.port, args.host
 
 app = create_app(config)
 control = install(app)          # registers the "_mkui" service; client.toml names it
@@ -51,5 +61,5 @@ async def on_started():
 app.on_startup(on_started)
 
 if __name__ == "__main__":
-    print(f"mkui v{mkui.__version__} — http://localhost:{config.get('port', 8080)}/")
+    print(f"mkui v{mkui.__version__} — http://localhost:{args.port}/")
     app.run()

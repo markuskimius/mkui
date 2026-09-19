@@ -6,14 +6,25 @@ redo branch still there, which is the state the history pane was built to
 show. Run it once, against a running server:
 
     mkio serve
-    python seed.py
+    python seed.py            # the server on port 8080
+    python seed.py 9000       # `mkui serve . -p 9000`; also host:port, ws://…
 """
 
 import asyncio
+import sys
 
 from mkio.client import MkioClient
 
 URL = "ws://localhost:8080/ws"
+
+
+def server_url(arg=None):
+    """`9000` -> that port here, `host:9000` -> there, a ws:// URL as given."""
+    if not arg:
+        return URL
+    if "://" in arg:
+        return arg
+    return f"ws://localhost:{arg}/ws" if arg.isdigit() else f"ws://{arg}/ws"
 
 ORDERS = [
     {"side": "Buy",  "symbol": "AAPL", "qty": 500, "price": 190.25},
@@ -39,7 +50,7 @@ async def ids_by_symbol(client):
 
 
 async def main():
-    async with MkioClient(URL) as client:
+    async with MkioClient(server_url(*sys.argv[1:2])) as client:
         for order in ORDERS:
             await send(client, order, "new")
             print(f"new    {order['side']:4} {order['symbol']:5} {order['qty']}")

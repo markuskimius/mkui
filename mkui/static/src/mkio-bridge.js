@@ -2,8 +2,13 @@
 // origin, so mkui never duplicates mkio's transport code.
 //
 // Usage:
-//   const client = await ensureMkio("ws://localhost:8080/ws");
+//   const client = await ensureMkio("/ws");
 //   client.subscribe("orders", { onSnapshot, onUpdate });
+//
+// The URL may be relative to the page (`lib/mkio-url.js`), so a config
+// follows its server to whatever host and port it is served on.
+
+import { resolveMkioUrl, mkioHttpBase } from "./lib/mkio-url.js";
 
 let loadingPromise = null;
 let cachedClient = null;
@@ -14,8 +19,9 @@ export async function ensureMkio(wsUrl, opts = {}) {
   return loadingPromise;
 }
 
-async function loadAndConnect(wsUrl, opts) {
-  const httpOrigin = wsUrl.replace(/^ws/, "http").replace(/\/ws.*$/, "");
+async function loadAndConnect(url, opts) {
+  const wsUrl = resolveMkioUrl(url);
+  const httpOrigin = mkioHttpBase(wsUrl);
   if (typeof window.MkioClient === "undefined") {
     await injectScript(httpOrigin + "/mkio.js");
   }

@@ -100,6 +100,9 @@ function collect() {
         ...matches(svcBody, /^    (?:async )?def ([a-z][a-z_]*)\(/gm).map((m) => `ControlService.${m}`),
       ]),
       cli: uniq(matches(cli, /add_parser\(\s*"([a-z]+)"/g)),
+      // the long flags, as `add_argument` declares them (a flag a help
+      // string merely mentions is not followed by a comma)
+      cliFlags: uniq(matches(cli, /"(--[a-z][a-z-]*)",/g)),
     },
   };
 }
@@ -158,9 +161,14 @@ test("saved-layout format version", () => {
   }
 });
 
-test("python: control API and CLI subcommands", () => {
+test("python: control API, CLI subcommands and flags", () => {
   compareNames("mkui.control", snap.python.control, live.python.control);
   compareNames("mkui CLI subcommands", snap.python.cli, live.python.cli);
+  compareNames("mkui CLI flags", snap.python.cliFlags ?? [], live.python.cliFlags);
+  // the scraper still finds them: an empty list would pin nothing
+  for (const flag of ["--port", "--host", "--open", "--version"]) {
+    assert.ok(live.python.cliFlags.includes(flag), `${flag} not scraped from mkui/__main__.py`);
+  }
 });
 
 test("the snapshot lists every category the collector knows, and no other", () => {

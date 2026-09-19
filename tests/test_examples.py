@@ -247,10 +247,15 @@ class TestClientServerWiring(unittest.TestCase):
                 if not url:
                     continue
                 parsed = urlparse(url)
-                self.assertEqual(
-                    parsed.port, server.get("port"),
-                    f"{name}: client connects to {parsed.port}, server listens on {server.get('port')}",
-                )
+                # Relative to the page (`lib/mkio-url.js`), so `mkui serve
+                # -p` moves the socket with it; a URL that does name a port
+                # must name the server's.
+                self.assertEqual(parsed.netloc, "", f"{name}: mkio.url should follow the page, not name a host")
+                if parsed.port is not None:
+                    self.assertEqual(
+                        parsed.port, server.get("port"),
+                        f"{name}: client connects to {parsed.port}, server listens on {server.get('port')}",
+                    )
                 self.assertEqual(parsed.path, "/ws", f"{name}: mkio serves the socket at /ws")
 
     def test_control_names_the_service_serve_installs(self):

@@ -143,6 +143,12 @@
     "cli": [
       "init",
       "serve"
+    ],
+    "cliFlags": [
+      "--host",
+      "--open",
+      "--port",
+      "--version"
     ]
   }
 }

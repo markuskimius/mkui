@@ -14,9 +14,11 @@ No build step — the served files under `mkui/static/` are the app.
   `http://127.0.0.1:8901/examples/standalone-json/index.html`
 - mkio-table example (live backend, tables, dialogs):
   `cd mkui/static/examples/mkio-table && python3 -m mkui serve .`
-  Must run on port 8080 — `config/client.toml` hardcodes `ws://localhost:8080/ws`,
-  and `-p <other>` still binds 8080 from server.toml anyway. Free the port first:
-  `lsof -ti :8080 | xargs kill`.
+  Port 8080 is often taken by another project's server: pass `-p <other>`
+  (`python seed.py <other>` to seed it). `config/client.toml` says
+  `url = "/ws"`, so the socket follows the page. If `-p`/`-H` are
+  "unrecognized", a stray `mkui/` copy in the venv is shadowing the checkout:
+  prefix `PYTHONPATH=<repo>`.
 - To exercise stream paging (Earlier/Later/Live/refresh toolbar), copy the
   mkio-table example elsewhere, append a `[services.<x>] protocol = "stream"
   primary_table = "orders"` to server.toml and a stream pane + frame to

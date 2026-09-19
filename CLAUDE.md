@@ -2,7 +2,7 @@
 
 ## Project overview
 
-mkui: a config-driven, zero-dependency Web Components GUI framework: a floating-frame workspace with dockable panes. Pairs with [mkio](../mkio) as the backend; works standalone.
+mkui: a config-driven, zero-dependency Web Components GUI framework: a floating-frame workspace with dockable panes. Pairs with [mkio](../mkio); works standalone.
 
 ## Architecture
 
@@ -13,7 +13,7 @@ mkui: a config-driven, zero-dependency Web Components GUI framework: a floating-
 - Frame positions are workspace fractions and split ratios sum to 1, so proportional resize is automatic. Frame rects are painted in whole pixels (`applyFrameRect` rounds edges, not sizes, so snapped frames stay flush).
 - Every frame move/resize goes through `clampToDock`
 - Focus model: the top frame gets `[data-focused]` (`_applyZOrder`); each frame tracks an `_activeTabGroup`, updated on tab or pane interaction; hotkeys act on it.
-- Tab drag: pointer events (mouse + touch) on tabs (`touch-action: none`); in a bar a ghost label + drop indicator reorder on release; outside it the pane tears into a new frame. On noDock frames (dialogs, login) the tab is titlebar text: mousedown moves the frame, click activates it; CSS must keep them pointer-interactive.
+- Tab drag: pointer events on tabs (`touch-action: none`); in a bar a ghost label + drop indicator reorder on release; outside it the pane tears into a new frame. On noDock frames (dialogs, login) the tab is titlebar text: mousedown moves the frame, click activates it; CSS must keep them pointer-interactive.
 - Tab overflow: past `min-width: 3em` `.mkui-tabs` clips, `.mkui-tab-scroll` arrows appear and the bar gets `.mkui-tabbar-overflow` (`updateArrows`). Rename: ctrl/cmd+click (`contextmenu` + `ctrlKey` on macOS) swaps the label for `.mkui-tab-rename`, Enter/blur committing via `workspace.renamePane`, which sets `titled`, the flag stopping `setPaneAutoTitle` overwriting a chosen name.
 - Tab strip look: the bar's bottom line is a `.mkui-tabbar::after` overlay (never a border) the selected tab covers (`z-index: 1`); selected tabs outside the focused group flatten to idle.
 - Theming: `dark`/`light` come from `mkui.css` via `[theme=...]`; custom themes in `config.app.themes[name]` are `{ "--mkui-*": value }` overrides applied inline by `MkuiApp.setTheme(name)`.
@@ -44,53 +44,54 @@ Paths are under `mkui/static/src/` unless they start `mkui/`.
 - `lib/links.js` — `LinkHub`, the table-link bus (retained values per name, queued delivery, `MAX_CHAIN`); `App.links` owns one
 - `lib/verify.js` — `judgeServer`/`incompatibleMap`: why a server was rejected; `MKIO_MAJOR`/`mkioSupported`: mkui's own floor
 - `lib/connection.js` — the outage treatment, DOM-free: `phaseOf`, `Outage` (the clock), `offlineOptions` (`mkio.offline`)
+- `lib/mkio-url.js` — `resolveMkioUrl`: `mkio.url` read against the page (`"/ws"`, `":9000/ws"`; https → `wss`; absolute as written), called in `mkio-bridge.js` (`tests/mkio-url.test.js`)
 - `mkui/control.py` — `ControlService` / `install(app)`, pushing actions to browsers (see Control channel)
 - `mkui/static/styles/mkui.css` — default theme, CSS custom properties
 
 ## Commands
 
-- `mkui serve [dir] [-p PORT] [-o]` — serve a project (mkio)
+- `mkui serve [dir] [-p PORT] [-H HOST] [-o]` — serve a project (mkio). Page and socket (`/ws`) are one listener; templates say `url = "/ws"`, following `-p`/`-H`; `client_url_warnings` flags a config dialing another local port
 - `node --test tests/*.test.js` — JS unit tests (`version.test.js` pins the four version strings; `surface.test.js` pins the public surface in `tests/surface.json`: `SURFACE_UPDATE=1` regenerates)
-- `python -m pytest tests/` — CLI, control and example-config tests (`test_examples.py` checks each `[mkio.expect]`, pane service and `history` block against its server); `python -m build && twine upload dist/*` releases
-- `examples/mkio-table`, `examples/history`: `python -m mkui serve .` + `python seed.py`; both `versioned`
+- `python -m pytest tests/` — CLI, control and example-config tests (`test_examples.py` checks each `[mkio.expect]`, pane service and `history` block against its server); `python -m build` + `twine upload dist/*` releases
+- `examples/mkio-table`, `examples/history`: `python -m mkui serve .` + `python seed.py [port]`; both `versioned`
 
 ## Config format
 
-Runtime input is JSON. `mkui serve` uses mkio's `[config]` routing: `/config/client.json` comes from `config/client.toml` (`tomllib`), so the browser needs no TOML parser; TOML uses `""` for JSON `null`; an inline table must fit on one line (else `[panes.x.display]`).
+Runtime input is JSON. `mkui serve` uses mkio's `[config]` routing: `/config/client.json` comes from `config/client.toml` (`tomllib`), TOML uses `""` for JSON `null`; an inline table must fit on one line (else `[panes.x.display]`).
 
-Top-level keys: `app`, `state`, `auth`, `menubar`, `statusbar` (`left`/`right` widgets, `bindStyle` = CSS property → state path), `panes` (id→spec), `frames` (ordered, position + layout tree), `mkio`.
+Top-level keys: `app`, `state`, `auth`, `menubar`, `statusbar` (`left`/`right` widgets, `bindStyle` = CSS property → state path), `panes` (id→spec), `frames` (ordered; position + layout tree), `mkio`, `layouts`.
 
 ## Expressions
 
-mkio's expression language does everything conditional or derived in config (`lib/expr.js`, vendored; `tests/expressions.test.js` runs mkio's conformance fixtures). `lib/expressions.js` wraps it: one *lenient* `Env` (unknown names → NULL), compiled expressions/templates cached by source, `evalExpr` (warns once per source, null on error), `resolveExpr` (pure `${x}` → raw value, NULL → `""`; mixed → string), `statePaths(src, {template})` listing the state paths read. Scopes per surface: the README's table; the cell scope (`values`/`styles`/`display`) is `value`, `row`, `col`, `state`, then the row's fields. Extension points (`registerExprFunction`, `-Library`, `-Type`) come from `core.js`.
+mkio's expression language does everything conditional or derived in config (`lib/expr.js`, vendored; `tests/expressions.test.js` runs mkio's fixtures). `lib/expressions.js` wraps it: one *lenient* `Env` (unknown names → NULL), compiled expressions/templates cached by source, `evalExpr` (warns once per source, null on error), `resolveExpr` (pure `${x}` → raw value, NULL → `""`; mixed → string), `statePaths(src, {template})` listing the state paths read. Scopes per surface: the README's table; the cell scope (`values`/`styles`/`display`) is `value`, `row`, `col`, `state`, then the row's fields. Extension points (`registerExprFunction`, `-Library`, `-Type`) come from `core.js`.
 
 ## Menubar
 
-`menubar` is a top-level array of `{ label, items }` dropdowns; the item keys are the README's. Rebuilt per open: `windows` → one `pane.show` leaf per `workspace.openPanes()` (noDock excluded), `layouts` → a submenu off state `layouts.list` (`layout.restore` leaves, `args` = id; empty → a `disabled` leaf; fires `layout.refresh`). `shortcut` is a display-only hint (`.mkui-menu-shortcut`, `formatShortcut` renders `mod` platform-native); handlers take either modifier.
+`menubar` is a top-level array of `{ label, items }` dropdowns; the item keys are the README's. Per open: `windows` → one `pane.show` leaf per `workspace.openPanes()` (noDock excluded), `layouts` → a submenu off state `layouts.list` (`layout.restore` leaves, `args` = id; empty → a `disabled` leaf; fires `layout.refresh`). `shortcut` is a display-only hint (`.mkui-menu-shortcut`, `formatShortcut` renders `mod` platform-native); handlers take either modifier.
 
-Leaf items fire `app.fireAction(action, args)` on mouseup. Built-ins: `app.quit`, `pane.show` (pane ID: raises its frame, or opens one if parked), `window.tileH`/`tileV`/`grid`/`cascade`, `edit.copy`/`selectAll`/`find`/`undo`/`redo`, `table.filter`/`sort`/`columns`/`expand`/`select`/`link`/`history` (each `{ pane, … }` → the matching `workspace.setPane*`/`selectPane`/`expandPane`; no `pane` = the focused pane; `table.link` also takes the link keys flat), `layout.*` (see Saved layouts). Custom: `app.registerAction(name, fn)`.
+Leaf items fire `app.fireAction(action, args)` on mouseup. Built-ins: `app.quit`, `pane.show` (pane ID: raises its frame, or opens one if parked), `window.tileH`/`tileV`/`grid`/`cascade`, `edit.copy`/`selectAll`/`find`/`undo`/`redo`, `table.filter`/`sort`/`columns`/`expand`/`select`/`link`/`history` (each `{ pane, … }` → the matching `workspace.setPane*`/`selectPane`/`expandPane`; no `pane` = the focused pane; `table.link` also takes the link keys flat), `layout.*` (see Saved layouts). Custom: `app.registerAction`.
 
 Edit routing: `edit.copy`/`edit.selectAll`/`edit.find` call `workspace.editAction(name)`, which resolves the focused frame's active pane (`workspace.activePaneEl()`) and invokes its `_editActions` hook (`{ copy, selectAll, clearSelection, cancel, find, findNext, findPrev, undo, redo }`; any pane type may implement it). The window keydown handler routes Ctrl/Cmd+C, +A, +F, +G, +Shift+G and Escape through the same hook (Escape: `cancel` then `clearSelection`); editable elements and a native text selection win; `preventDefault` only when a pane handled it. `tests/edit-routing.test.js`.
 
 ## mkio connection state
 
-When `config.mkio.url` is present, `<mkui-app>` calls `ensureMkio` with `onConnect`/`onDisconnect` callbacks **before** setting up menubar, workspace, and statusbar (the bridge caches the first caller's promise).
+With `config.mkio.url`, `<mkui-app>` calls `ensureMkio` with `onConnect`/`onDisconnect` **before** setting up menubar, workspace, statusbar (the bridge caches the first caller's promise).
 
 Connection is two-phase: **connect** then **verify**. On open `mkio.connected` goes `true` and `config.mkio.connected` applies; an async `_mkio` reqrep then asks who it is: a pass sets `mkio.verified`, a failure sets `mkio.reason` (`unreachable` | `name` | `version`, in that order) and applies `config.mkio.incompatible` (the flat map, an entry per reason on top, defaults per reason). Reruns on reconnect. `tests/verify.test.js`.
 
 Capabilities ride the same reply: `capture` writes `mkio.server.services`/`.versioned`/`.historySuffix` only when it carries them (the pre-login reply under auth leaves them be). Under auth `_verify` never runs: `_probe` re-reads after login and on authenticated reconnects, judging the floor alone.
 
-**mkio floor**: mkui 1.x is built against mkio 1.x. `judgeServer` fails reason `version` on a reply whose `mkio` major is not `MKIO_MAJOR`, `expect` or not (an unparseable `"dev"` passes); `mkui serve` refuses another major (`check_mkio`, `tests/test_cli.py`); `pyproject` extra `mkui[mkio]` = `mkio>=1.0,<2`. `config.mkio.expect` is optional (keys in the README): the query runs either way to fill `mkio.server.*`, timing out per `config.mkio.timeout` (5s). Pins match by semver (`^`), so a `0.x` `mkio` pin fails every 1.x server. The `connected` / `disconnected` / `incompatible` maps are `"state.path": value` objects applied per lifecycle event.
+**mkio floor**: mkui 1.x is built against mkio 1.x. `judgeServer` fails reason `version` on a reply whose `mkio` major is not `MKIO_MAJOR`, `expect` or not (an unparseable `"dev"` passes); `mkui serve` refuses another major (`check_mkio`, `tests/test_cli.py`); `pyproject` extra `mkui[mkio]` = `mkio>=1.0,<2`. `config.mkio.expect` is optional (keys in the README): the query runs either way to fill `mkio.server.*`, timing out per `config.mkio.timeout` (5s). The `connected` / `disconnected` / `incompatible` maps are `"state.path": value` objects applied per lifecycle event.
 
-**Outage treatment** (`_watchConnection`; `lib/connection.js`, `tests/connection.test.js`): off `mkio.connected`/`mkio.reason` it stamps the phase (`connecting` | `connected` | `disconnected` | `incompatible`) as the root `mkio` attribute, keying the statusbar colours (`--mkui-danger`/`--mkui-warn`), the `.mkui-conn-dot` light and the `[stale]` tint in CSS. mkio's client fires `onDisconnect` on every failed retry (~1s), so `Outage.down()` is true once per outage: sets `mkio.downSince`, ticks `mkio.downFor`, swaps tab title/favicon, sets `[stale]`, shows `.mkui-banner` (before the workspace; `[banner]` shifts it by `--mkui-banner-h`) after `offline.delay`, at once when incompatible. Panes stamp `.mkui-table-stale`/`.mkui-record-stale` ("as of HH:MM:SS") on disconnect, cleared by the next callback (`heard()`). `mkio.offline` keys default on. No Retry: the client already retries.
+**Outage treatment** (`_watchConnection`; `lib/connection.js`, `tests/connection.test.js`): off `mkio.connected`/`mkio.reason` it stamps the phase (`connecting` | `connected` | `disconnected` | `incompatible`) as the root `mkio` attribute, keying the statusbar colours (`--mkui-danger`/`--mkui-warn`), the `.mkui-conn-dot` light and the `[stale]` tint in CSS. mkio's client fires `onDisconnect` on every failed retry (~1s), so `Outage.down()` is true once per outage: sets `mkio.downSince`, ticks `mkio.downFor`, swaps tab title/favicon, sets `[stale]`, shows `.mkui-banner` (before the workspace; `[banner]` shifts it by `--mkui-banner-h`) after `offline.delay`, at once when incompatible. Panes stamp `.mkui-table-stale`/`.mkui-record-stale` ("as of HH:MM:SS") on disconnect, cleared by the next callback (`heard()`). `mkio.offline` keys default on. No Retry: the client retries.
 
 ## Authentication
 
-When `config.auth` is present, `<mkui-app>` shows a login dialog before loading frames. `method: "mkio"` (default) calls `client.auth(...)` against mkio's `_mkio_users`; `"custom"` uses `app.registerAuthHandler({ authenticate })` → `{ user, role }`.
+With `config.auth`, `<mkui-app>` shows a login dialog before loading frames. `method: "mkio"` (default) calls `client.auth(...)` against mkio's `_mkio_users`; `"custom"` uses `app.registerAuthHandler({ authenticate })` → `{ user, role }`.
 
 Config keys are the README's; `connected` applies after login *and* on reconnect (mkio's client re-authenticates), `disconnected` falls back to `mkio.disconnected`. State paths: `auth.authenticated`, `auth.user`, `auth.role`. Action `auth.logout` reloads the page. With auth, `_verify` is skipped (login proves the application; `_probe` judges the mkio floor); `mkio.connected` still applies on socket open.
 
-Login dialog: a `stayOnTop`, `noDock` frame, undismissable (`_hideClose`, empty `_extraControls`).
+Login dialog: `stayOnTop`, `noDock`, undismissable (`_hideClose`, empty `_extraControls`).
 
 ## mkio-table pane type
 
@@ -108,19 +109,19 @@ Selection publishing: `select = { state = "path" }` writes the current row to ap
 
 Programmatic selection: `selectRows(keys, { focus = true })` selects by identity as a click does (one `refreshSelectionStyles`: followers never see null); `[]` clears. A tree opens each key's collapsed ancestors; filters are untouched, so a key they hide comes back `hidden`, one not in `rows` `missing`, the rest `selected`. Hook `_select` (`get` → `{ keys, focus }`, `on` for followers); `workspace.selectPane`/`getPaneSelection`; `table.select`; not in layouts, not re-applied after a snapshot.
 
-Numeric alignment: per-cell padding (`--mkui-num-pad`, ch) lines decimals up (`colStats.maxFrac`), dropdown too. Flashes `mkui-flash-in`/`-out`/`-update`; each pane has its own `subid`.
+Numeric alignment: per-cell padding (`--mkui-num-pad`, ch) aligns decimals (`colStats.maxFrac`), dropdown too. Flashes `mkui-flash-in`/`-out`/`-update`; a `subid` per pane.
 
-Selection: two exclusive modes plus an always-present **focused cell** (`.mkui-cell-focus`), the *implicit* selection copy, row-unit buttons and broadcasts fall back to (its row `.mkui-row-hl`). Row mode: the sticky-left **row-number column** (`rowColumn: false` disables; view position, per-level in a tree; outside stats/reorder/resize). Rects are anchor/focus `(key, col)` pairs plus a `keys` snapshot of the rows spanned when last user-modified (`snapRectKeys`): membership is that record set × the column range, so sorts/filters move the same records and live inserts don't join (`rectBounds` maps keys to view-index runs). Escape clears the selection, keeps the cursor. Filter changes prune `selectedKeys`; copy and actions see view rows only.
+Selection: two exclusive modes plus an always-present **focused cell** (`.mkui-cell-focus`), the *implicit* selection copy, row-unit buttons and broadcasts fall back to (its row `.mkui-row-hl`). Row mode: the sticky-left **row-number column** (`rowColumn: false` disables; view position, per-level in a tree; outside stats/reorder/resize). Rects are anchor/focus `(key, col)` pairs plus a `keys` snapshot of the rows spanned when last user-modified (`snapRectKeys`): membership is that record set × the column range, so sorts/filters move the same records and live inserts don't join (`rectBounds` maps keys to view-index runs). Escape clears the selection, not the cursor. Filter changes prune `selectedKeys`; copy and actions see view rows only.
 
-Clipboard: `copySelection` builds the README's grid via `writeGrid` + `makeCopyStatus` (`lib/copy.js`, shared with the history panel and `mkio-record`; 100k+ rows skip HTML).
+Clipboard: `copySelection` builds the README's grid via `writeGrid` + `makeCopyStatus` (`lib/copy.js`, shared with history and `mkio-record`; 100k+ rows skip HTML).
 
 Buttons: `enable.when = "<expr>"` gates one on the selection (scope `rows`, `row` (first or NULL), `cells`, `selection` `{ count, rowCount, cellCount, unit }`, `connected`, `state`) beside `connected`/`minSelected`/`maxSelected` and `unit` (singular units default min/max to 1). Gates re-evaluate on selection, filter and connection changes and on a live change to a selected row (`refreshButtons`). A button's `args`/`data` resolve against the button scope. `style = <styler>` sees the button scope plus `enabled`; backgrounds ride `--mkui-btn-bg` + `mkui-btn-styled`.
 
-Sorting: priority rides a digit in the caret (`.mkui-sort-num`); numeric vs string auto-detected.
+Sorting: priority is a digit in the caret (`.mkui-sort-num`); numeric vs string auto-detected.
 
 Configured sort: `sort = <spec>` seeds `sortKeys` at init and on `mkui-pane-open` (`loadSortSpec`); `sortFromSpec` reads the README's shapes, a bad one warns `bad sort`, changes nothing. `setSort` replaces and re-applies (`applySort`). Hook `_sort`; `workspace.setPaneSort`/`getPaneSort`; `table.sort`.
 
-Column visibility: one presentation state, `visible`: `null` (default) or an ordered array (README). Reorder and hiding materialise the list; "Show all" returns to `null`. `visibleColumns()` (cached) intersects it with known columns (a name ahead of the data is kept, skipped); every render, measure, copy and selection path uses it. `visibleFromSpec` warns `bad visible` on a non-string or a duplicate. API via `applyVisible`: `setVisible`/`getVisible`, `showColumns` (placed by `columns`-order neighbours), `hideColumns` (the last stays), `showAllColumns`, `resetVisible`; seeded before the header first renders and on `mkui-pane-open`. Hook `_columns = { set, get }`; `workspace.setPaneColumns`/`getPaneColumns`; `table.columns`.
+Column visibility: one presentation state, `visible`: `null` (default) or an ordered array (README). Header-drag reorder and hiding materialise the list; "Show all" returns to `null`. `visibleColumns()` (cached) intersects it with known columns (a name ahead of the data is kept, skipped); every render, measure, copy and selection path uses it. `visibleFromSpec` warns `bad visible` on a non-string or a duplicate. API via `applyVisible`: `setVisible`/`getVisible`, `showColumns` (placed by `columns`-order neighbours), `hideColumns` (the last stays), `showAllColumns`, `resetVisible`; seeded before the header first renders and on `mkui-pane-open`. Hook `_columns = { set, get }`; `workspace.setPaneColumns`/`getPaneColumns`; `table.columns`.
 
 Columns button & picker: `.mkui-columns-btn` (+ `.mkui-columns-badge` hidden count) rides a right **gutter** (`--mkui-columns-gutter`, 26px) off the sticky `.mkui-columns-anchor`, toggling `.mkui-columns-picker` (it and a filter dropdown close each other): search, an actions row scoped to the matches, then the list, flat in `columns` order or one tri-state `.mkui-columns-group` per `colGroups()` entry, folded unless it holds a shown column. "Hide all" keeps the last column; unscoped "Show all" is two-step (a query disarms). The header dropdown's `.mkui-filter-colops` row is that column's own: "Hide column" (inert on the last), `.mkui-filter-applied`, the link ops under `advanced`.
 
@@ -142,11 +143,9 @@ Configured filters: `filters = { col = <filter> }` seeds them at init (before da
 
 Embedding: `_source = { set({ filter, topic }), get }` re-aims a table at another slice of its service; `_data = { rows, view, selected, on }` reads what it holds, `on` coalescing to one call per task; `_toolbar = { extras, sync }` takes an embedder's controls into the toolbar (made on demand; `sync`, since an empty toolbar is not in the DOM).
 
-Virtualized rows: only those overlapping the viewport (plus overscan) are in the DOM, two `.mkui-vspacer` rows carrying the rest's height. Data: a `rows` Map plus `baseOrder`; `view` is the filtered+sorted key array, `render()` reconciling the shown slice with keyed `tr`s; inserts/deletes/replaces patch it, sort/filter changes dirty it.
+Virtualized rows: only those in the viewport (plus overscan) are in the DOM, two `.mkui-vspacer` rows carrying the rest's height. Data: a `rows` Map plus `baseOrder`; `view` is the filtered+sorted key array, `render()` reconciling the shown slice with keyed `tr`s; inserts/deletes/replaces patch it, sort/filter changes dirty it.
 
-Column widths: once the header row exists (`columns`, else first data), each header is measured under `width: max-content`, locked via `<colgroup>` + `table-layout: fixed`, capped at half the pane. They only grow: `bumpStats` canvas-measures values, `growColWidth` ratchets once per render, sparing `userSized`. Paged streams size columns from first data only (`growSuspended`). Pane resizes don't move them: a trailing auto-width filler (`.mkui-th-filler` + widthless `<col>`) absorbs the rest (`tests/styles.test.js`). Each divider's `.mkui-col-resizer` grip (on the *following* header cell's left edge) resizes the column to its left; header cells must not clip. `colWidths` is keyed by name (reset on reopen); a grip's double-click auto-sizes every selected column (80% viewport cap).
-
-Column reorder: drag a header (lands in `visible`).
+Column widths: once the header row exists (`columns`, else first data), each header is measured under `width: max-content`, locked via `<colgroup>` + `table-layout: fixed`, capped at half the pane. They only grow: `bumpStats` canvas-measures values, `growColWidth` ratchets once per render, sparing `userSized`. Paged streams size columns from first data only (`growSuspended`). Pane resizes don't move them: a trailing filler (`.mkui-th-filler` + widthless `<col>`) absorbs the rest (`tests/styles.test.js`). Each divider's `.mkui-col-resizer` grip (on the *following* header cell's left edge) resizes the column to its left; header cells must not clip. `colWidths` is keyed by name (reset on reopen); a grip's double-click auto-sizes every selected column (80% viewport cap).
 
 Paging (query): the client accumulates every page, firing `onSnapshot` once; `applySnapshot` ingests in chunks (`nextChunk`: rAF or a 250 ms timer for hidden tabs; a generation counter drops stale ones; `ingestTouched` skips rows a live change reached first). `applyInsert` of a held row replaces. `onNack` stamps `mkui-table-failed` (click resubscribes).
 
@@ -192,7 +191,7 @@ Undo/redo: `history.undo` / `history.redo` (`{ service, op, label }`) put a butt
 
 ## Dialogs
 
-`openDialog(spec, context, app, extra)`: a modal floating frame (`stayOnTop`, `noDock`) resolving with the form data on submit, `null` on cancel/close.
+`openDialog(spec, context, app, extra)`: a modal frame (`stayOnTop`, `noDock`) resolving with the form data on submit, `null` on cancel/close.
 
 `spec.fields` items: `{ group }` headers, `{ row: [...] }` rows (`width` = flex share), or fields (types: README; temporal fields are native pickers, values canonical: `datetime` a UTC ISO instant via `lib/timeparse.js`, `parse`/`tz` read other formats; `time: "optional"` pairs date + time in `.mkui-dialog-datetime`, a bare date while time is blank). `optionsFrom` re-fetches when a `${field.X}` param moves (`fill = { field: column }` on that select copies the picked row into named fields via `applyFill`, blanks skipped, targets `dirty`; `remember = key | { key, value }` stores the field, or `value`'s result, in `extra.storage`/localStorage on a confirmed submit, `recallAll` restoring it at open/reset), `optionsFromColumn` takes table values. `spec.submit.service` sends via `client.send()` (5s timeout; `submitPerRow` = one request per selected row merged with `rowData`), errors inline; else resolves at once. `submit.then = { action, args }` → `follow(data)` per confirmed submit: `app.fireAction(args)` over `{ ...context, ...data, form: data }`. `_`-prefixed names never submit. Fields need no `name`: `fieldState` keys by name, the DOM by `keyOf(f)`.
 
@@ -206,11 +205,11 @@ Pin button: `icon("pin")` via `frameEl._extraControls`; pinned, a *confirmed* su
 
 ## Conventions
 
-- Pointer guards: every mousedown/pointerdown that opens a menu or starts an action/drag checks `ev.button === 0` (exception: the frame-raise mousedown). Modified clicks are inert where the modifier means nothing: sort headers ignore ctrl/cmd/alt (shift keeps multi-sort), the select-all corner ignores all. `tests/pointer-guards.test.js`
-- Icons are inline SVGs from `lib/icons.js` (`icon(name)`), never text glyphs: `currentColor`, sized by `.mkui-icon`, whose `pointer-events: none` lands hits on the hosting button (`tests/styles.test.js`)
-- `registerPaneType(name, factory)` for custom content; `registerWidget(name, factory)` for inline widgets
+- Pointer guards: every mousedown/pointerdown that opens a menu or starts an action/drag checks `ev.button === 0` (except the frame-raise mousedown). Modified clicks are inert where the modifier means nothing: sort headers ignore ctrl/cmd/alt (shift keeps multi-sort), the select-all corner ignores all. `tests/pointer-guards.test.js`
+- Icons are inline SVGs (`icon(name)`), never text glyphs: `currentColor`, sized by `.mkui-icon`, whose `pointer-events: none` lands hits on the hosting button (`tests/styles.test.js`)
+- `registerPaneType(name, factory)` for custom content; `registerWidget` for inline widgets
 - Layout tree invariant: every leaf sits inside a `{ type: "tabs", children: [...] }`; no bare strings after normalize
 - CSS invariant: `mkui-menubar`/`mkui-statusbar` are `box-sizing: border-box` so their height equals `--mkui-menubar-h`/`--mkui-statusbar-h` exactly; the workspace is positioned by those (`tests/styles.test.js`)
 - Stability: mkui is 1.x, Semantic Versioning (README "Versioning" lists the covered surface). Removing or changing the meaning of anything covered is MAJOR; additions MINOR; fixes PATCH. `tests/surface.test.js` decides: a removal fails until the major is bumped, an addition until `tests/surface.json` lists it.
-- Platforms: Linux, macOS, Windows (mkio 1.0.1+). `cmd_init` writes `encoding="utf-8"` (`TestInitEncoding`); `.gitattributes` keeps LF for `vendor-sync.test.js`.
+- Platforms: Linux, macOS, Windows (mkio 1.0.1+). `cmd_init` writes `encoding="utf-8"`; `.gitattributes` keeps LF for `vendor-sync.test.js`.
 - Tests: `node:test`, `node:assert/strict`

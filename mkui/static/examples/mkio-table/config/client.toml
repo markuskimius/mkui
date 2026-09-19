@@ -517,8 +517,10 @@ layout = { type = "tabs", active = 0, children = ["child-orders"] }
 
 # ─── mkio connection ──────────────────────────────────────────────────
 
+# Relative to the page: the app follows the server to whatever host and
+# port it is served on (`mkui serve . -p 9000`).
 [mkio]
-url = "ws://localhost:8080/ws"
+url = "/ws"
 # The control channel: a Python process embedding mkio can push actions
 # (table.link, table.filter, pane.show, …) to every open browser through
 # this service — see control.py beside this config. `mkui serve` installs
