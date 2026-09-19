@@ -141,7 +141,7 @@ test("aboutSpec: the app block, the server it reached, who is logged in", () => 
   assert.deepEqual(s.message, ["Order blotter.", "© 2026 Acme"]);
   // The facts are templates over `state`, so an open box follows it.
   assert.deepEqual(factsOf(s, state), [
-    ["Server", "orders 2.4.0"], ["mkio", "1.2.0"], ["Connection", "Connected"], ["User", "ann (admin)"], ["mkui", "1.8.0"],
+    ["Server", "orders 2.4.0"], ["Connection", "Connected"], ["User", "ann (admin)"], ["mkui", "1.8.0"], ["mkio", "1.2.0"],
   ]);
   assert.equal(s.links[0].label, "Docs");
   const conn = (mkio) => Object.fromEntries(factsOf(s, { mkio })).Connection;
@@ -156,6 +156,32 @@ test("aboutSpec: app.about overrides, adds facts, drops the built-in ones", () =
     facts: [{ label: "Build", value: "abc123" }], builtins: false, links: [], width: 500 } } }, { version: "1" });
   assert.deepEqual([s.title, s.heading, s.message, s.width], ["About", "X Pro", "Hand-written.", 500]);
   assert.deepEqual(s.facts, [{ label: "Build", value: "abc123" }]);
+});
+
+test("aboutSpec: a builtins list picks the built-in lines and orders them", () => {
+  const warned = [];
+  const warn = console.warn;
+  console.warn = (...a) => warned.push(a.join(" "));
+  try {
+    const config = (builtins) => ({ app: { title: "X", about: { facts: [{ label: "Build", value: "abc123" }], builtins } }, mkio: { url: "auto" } });
+    const labels = (builtins) => aboutSpec(config(builtins), { version: "1.9.0" }).facts.map((f) => f.label);
+    const all = ["Build", "Server", "Connection", "User", "mkui", "mkio"];
+    assert.deepEqual(labels(undefined), all, "no key: every line, mkui's version ahead of mkio's");
+    assert.deepEqual(labels(true), all, "true is the default spelled out");
+    assert.deepEqual(labels(["server", "mkui", "mkio"]), ["Build", "Server", "mkui", "mkio"], "the app's own lines still lead");
+    assert.deepEqual(labels(["mkio", "server"]), ["Build", "mkio", "Server"], "the list's order, not the default's");
+    assert.deepEqual(labels([]), ["Build"], "an empty list is `false`");
+    assert.deepEqual(labels(false), ["Build"]);
+    assert.deepEqual(warned, [], "nothing to warn about so far");
+    assert.deepEqual(labels(["server", "nonesuch", "toString"]), ["Build", "Server"], "an unknown name is dropped, an inherited one included");
+    assert.equal(warned.length, 2);
+    assert.match(warned[0], /app\.about\.builtins.*nonesuch/);
+  } finally {
+    console.warn = warn;
+  }
+  // A picked line is the same template the default box shows.
+  const s = aboutSpec({ app: { about: { builtins: ["mkui", "server"] } } }, { version: "1.9.0" });
+  assert.deepEqual(factsOf(s, { mkio: { server: { name: "orders", version: "2.4.0" } } }), [["mkui", "1.9.0"], ["Server", "orders 2.4.0"]]);
 });
 
 test("needsClient: a submit service or an optionsFrom anywhere in the fields", () => {

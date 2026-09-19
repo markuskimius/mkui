@@ -149,7 +149,8 @@ export const resetMessage = (n) => n === 0
 // the lines a bug report wants, which "Copy details" takes. `app.about`
 // overrides any part (`title`, `heading`, `message`, `image`, `links`,
 // `width`), `facts` adding lines of its own ahead of the built-in ones
-// (`builtins = false` drops those).
+// (`builtins = false` drops those; a list of their names picks and orders
+// them).
 export function aboutSpec(config, { version } = {}) {
   const a = isObj(config?.app) ? config.app : {};
   const about = isObj(a.about) ? a.about : {};
@@ -157,14 +158,22 @@ export function aboutSpec(config, { version } = {}) {
   const join = (...xs) => xs.filter((x) => x != null && x !== "").join(" ");
 
   // Templates over `state`, so the box follows the connection while open.
-  const builtins = about.builtins === false ? [] : [
-    { label: "Server", value: "${state.mkio.server.name} ${state.mkio.server.version}" },
-    { label: "mkio", value: "${state.mkio.server.mkio}" },
-    { label: "Connection", value: !config?.mkio?.url ? ""
+  // What is happening first — the server, the connection, who is logged
+  // in — then the two libraries' versions, side by side.
+  const lines = {
+    server: { label: "Server", value: "${state.mkio.server.name} ${state.mkio.server.version}" },
+    connection: { label: "Connection", value: !config?.mkio?.url ? ""
       : "${IF(state.mkio.connected, IF(state.mkio.reason, 'Incompatible (' + state.mkio.reason + ')', 'Connected'), 'Disconnected')}" },
-    { label: "User", value: "${IF(state.auth.authenticated, state.auth.user + IF(state.auth.role, ' (' + state.auth.role + ')', ''), '')}" },
-    { label: "mkui", value: version ?? "" },
-  ];
+    user: { label: "User", value: "${IF(state.auth.authenticated, state.auth.user + IF(state.auth.role, ' (' + state.auth.role + ')', ''), '')}" },
+    mkui: { label: "mkui", value: version ?? "" },
+    mkio: { label: "mkio", value: "${state.mkio.server.mkio}" },
+  };
+  // `builtins`: false for none, or a list of the names above — the lines
+  // an app wants, in the order it wants them.
+  const names = about.builtins === false ? []
+    : Array.isArray(about.builtins) ? about.builtins : Object.keys(lines);
+  for (const n of names) if (!Object.hasOwn(lines, n)) console.warn(`[mkui] app.about.builtins: unknown line "${n}"`);
+  const builtins = names.filter((n) => Object.hasOwn(lines, n)).map((n) => lines[n]);
   const image = about.image ?? a.icon ?? null;
   const spec = {
     title: about.title ?? `About ${name}`,

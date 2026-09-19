@@ -546,12 +546,14 @@ and, when the `app` block has them, `version`, `description`,
 `copyright`, `icon` (an image URL, in place of the info icon) and `links`
 (`[{ label, href }]`), over the lines a bug report wants, kept current
 while the box is open — the mkio
-server's name and version, the mkio library's, the connection, the
-logged-in user and role, mkui's own version — each shown only when
-known. **Copy details** puts all of it on the clipboard. `[app.about]`
+server's name and version, the connection, the logged-in user and
+role, then mkui's own version and the mkio library's — each shown only
+when known. **Copy details** puts all of it on the clipboard. `[app.about]`
 overrides any part (`title`, `heading`, `message`, `image`, `links`,
 `width`); its `facts = [{ label, value }]` add lines ahead of the
-built-in ones, and `builtins = false` drops those.
+built-in ones, and `builtins = false` drops those — or names the ones
+to keep, in order: `builtins = ["server", "mkui", "mkio"]`, out of
+`server`, `connection`, `user`, `mkui`, `mkio`.
 
 **The spec.** A message box is a dialog spec, under `[dialogs.<name>]` or
 inline, with any of:
