@@ -298,6 +298,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // The stale stamp: when this table last heard from its service, worn
   // while the connection is down (`showStale`, below the callbacks).
   let staleEl = null;
+  let failedEl = null;
   function toolbarExtras() {
     if (!extrasEl) {
       extrasEl = document.createElement("div");
@@ -309,7 +310,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   let toolbarShown = false;
   function syncToolbar() {
-    const show = hasButtons || hasHistoryBtns || asOfBtn != null || staleEl != null
+    const show = hasButtons || hasHistoryBtns || asOfBtn != null || staleEl != null || failedEl != null
       || extrasEl?.children.length > 0 || chipsEl.children.length > 0;
     if (show === toolbarShown) return;
     toolbarShown = show;
@@ -5431,9 +5432,35 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   let snapshotGen = 0;
   const CHUNK = 100;
+  // Keys a live change touched while a snapshot was still being ingested.
+  // The change is the newer of the two, so the snapshot's copy of that row
+  // is skipped — it would put an older version back, or return a row a
+  // live delete had just taken away.
+  let ingestTouched = null;
+
+  function touch(row) {
+    if (ingestTouched && row) ingestTouched.add(row[idKey]);
+  }
+
+  // The next ingest chunk. Animation frames stop in a hidden or covered
+  // tab, where a snapshot must still finish loading, so a timer backs the
+  // frame up and whichever comes first runs the chunk.
+  const FRAME_FALLBACK_MS = 250;
+  function nextChunk(fn) {
+    let ran = false;
+    const run = () => {
+      if (ran) return;
+      ran = true;
+      clearTimeout(timer);
+      fn();
+    };
+    const timer = setTimeout(run, FRAME_FALLBACK_MS);
+    requestAnimationFrame(run);
+  }
 
   function applySnapshot(snap) {
     const gen = ++snapshotGen;
+    ingestTouched = null;
     if (protocol !== "stream") {
       clearData();
       clearSelection();
@@ -5450,6 +5477,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const ingest = (until) => {
       for (; i < until; i++) {
         const row = snap[i];
+        if (ingestTouched && ingestTouched.has(row[idKey])) continue;
         if (rows.has(row[idKey])) applyReplace(row);
         else insertRow(row, tree !== null);
       }
@@ -5464,14 +5492,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
     progress.textContent = `Loading 0 / ${snap.length}…`;
     progress.style.display = "";
+    ingestTouched = new Set();
 
     function renderChunk() {
       if (gen !== snapshotGen) return;
       ingest(Math.min(i + chunkSize, snap.length));
       if (i < snap.length) {
         progress.textContent = `Loading ${i} / ${snap.length}…`;
-        requestAnimationFrame(renderChunk);
+        nextChunk(renderChunk);
       } else {
+        ingestTouched = null;
         progress.style.display = "none";
         maybeRestoreScroll();
         notifyData();
@@ -5482,6 +5512,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function applyInsert(row, cause = null) {
     if (asOfRef) return;   // a historic view takes no live changes
+    // An insert of a row already held — a change the snapshot reflected
+    // too — must not list it twice.
+    if (rows.has(row[idKey])) { applyReplace(row, cause); return; }
     if (!columns) {
       columns = inferColumns(row);
       renderHead();
@@ -5686,6 +5719,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       heard();
       const follow = shouldFollowTail();
       for (const ch of changes) {
+        touch(ch.row);
         if (ch.op === "insert") applyInsert(ch.row);
         else if (ch.op === "delete") applyDelete(ch.row);
         else applyReplace(ch.row);
@@ -5715,12 +5749,20 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       // the pane's life. Dropping it is enough — the next selection
       // schedules a probe, which now has nothing cached to short-circuit on.
       if (cause) cursorCache.delete(row[idKey]);
+      touch(row);
       if (op === "insert") applyInsert(row, cause);
       else if (op === "delete") applyDelete(row, cause);
       else applyReplace(row, cause);
       if (protocol === "stream" && row._mkio_ref) lastRef = row._mkio_ref;
       if (follow) scrollToTail();
       else maybeRestoreScroll();
+    },
+    // mkio gave the subscription up (it has already tried again where that
+    // could help). The rows stay, so say they are no longer live, or the
+    // table reads as up to date for as long as nobody reloads the page.
+    onNack: (message) => {
+      subscribed = false;
+      showFailed(message);
     },
   };
 
@@ -5969,6 +6011,27 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function heard() {
     lastHeard = Date.now();
     if (staleEl) clearStale();
+    if (failedEl) clearFailed();
+  }
+  // Failed: the server refused or dropped the subscription. Clicking the
+  // stamp subscribes again, as does the pane coming back into view.
+  function showFailed(message) {
+    clearFailed();
+    failedEl = document.createElement("button");
+    failedEl.type = "button";
+    failedEl.className = "mkui-table-failed";
+    failedEl.appendChild(icon("refresh"));
+    failedEl.appendChild(document.createTextNode("not updating — retry"));
+    failedEl.title = `The server ended this subscription: ${message}`;
+    failedEl.addEventListener("click", () => { clearFailed(); sub(); });
+    toolbar.insertBefore(failedEl, chipsEl);
+    syncToolbar();
+  }
+  function clearFailed() {
+    if (!failedEl) return;
+    failedEl.remove();
+    failedEl = null;
+    syncToolbar();
   }
   function showStale() {
     if (!staleOn || staleEl || lastHeard == null || rows.size === 0) return;

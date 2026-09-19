@@ -299,6 +299,13 @@ data itself:
 
 There is no Retry button: the client is already retrying every second.
 
+A subscription can also end while the connection stays up — the server
+refuses it, or keeps resetting it (mkio's client first tries again by
+itself). The rows stay on screen, so an `mkio-table` then says so: a
+`not updating — retry` stamp in its toolbar (`.mkui-table-failed`, the
+server's reason in its tooltip). Clicking it subscribes again, as does
+the pane coming back into view, and the next data clears it.
+
 Each piece is a key of `mkio.offline`, all on by default; `false` turns
 the lot off:
 

@@ -233,6 +233,22 @@ mkui-app[stale] mkui-workspace::after {
   gap: 4px;
 }
 .mkui-table-stale .mkui-icon, .mkui-record-stale .mkui-icon { width: 13px; height: 13px; }
+/* The server ended a table's subscription: its rows are no longer live. */
+.mkui-table-failed {
+  color: var(--mkui-danger, #f44747);
+  background: none;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.mkui-table-failed .mkui-icon { width: 13px; height: 13px; }
 
 /* ─── Workspace + frames ─────────────────────────────────────────────── */
 

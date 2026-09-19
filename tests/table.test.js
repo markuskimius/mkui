@@ -580,6 +580,124 @@ test("new snapshot cancels in-progress chunking via generation counter", async (
   assert.equal(tbody._ch.length, 50);
 });
 
+/* ── A snapshot loading while live changes arrive ─────────────────────── */
+
+function namesInBody(host) {
+  return getTbody(host)._ch.map((tr) => tr._ch.map((td) => td.textContent).find((t) => /^(row-|LIVE)/.test(t)));
+}
+
+test("a live change during chunked ingest is not overwritten by the older snapshot row", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const { onSnapshot, onUpdate } = lastSubscribe().opts;
+  onSnapshot(makeRows(250));                       // first 100 ingested; 150 is still to come
+  onUpdate("update", { _mkio_row: "150", name: "LIVE-150", value: 1 }, {});
+  flushRaf();
+  const names = namesInBody(host);
+  assert.equal(names.filter((n) => n === "LIVE-150").length, 1);
+  assert.ok(!names.includes("row-150"));
+  assert.equal(names.length, 250);
+});
+
+test("a live delete during chunked ingest is not undone by the snapshot row", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const { onSnapshot, onUpdate } = lastSubscribe().opts;
+  onSnapshot(makeRows(250));
+  onUpdate("delete", { _mkio_row: "200" }, {});
+  flushRaf();
+  const names = namesInBody(host);
+  assert.ok(!names.includes("row-200"));
+  assert.equal(names.length, 249);
+});
+
+test("what a live change touched during one ingest does not shield the row from the next snapshot", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const { onSnapshot, onUpdate } = lastSubscribe().opts;
+  onSnapshot(makeRows(250));
+  onUpdate("update", { _mkio_row: "150", name: "LIVE-150", value: 1 }, {});
+  flushRaf();
+  onSnapshot(makeRows(250));                       // a reconnect: the server's word again
+  flushRaf();
+  const names = namesInBody(host);
+  assert.ok(names.includes("row-150") && !names.includes("LIVE-150"));
+  assert.equal(names.length, 250);
+});
+
+test("a live insert of a brand-new row during chunked ingest survives it", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const { onSnapshot, onUpdate } = lastSubscribe().opts;
+  onSnapshot(makeRows(250));
+  onUpdate("insert", { _mkio_row: "9000", name: "LIVE-new", value: 1 }, {});
+  flushRaf();
+  const names = namesInBody(host);
+  assert.equal(names.filter((n) => n === "LIVE-new").length, 1);
+  assert.equal(names.length, 251);
+});
+
+test("a delta during chunked ingest is protected like an update", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const { onSnapshot, onDelta } = lastSubscribe().opts;
+  onSnapshot(makeRows(250));
+  onDelta([{ op: "update", row: { _mkio_row: "180", name: "LIVE-180", value: 1 } },
+           { op: "delete", row: { _mkio_row: "190" } }]);
+  flushRaf();
+  const names = namesInBody(host);
+  assert.ok(names.includes("LIVE-180") && !names.includes("row-180") && !names.includes("row-190"));
+  assert.equal(names.length, 249);
+});
+
+test("chunked ingest finishes without animation frames (a hidden tab)", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(250));
+  assert.equal(getTbody(host)._ch.length, 100);
+  rafQueue.length = 0;                             // frames never fire
+  advanceTimers();
+  advanceTimers();
+  assert.equal(getTbody(host)._ch.length, 250);
+  assert.equal(findByClass(host, "mkui-table-progress").style.display, "none");
+});
+
+test("an insert of a row the table already holds does not list it twice", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  const { onSnapshot, onUpdate } = lastSubscribe().opts;
+  onSnapshot(makeRows(3));
+  onUpdate("insert", { _mkio_row: "1", name: "LIVE-1", value: 9 }, {});
+  assert.deepEqual(namesInBody(host), ["row-0", "LIVE-1", "row-2"]);
+});
+
+const failedOf = (host) => {
+  const toolbar = host._ch.find(c => String(c.className).includes("mkui-table-toolbar"));
+  return toolbar?._ch.find(c => c.className === "mkui-table-failed") ?? null;
+};
+
+test("a nack stamps the table as not updating; the stamp retries and data clears it", async () => {
+  const { io, host } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(3));
+  const before = fakeClient.calls.filter((c) => c.type === "subscribe").length;
+
+  lastSubscribe().opts.onNack("subscription reset: update buffer overflow");
+  const stamp = failedOf(host);
+  assert.ok(stamp);
+  assert.ok(stamp.title.includes("update buffer overflow"));
+  assert.equal(getTbody(host)._ch.length, 3);      // the rows stay, marked as not live
+
+  stamp._ev.click[0]();
+  assert.equal(fakeClient.calls.filter((c) => c.type === "subscribe").length, before + 1);
+  assert.equal(failedOf(host), null);
+
+  lastSubscribe().opts.onNack("again");
+  assert.ok(failedOf(host));
+  lastSubscribe().opts.onSnapshot(makeRows(3));
+  assert.equal(failedOf(host), null);
+});
+
 /* ── Stream paging toolbar ────────────────────────────────────────────── */
 
 test("paged stream creates toolbar with prev/next/live", async () => {
