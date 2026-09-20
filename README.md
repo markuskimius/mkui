@@ -208,7 +208,7 @@ Connection is two-phase:
     "name": "order-book",
     "version": "1.0",
     "protocol": "1.0",
-    "expr": "1"
+    "expr": "2"
   },
   "connected":    { "status.message": "Connected", "status.background": null },
   "incompatible": {
@@ -972,11 +972,16 @@ mkio's `mkio-expr.js`, vendored verbatim — so a condition reads identically
 whether it is a server-side `where`, a client `filter` sent to the server,
 or a styling rule in `client.toml`. The grammar, operators, and standard
 library are documented in [mkio's README](../mkio/README.md#expression-language);
-in short: `&& || !`, `== != < <= > >=`, `??`, arithmetic, `[...]`/`{k: v}`
+in short: `&& || !` or the words `and or not`, `== != < <= > >=`, `in` /
+`not in`, `??`, arithmetic, durations (`500ms`, `1.5m` — seconds), `[...]`/`{k: v}`
 literals, `a.b[0]` access, `F(x, name: v)` calls (`IF`, `CASE`, `LET`,
-`NUM`, `DATE`, `MAP`, `SUM`, …), lambdas `x -> …`, and pipes
+`NUM`, `DATE`, `MAP`, `SUM`, `COUNT`, …), lambdas `x -> …`, and pipes
 `value |> (x -> …)`. Strings in config may embed expressions as `${...}`
 templates.
+
+That is language version 2 (mkio 1.5): a gate can read
+`when = "LEN(rows) > 0 and ALL(rows, r -> r.status in ['pending', 'held'])"`.
+A server older than 1.5 reports the `expr` expectation as unmet.
 
 mkui evaluates leniently: an unknown name is `NULL` rather than an error
 (rows and forms are heterogeneous), and an expression that fails logs one

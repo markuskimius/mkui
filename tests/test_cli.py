@@ -762,7 +762,7 @@ class ExampleConfigsTest(unittest.TestCase):
         pane = cfg["panes"]["all-orders"]
         self.assertEqual(pane["values"], {"notional": "ROUND(qty * price, 2)"})
         self.assertIn("when", pane["rowStyle"][0])
-        self.assertEqual(cfg["mkio"]["expect"]["expr"], "1")
+        self.assertEqual(cfg["mkio"]["expect"]["expr"], "2")
 
     def test_mkio_table_example_has_layout_store(self):
         import tomllib
