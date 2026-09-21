@@ -1700,6 +1700,58 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   border-radius: 3px;
   outline: none;
 }
+/* `type = "checklist"`: tick boxes in a box that scrolls past `size` rows. */
+.mkui-dialog-checklist {
+  box-sizing: border-box;
+  max-height: calc(var(--mkui-checklist-rows, 8) * 26px + 6px);
+  overflow-y: auto;
+  padding: 2px;
+  background: var(--mkui-bg-alt);
+  border: 1px solid var(--mkui-border);
+  border-radius: 3px;
+  outline: none;
+}
+.mkui-dialog-checklist:focus-within { border-color: var(--mkui-accent); }
+.mkui-dialog-field.mkui-dialog-invalid .mkui-dialog-checklist { border-color: #c0392b; }
+.mkui-dialog-field .mkui-dialog-checkrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  margin: 0;
+  padding: 0 6px;
+  border-radius: 2px;
+  color: var(--mkui-fg);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.mkui-dialog-field .mkui-dialog-checkrow:hover { background: var(--mkui-bg-hover, rgba(255, 255, 255, 0.06)); }
+.mkui-dialog-field .mkui-dialog-checkrow input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  padding: 0;
+  flex: none;
+  accent-color: var(--mkui-accent);
+}
+.mkui-dialog-field .mkui-dialog-checkrow span { overflow: hidden; text-overflow: ellipsis; }
+.mkui-dialog-checkall { position: sticky; top: -2px; z-index: 1; background: var(--mkui-bg-alt); border-bottom: 1px solid var(--mkui-border); border-radius: 0; font-weight: 600; }
+.mkui-dialog-checknone { padding: 6px; color: var(--mkui-fg-mute); font-size: 12px; }
+
+/* A select with `size`: a list box, its rows scrolling inside the field. */
+.mkui-dialog-field select.mkui-dialog-listbox {
+  height: auto;
+  padding: 2px;
+  overflow-y: auto;
+}
+.mkui-dialog-field select.mkui-dialog-listbox option {
+  padding: 4px 6px;
+  border-radius: 2px;
+}
+.mkui-dialog-field select.mkui-dialog-listbox option:checked {
+  background: var(--mkui-accent) linear-gradient(0deg, var(--mkui-accent) 0%, var(--mkui-accent) 100%);
+  color: #fff;
+}
 .mkui-dialog-field input:focus,
 .mkui-dialog-field select:focus,
 .mkui-dialog-field textarea:focus {

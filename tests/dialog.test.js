@@ -2057,3 +2057,70 @@ test("a button's submit with nobody to send it to says so instead of pretending"
   assert.equal(await settled(d.promise), false);
   assert.equal(d.footer._ch[0].textContent, "Not connected");
 });
+
+test("a select with size is a list box; anything else stays a dropdown", async () => {
+  const { listRows } = await import("../mkui/static/src/widgets/mkui-dialog.js");
+  assert.equal(listRows({ type: "select", size: 6 }), 6);
+  assert.equal(listRows({ type: "select", size: "8" }), 8);
+  assert.equal(listRows({ type: "select", size: 6.9 }), 6);
+  assert.equal(listRows({ type: "select", size: 500 }), 40, "capped: a list that tall is a pane, not a field");
+  for (const field of [{ type: "select" }, { type: "select", size: 1 }, { type: "select", size: 0 }, { type: "select", size: "many" },
+    { type: "text", size: 6 }, null, undefined]) {
+    assert.equal(listRows(field), 0);
+  }
+});
+
+test("the list box is wired into the select field and styled", async () => {
+  const fs = await import("node:fs");
+  const source = fs.readFileSync(new URL("../mkui/static/src/widgets/mkui-dialog.js", import.meta.url), "utf8");
+  assert.match(source, /input\.size = rows;\s*input\.classList\.add\("mkui-dialog-listbox"\)/);
+  const css = fs.readFileSync(new URL("../mkui/static/styles/mkui.css", import.meta.url), "utf8");
+  assert.match(css, /select\.mkui-dialog-listbox \{/);
+  assert.match(css, /select\.mkui-dialog-listbox option:checked/);
+});
+
+test("optionsFrom.empty names the blank choice of a fetched list", async () => {
+  const { emptyLabel } = await import("../mkui/static/src/widgets/mkui-dialog.js");
+  assert.equal(emptyLabel({ optionsFrom: { service: "s" } }), "—");
+  assert.equal(emptyLabel({ optionsFrom: { service: "s", empty: "" } }), "—");
+  assert.equal(emptyLabel({ optionsFrom: { service: "s", empty: "Every session" } }), "Every session");
+  assert.equal(emptyLabel({ optionsFrom: { empty: "All ${row.side} runs" } }, { row: { side: "market" } }), "All market runs");
+  assert.equal(emptyLabel({ optionsFrom: { empty: "${field.region} desks" } }, {}, { region: "US" }), "US desks");
+  assert.equal(emptyLabel(null), "—");
+  const fs = await import("node:fs");
+  const source = fs.readFileSync(new URL("../mkui/static/src/widgets/mkui-dialog.js", import.meta.url), "utf8");
+  assert.equal(source.match(/textContent = emptyLabel\(field, context, fieldState\)/g).length, 2, "both while waiting on a parameter and once fetched");
+});
+
+test("a checklist's value is the ticked values, comma-joined in list order", async () => {
+  const { checklistParse, checklistFormat, checklistState } = await import("../mkui/static/src/widgets/mkui-dialog.js");
+  assert.deepEqual(checklistParse("4, 7,9"), ["4", "7", "9"]);
+  assert.deepEqual(checklistParse(["a", 2]), ["a", "2"]);
+  assert.deepEqual(checklistParse(""), []);
+  assert.deepEqual(checklistParse(null), []);
+  assert.deepEqual(checklistParse(",,"), []);
+  const options = [{ value: "4" }, { value: 7 }, { value: "9" }];
+  assert.equal(checklistFormat(["9", "4"], options), "4,9", "list order, not ticking order");
+  assert.equal(checklistFormat(["9", "gone"], options), "9", "a value the list no longer has is dropped");
+  assert.equal(checklistFormat([], options), "");
+  assert.equal(checklistFormat("7,4"), "7,4");
+  assert.equal(checklistState("4,7,9", options), "all");
+  assert.equal(checklistState("7", options), "some");
+  assert.equal(checklistState("", options), "none");
+  assert.equal(checklistState("gone", options), "none");
+  assert.equal(checklistState("", []), "none");
+});
+
+test("the checklist is a field type of its own, wired like a select", async () => {
+  const fs = await import("node:fs");
+  const source = fs.readFileSync(new URL("../mkui/static/src/widgets/mkui-dialog.js", import.meta.url), "utf8");
+  for (const piece of ['field.type === "checklist"', "input._mkuiSet(v)", "fetchChecklist(input, field, extra)",
+    'if (f.type === "checklist") fetchChecklist(', "tick.indeterminate = state === \"some\""]) {
+    assert.ok(source.includes(piece), piece);
+  }
+  const css = fs.readFileSync(new URL("../mkui/static/styles/mkui.css", import.meta.url), "utf8");
+  for (const rule of [".mkui-dialog-checklist {", ".mkui-dialog-checkrow input[type=\"checkbox\"]", ".mkui-dialog-checkall"]) {
+    assert.ok(css.includes(rule), rule);
+  }
+  assert.match(css, /\.mkui-dialog-checkrow input\[type="checkbox"\] \{[^}]*width: auto/, "a dialog's inputs are full width: a tick box must not be");
+});

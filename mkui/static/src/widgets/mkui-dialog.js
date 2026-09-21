@@ -304,6 +304,8 @@ export function openDialog(spec, context, app, extra = {}) {
       } else if (field.type === "checkbox") {
         next = !!v;
         if (input) input.checked = next;
+      } else if (field.type === "checklist") {
+        next = input ? input._mkuiSet(v) : checklistFormat(checklistParse(v));
       } else if (field.type === "select") {
         if (input) {
           const want = v == null || v === "" ? "" : String(v);
@@ -466,8 +468,24 @@ export function openDialog(spec, context, app, extra = {}) {
         parts.ro = ro;
       } else if (field.type === "select") {
         input = document.createElement("select");
+        // `size = N` (2 or more) shows the options as a list box N rows
+        // tall, scrolling past that: for a pick among records — runs, jobs —
+        // that reads better seen together than behind a dropdown. Still one
+        // value; everything else about a select holds.
+        const rows = listRows(field);
+        if (rows) {
+          input.size = rows;
+          input.classList.add("mkui-dialog-listbox");
+        }
         populateSelect(input, field, extra);
         input.addEventListener("change", onEdit(input, (i) => i.value));
+        wrapper.appendChild(input);
+      } else if (field.type === "checklist") {
+        input = buildChecklist(field, (value) => {
+          dirty.add(keyOf(field));
+          if (field.name) fieldState[field.name] = value;
+          onFieldChange(field.name ?? null, []);
+        }, () => resolveExpr(String(field.all), formScope()));
         wrapper.appendChild(input);
       } else if (field.type === "checkbox") {
         input = document.createElement("input");
@@ -517,8 +535,10 @@ export function openDialog(spec, context, app, extra = {}) {
       fieldParts[key] = parts;
       if (input) fieldInputs[key] = input;
       if (field.type === "select") syncOptions(field);
+      if (field.type === "checklist" && !field.optionsFrom) input._mkuiOptions(currentOptions(field));
       setFieldValue(field, defaultValue(field));
       if (field.type === "select") fetchOptionsFrom(input, field, extra);
+      if (field.type === "checklist") fetchChecklist(input, field, extra);
 
       return wrapper;
     }
@@ -1230,7 +1250,8 @@ export function openDialog(spec, context, app, extra = {}) {
         if (!f.optionsFrom) continue;
         const paramStr = JSON.stringify(f.optionsFrom.params ?? {});
         if (!paramStr.includes("${field." + changedField + "}")) continue;
-        fetchOptionsFrom(fieldInputs[keyOf(f)], f, extra);
+        if (f.type === "checklist") fetchChecklist(fieldInputs[keyOf(f)], f, extra);
+        else fetchOptionsFrom(fieldInputs[keyOf(f)], f, extra);
       }
     }
 
@@ -1518,6 +1539,28 @@ export function openDialog(spec, context, app, extra = {}) {
       return ok;
     }
 
+    // A checklist's rows from a service: the same `optionsFrom` a select
+    // takes. What was ticked stays ticked where the new list still has it;
+    // a field opened on "*" ticks whatever arrives.
+    async function fetchChecklist(listEl, field, extra) {
+      if (!field.optionsFrom || !listEl || !extra.client?.request) return;
+      const params = resolveObject(field.optionsFrom.params ?? {}, { ...context, field: fieldState });
+      if (Object.values(params).some((v) => v === "")) { listEl._mkuiOptions([]); return; }
+      try {
+        const resp = await extra.client.request(field.optionsFrom.service, params);
+        const rows = Array.isArray(resp) ? resp : resp?.rows ?? [];
+        optionRows[keyOf(field)] = rows;
+        listEl._mkuiOptions(rows.map((r) => ({
+          value: String(r[field.optionsFrom.value] ?? ""),
+          label: String(r[field.optionsFrom.label] ?? r[field.optionsFrom.value] ?? ""),
+        })));
+        if (field.name) fieldState[field.name] = listEl._mkuiValue();
+      } catch (e) {
+        console.error("[mkui-dialog] optionsFrom error:", e);
+      }
+      applyDynamic();
+    }
+
     async function fetchOptionsFrom(selectEl, field, extra) {
       if (!field.optionsFrom || !selectEl) return;
       const client = extra.client;
@@ -1530,7 +1573,7 @@ export function openDialog(spec, context, app, extra = {}) {
         selectEl.innerHTML = "";
         const opt = document.createElement("option");
         opt.value = "";
-        opt.textContent = "—";
+        opt.textContent = emptyLabel(field, context, fieldState);
         selectEl.appendChild(opt);
         if (field.name) fieldState[field.name] = "";
         applyDynamic();
@@ -1546,7 +1589,7 @@ export function openDialog(spec, context, app, extra = {}) {
         selectEl.innerHTML = "";
         const emptyOpt = document.createElement("option");
         emptyOpt.value = "";
-        emptyOpt.textContent = "—";
+        emptyOpt.textContent = emptyLabel(field, context, fieldState);
         selectEl.appendChild(emptyOpt);
         for (const r of rows) {
           const opt = document.createElement("option");
@@ -1585,6 +1628,120 @@ export function normalizeOptions(options) {
     if (o == null || typeof o !== "object") return { value: String(o ?? ""), label: String(o ?? "") };
     return { value: o.value ?? "", label: o.label ?? o.value ?? "", showWhen: o.showWhen };
   });
+}
+
+// -- checklist ---------------------------------------------------------------
+// `type = "checklist"`: a scrolling list of tick boxes over `options` or
+// `optionsFrom`, for choosing several records at once — the runs to stop, the
+// jobs to cancel. Its value is the ticked values joined by commas, in list
+// order ("" for none), so it is a string like any other field's: `required`
+// means "tick at least one", `remember` and the submit payload need nothing
+// new, and the server splits on the comma. `value = "*"` opens with every row
+// ticked; `all = "Every run"` adds a first row that ticks or clears them all
+// and shows a dash while only some are; `size` is the rows in view (8).
+
+export function checklistParse(value) {
+  if (Array.isArray(value)) return value.map(String);
+  if (value == null || value === "") return [];
+  return String(value).split(",").map((v) => v.trim()).filter((v) => v !== "");
+}
+
+export function checklistFormat(values, options = null) {
+  const ticked = new Set(checklistParse(values));
+  if (!options) return [...ticked].join(",");
+  return options.map((o) => String(o.value)).filter((v) => ticked.has(v)).join(",");     // list order, and only what the list has
+}
+
+// all | some | none — what the "all" row shows.
+export function checklistState(values, options) {
+  const have = new Set(options.map((o) => String(o.value)));
+  const n = checklistParse(values).filter((v) => have.has(v)).length;
+  return n === 0 ? "none" : n === have.size ? "all" : "some";
+}
+
+function buildChecklist(field, onChange, allLabel) {
+  const box = document.createElement("div");
+  box.className = "mkui-dialog-checklist";
+  box.tabIndex = 0;
+  const rows = Math.min(Math.max(Math.floor(Number(field.size)) || 8, 2), 40);
+  box.style.setProperty("--mkui-checklist-rows", String(rows));
+  let options = [];
+  let ticked = new Set();
+  let everything = false;               // opened on "*": tick whatever the list turns out to hold
+
+  const value = () => checklistFormat([...ticked], options);
+  function render() {
+    box.replaceChildren();
+    const row = (label, checked, onToggle, cls) => {
+      const el = document.createElement("label");
+      el.className = `mkui-dialog-checkrow${cls ? " " + cls : ""}`;
+      const tick = document.createElement("input");
+      tick.type = "checkbox";
+      tick.checked = checked;
+      tick.addEventListener("change", () => onToggle(tick.checked));
+      const text = document.createElement("span");
+      text.textContent = label;
+      el.append(tick, text);
+      box.appendChild(el);
+      return tick;
+    };
+    if (field.all != null && options.length) {
+      const state = checklistState([...ticked], options);
+      const tick = row(allLabel(), state === "all", (on) => {
+        ticked = new Set(on ? options.map((o) => String(o.value)) : []);
+        render();
+        onChange(value());
+      }, "mkui-dialog-checkall");
+      tick.indeterminate = state === "some";
+    }
+    for (const o of options) {
+      row(o.label, ticked.has(String(o.value)), (on) => {
+        if (on) ticked.add(String(o.value)); else ticked.delete(String(o.value));
+        everything = false;
+        render();
+        onChange(value());
+      });
+    }
+    if (!options.length) {
+      const none = document.createElement("div");
+      none.className = "mkui-dialog-checknone";
+      none.textContent = field.none ?? "Nothing to choose from";
+      box.appendChild(none);
+    }
+  }
+
+  box._mkuiOptions = (list) => {
+    options = list.map((o) => ({ value: String(o.value), label: o.label ?? String(o.value) }));
+    if (everything) ticked = new Set(options.map((o) => o.value));
+    render();
+  };
+  box._mkuiSet = (v) => {
+    everything = v === "*";
+    ticked = new Set(everything ? options.map((o) => o.value) : checklistParse(v));
+    render();
+    return value();
+  };
+  box._mkuiValue = value;
+  render();
+  return box;
+}
+
+// What the blank choice of a service-backed select reads: `optionsFrom.empty`
+// — a `${...}` template over the opening context and the fields, for a blank
+// that means something ("Every session", "(the one the macro names)") — or
+// the dash it has always been. A static `options` list is not merged into a
+// fetched one, so this is the one way to name it.
+export function emptyLabel(field, context = {}, fieldState = {}) {
+  const given = field?.optionsFrom?.empty;
+  if (given == null || given === "") return "—";
+  const text = resolveExpr(String(given), { ...context, field: fieldState });
+  return text == null || text === "" ? "—" : String(text);
+}
+
+// The rows a select shows as a list box, or 0 for the dropdown it otherwise is.
+export function listRows(field) {
+  const n = Math.floor(Number(field?.size));
+  return field?.type === "select" && Number.isFinite(n) && n >= 2 ? Math.min(n, 40) : 0;
 }
 
 function populateSelect(sel, field, extra) {
