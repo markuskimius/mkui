@@ -1439,7 +1439,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     botSpacerTd.style.height = ((total - end) * rowH) + "px";
 
     // Walk the slice in order, moving/creating only rows that are out of
-    // place — untouched rows keep their running CSS flash animations.
+    // place — untouched rows keep their running CSS flash animations. A
+    // deleted row fading out (`_leaving`) is no longer tracked but still
+    // sits in the tbody: the walk steps over it, so the row that followed
+    // it lands after it, not before — else each later row would be moved
+    // ahead of it in turn, carrying it to the bottom while it fades.
     let cursor = topSpacer;
     const labels = tree && rowColumn ? new Map() : null; // rowLabel memo for this slice
     let labelW = 0;
@@ -1450,7 +1454,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         tr = buildRow(rows.get(key));
         rowEls.set(key, tr);
       }
-      if (cursor.nextSibling !== tr) tbody.insertBefore(tr, cursor.nextSibling);
+      let next = cursor.nextSibling;
+      while (next && next._leaving) next = next.nextSibling;
+      if (next !== tr) tbody.insertBefore(tr, next);
       cursor = tr;
       tr._viewIdx = i;
       if (rowColumn) {
@@ -5568,9 +5574,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     viewRev++;
     const tr = rowEls.get(key);
     if (tr) {
-      // Fade out in place; render() no longer tracks this element, so it
-      // is removed for real when the animation ends.
+      // Fade out in place; render() no longer tracks this element (only
+      // steps over it), so it is removed for real when the animation ends.
       rowEls.delete(key);
+      tr._leaving = true;
       flash(tr, causeFlash(cause, "mkui-flash-out"));
       tr.addEventListener("animationend", () => tr.remove(), { once: true });
     }

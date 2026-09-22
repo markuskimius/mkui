@@ -4013,6 +4013,33 @@ test("selection survives re-render; deleted rows drop out of it", async () => {
   assert.equal(selected[0]._ch[1].textContent, "row-0");
 });
 
+test("a deleted row fades out in place under a sort too", async () => {
+  const { host } = await createSelTable({ sort: "-name" });
+  assert.deepEqual(dataRows(host).map(tr => tr._ch[1].textContent), ["row-3", "row-2", "row-1", "row-0"]);
+  lastSubscribe().opts.onUpdate("delete", { _mkio_row: "2" }, { cause: "undo" });
+  const trs = dataRows(host);
+  assert.deepEqual(trs.map(tr => tr._ch[1].textContent), ["row-3", "row-2", "row-1", "row-0"]);
+  assert.ok(trs[1].classList.contains("mkui-flash-undo-out"), "a cursor step out fades in place too");
+  assert.equal(trs.filter(tr => tr._leaving).length, 1);
+});
+
+test("a deleted row fades out in place, not at the bottom", async () => {
+  const { host } = await createSelTable();
+  // Delete the second of four rows: its tr lingers to fade, and the rows
+  // that followed it must land after it, not be moved ahead of it one by
+  // one (which would carry the fading row to the bottom of the table).
+  lastSubscribe().opts.onUpdate("delete", { _mkio_row: "1" });
+  const trs = dataRows(host);
+  assert.equal(trs.length, 4, "the fading row is still in the tbody");
+  assert.deepEqual(trs.map(tr => tr._ch[1].textContent), ["row-0", "row-1", "row-2", "row-3"]);
+  assert.ok(trs[1].classList.contains("mkui-flash-out"));
+  assert.ok(!trs[0].classList.contains("mkui-flash-out"));
+  assert.ok(!trs[3].classList.contains("mkui-flash-out"));
+  // A further render (a live change elsewhere) leaves it where it is.
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "3", name: "row-3b" });
+  assert.deepEqual(dataRows(host).map(tr => tr._ch[1].textContent), ["row-0", "row-1", "row-2", "row-3b"]);
+});
+
 test("new snapshot fully resets selection and focus", async () => {
   const { host } = await createSelTable();
   const trs = dataRows(host);
@@ -6283,6 +6310,7 @@ const treeText = (td) => { const t = td._ch.find(c => c.className === "mkui-tree
 // A deleted row's element fades out until animationend (never fired here).
 const liveRows = (host) => dataRows(host).filter(tr => !tr.classList.contains("mkui-flash-out"));
 const treeNames = (host) => liveRows(host).map(tr => treeText(tr._ch.find(td => td.dataset?.col === "name")));
+const allTreeNames = (host) => dataRows(host).map(tr => treeText(tr._ch.find(td => td.dataset?.col === "name")));
 function treeRow(host, name) {
   return liveRows(host).find(tr => treeText(tr._ch.find(td => td.dataset?.col === "name")) === name);
 }
@@ -8995,4 +9023,19 @@ test("stale: repeated disconnect callbacks keep one stamp; mkio.offline.stale = 
   lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", x: 10 }]);
   off.state.set("mkio.connected", false);
   assert.equal(staleOf(off.host), null);
+});
+
+
+test("tree: a deleted child fades out in its slot, its later siblings staying below it", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
+  assert.deepEqual(allTreeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"]);
+  lastSubscribe().opts.onUpdate("delete", { _mkio_row: "2" });   // a1
+  assert.deepEqual(allTreeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"], "nothing moved past the fading row");
+  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "b", "b1", "x1"]);
+  const fading = dataRows(host)[1];
+  assert.ok(fading.classList.contains("mkui-flash-out") && fading._leaving);
+  // Once the animation ends the element goes, and the next render is unaffected.
+  fading._ev.animationend.forEach(fn => fn());
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "6", name: "b1!", id: "B1", parent: "B", qty: 9 });
+  assert.deepEqual(allTreeNames(host), ["a", "a2", "a21", "b", "b1!", "x1"]);
 });
