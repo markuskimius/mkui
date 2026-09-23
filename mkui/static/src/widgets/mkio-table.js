@@ -4974,6 +4974,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     applyVisible();
   }
 
+  // Fresh rows carry no number and no selection style — the slice walk in
+  // render() writes both — so the paint memo is dropped: the view is the
+  // same, and render() would otherwise take its nothing-changed exit.
   function rebuildAllRows() {
     for (const [key, tr] of rowEls) {
       const row = rows.get(key);
@@ -4982,6 +4985,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       tr.replaceWith(fresh);
       rowEls.set(key, fresh);
     }
+    renderedRev = -1;
   }
 
   /* ── Filter dropdown ──────────────────────────────────────────────── */

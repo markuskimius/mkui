@@ -438,8 +438,10 @@ An expression that does not compile warns once in the console and leaves
 the item enabled and shown.
 
 **Built-in actions:** `app.quit`, `pane.show` (takes a pane ID as
-`args` — switches to that pane's tab and raises its frame, or opens a
-new frame if the pane is parked/closed), `window.tileH`, `window.tileV`,
+`args` — switches to that pane's tab and raises its frame, or, if the
+pane is parked/closed, opens a new frame: the window it was closed in,
+with the filters, sort, and columns it had, when one is remembered —
+see [Layouts](#layouts) — else a fresh one), `window.tileH`, `window.tileV`,
 `window.grid`, `window.cascade`, `edit.copy`, `edit.selectAll`,
 `edit.find` (the last three route to the focused frame's active pane —
 the same path the Ctrl/Cmd+C, Ctrl/Cmd+A, and Ctrl/Cmd+F shortcuts
@@ -495,7 +497,7 @@ entry per pane currently hosted in a frame, labeled with the pane's
 title. Selecting an entry raises the frame that contains the pane and
 switches to its tab (dialogs and other noDock frames are excluded).
 Static `pane.show` entries are still useful for reopening panes whose
-frame has been closed.
+frame has been closed: a closed window comes back where and as it was.
 
 Tabs can be renamed in place: ctrl+click (or cmd+click on macOS) a tab,
 edit the title, and press Enter (Escape cancels). The new title is
@@ -661,6 +663,16 @@ plus, for each table open in one, its filters, sort order, and visible
 columns. It never holds a paged table's position, and dialogs are never
 part of it.
 
+**Closed windows are remembered.** Closing a window doesn't throw its
+setup away: for each pane it held, the workspace keeps the window's
+position and size and the filters, sort, and columns the pane had at
+that moment, and a `pane.show` on that pane brings it back there, set up
+that way, rather than in a fresh window at the config's defaults. A
+saved layout carries those closed windows too, so they survive a restart
+and a `Restore Layout`, and closing a window is a change worth saving.
+Two panes closed as tabs of one window come back as two windows at that
+window's rect. `Reset to Default` forgets them all.
+
 **One layout per user, with history.** Saves are unnamed. A user's
 layout is simply their newest save, and it comes back when the app
 starts. Every earlier save stays behind it, so `Restore Layout` lists
@@ -685,7 +697,7 @@ expands into one `layout.restore` entry per save — the list refreshes
 whenever the menu opens, so saves from another tab appear.
 `layout.reset` returns to how the app looks at startup without a saved
 layout: the config's `frames`, every pane at its configured filters,
-sort, and columns. With `autoload` (the default), the user's newest save
+sort, and columns, no closed window remembered. With `autoload` (the default), the user's newest save
 is applied when the app starts, after login where there is one; the
 config frames load when there is none, or when the store doesn't answer
 within `timeout`.

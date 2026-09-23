@@ -8,12 +8,15 @@
 //   { version: 1,
 //     frames: [{ id, title, x, y, w, h, layout: <tree> }, ...],   // z-order
 //     focused: <frame id> | null,
-//     panes: { <pane id>: { filters, sort, visible, link, record } } }  // open panes
+//     panes: { <pane id>: { filters, sort, visible, link, record,
+//                           frame?: { x, y, w, h, title } } } }
 //
 // Frame rects are workspace fractions, so a layout saved on one monitor
 // lays out proportionally on another; every restored rect still passes
-// `clampToDock`. Only panes open in a frame carry view state — a table's
-// filters, sort, and visible columns — never a paged table's position.
+// `clampToDock`. A pane's entry carries its view state — a table's
+// filters, sort, and visible columns — never a paged table's position. A
+// pane in no frame is a closed window, its entry also saying where it
+// reopens (`frame`, the rect and title of the window it was closed in).
 
 export const LAYOUT_VERSION = 1;
 
@@ -67,8 +70,8 @@ export function pruneTree(node, known, dropped = []) {
 // Validate a stored layout against the app's panes (`known`: anything with
 // `.has(id)`). Throws on a layout that isn't one at all; otherwise returns
 // a clean copy plus `dropped`, the pane ids that no longer exist — a frame
-// left empty by that goes too, and the caller decides whether an empty
-// result is worth applying.
+// left empty by that goes too, as does a closed window's entry, and the
+// caller decides whether an empty result is worth applying.
 export function sanitizeLayout(raw, known) {
   if (!isObj(raw)) throw new Error("layout is not an object");
   const version = num(raw.version, 1);
@@ -94,8 +97,20 @@ export function sanitizeLayout(raw, known) {
   const panes = {};
   if (isObj(raw.panes)) {
     for (const [id, st] of Object.entries(raw.panes)) {
-      if (!open.has(id) || !isObj(st)) continue;
+      if (!isObj(st)) continue;
       const out = {};
+      if (!open.has(id)) {
+        // A closed window's pane; one the app no longer has is dropped.
+        if (!known.has(id)) { dropped.push(id); continue; }
+        if (isObj(st.frame)) {
+          const fr = st.frame, w = num(fr.w, 0), h = num(fr.h, 0);
+          out.frame = {
+            x: num(fr.x, 0.2), y: num(fr.y, 0.2),
+            w: w > 0 ? w : 0.4, h: h > 0 ? h : 0.4,
+            title: typeof fr.title === "string" ? fr.title : null,
+          };
+        }
+      }
       if ("filters" in st) out.filters = isObj(st.filters) ? st.filters : {};
       if ("sort" in st) out.sort = st.sort ?? null;
       if ("visible" in st) out.visible = st.visible ?? null;

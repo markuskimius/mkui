@@ -109,7 +109,7 @@ test("pruneTree keeps a split's surviving children with their ratios", () => {
   assert.equal(normalize(t).ratios.reduce((a, b) => a + b, 0).toFixed(6), "1.000000");
 });
 
-test("sanitizeLayout validates frames, drops empty ones, and keeps state for open panes only", () => {
+test("sanitizeLayout validates frames, drops empty ones, and keeps state for open and closed panes", () => {
   const clean = sanitizeLayout({
     version: 1,
     frames: [
@@ -121,16 +121,19 @@ test("sanitizeLayout validates frames, drops empty ones, and keeps state for ope
     focused: "main",
     // A tree table's column may carry several scoped filters: an array
     // of filter objects passes through untouched.
-    panes: { a: { filters: { s: ["x"], q: [{ exclude: [1], scope: "roots" }, { from: 2, scope: "all" }] }, sort: "-s", visible: null, link: { broadcast: { k: "s" }, listening: false }, record: { listen: { order_id: "id" } } }, d: { sort: "s" }, b: "junk", c: { extra: 1, link: "junk", record: "junk" } },
+    // `d` is a closed window: known, in no frame, remembered where it was.
+    // `zz2` is one the app no longer has; `frame` is validated like a frame's rect.
+    panes: { a: { filters: { s: ["x"], q: [{ exclude: [1], scope: "roots" }, { from: 2, scope: "all" }] }, sort: "-s", visible: null, link: { broadcast: { k: "s" }, listening: false }, record: { listen: { order_id: "id" } } }, d: { sort: "s", frame: { x: 0.3, y: "y", w: 0, h: 0.5, title: 7 } }, zz2: { sort: "s", frame: { x: 0, y: 0, w: 0.1, h: 0.1 } }, b: "junk", c: { extra: 1, link: "junk", record: "junk" } },
   }, known);
   assert.deepEqual(clean.frames, [
     { id: "main", title: null, x: 0.1, y: 0.1, w: 0.5, h: 0.5, layout: tabs("a", "b") },
     { id: null, title: null, x: 0.2, y: 0.2, w: 0.4, h: 0.4, layout: "c" },
   ]);
   assert.equal(clean.focused, "main");
-  assert.deepEqual(clean.panes, { a: { filters: { s: ["x"], q: [{ exclude: [1], scope: "roots" }, { from: 2, scope: "all" }] }, sort: "-s", visible: null, link: { broadcast: { k: "s" }, listening: false }, record: { listen: { order_id: "id" } } }, c: { link: null, record: null } },
-    "link and record configurations pass through; a malformed one becomes null (clears)");
-  assert.deepEqual(clean.dropped, ["zz"]);
+  assert.deepEqual(clean.panes, { a: { filters: { s: ["x"], q: [{ exclude: [1], scope: "roots" }, { from: 2, scope: "all" }] }, sort: "-s", visible: null, link: { broadcast: { k: "s" }, listening: false }, record: { listen: { order_id: "id" } } }, c: { link: null, record: null },
+    d: { frame: { x: 0.3, y: 0.2, w: 0.4, h: 0.5, title: null }, sort: "s" } },
+    "link and record configurations pass through; a malformed one becomes null (clears); a closed pane keeps its state and a clean reopen rect");
+  assert.deepEqual(clean.dropped, ["zz", "zz2"]);
   assert.equal(clean.version, LAYOUT_VERSION);
 });
 
@@ -335,6 +338,113 @@ test("getLayout snapshots docked frames, focus, and open panes' view state", () 
   }, "dialog panes and hookless panes carry no state");
   assert.equal(JSON.stringify(sanitizeLayout(l, ws._panes).frames), JSON.stringify(l.frames),
     "a snapshot round-trips through sanitizeLayout unchanged");
+});
+
+// ── closed windows ──────────────────────────────────────────────────
+
+test("closeFrame remembers each pane's window and state; getLayout carries them as closed panes", () => {
+  const ws = makeWorkspace([
+    { id: "main", ...rect, layout: tabs("a") },
+    { id: "side", title: "Side", x: 0.5, y: 0.5, w: 0.2, h: 0.2, layout: tabs("b", "c") },
+    { id: "dlg", x: 0, y: 0, w: 0.1, h: 0.1, layout: tabs("d"), stayOnTop: true, noDock: true },
+  ]);
+  const b = ws._paneEls.get("b");
+  b._filters = hook({ s: ["x"] }); b._columns = hook(["s"]);
+  // The state is read as the window closes — before the pane's close
+  // handler, which the fake's event log stands in for.
+  b.dispatchEvent = (ev) => { b.events.push(ev.type); b._filters.value = { gone: [1] }; };
+  ws._paneEls.get("d")._filters = hook({ d: ["1"] });
+  ws.closeFrame("side");
+  ws.closeFrame("dlg");
+  assert.deepEqual(b.events, ["mkui-pane-close"]);
+  const l = ws.getLayout();
+  assert.deepEqual(l.frames.map(f => f.id), ["main"]);
+  assert.deepEqual(l.panes, {
+    b: { frame: { x: 0.5, y: 0.5, w: 0.2, h: 0.2, title: "Side" }, filters: { s: ["x"] }, visible: ["s"] },
+    c: { frame: { x: 0.5, y: 0.5, w: 0.2, h: 0.2, title: "Side" } },
+  }, "every pane of the window, hookless ones with just the rect; the dialog's pane is never remembered");
+  assert.deepEqual(sanitizeLayout(l, ws._panes).panes, l.panes, "and it round-trips through sanitizeLayout");
+});
+
+test("showPane brings a closed window back where and as it was, then forgets it", () => {
+  const ws = makeWorkspace([
+    { id: "main", ...rect, layout: tabs("a") },
+    { id: "side", title: "Side", x: 0.5, y: 0.5, w: 0.2, h: 0.2, layout: tabs("b") },
+  ]);
+  const b = ws._paneEls.get("b");
+  b._filters = hook({ s: ["x"] }); b._sort = hook("-s");
+  ws.closeFrame("side");
+  b._filters.value = { reset: [1] };   // what reopening leaves: the config's
+  ws.showPane("b");
+  assert.deepEqual(b.events, ["mkui-pane-close", "mkui-pane-open"]);
+  const spec = ws._frames.at(-1);
+  assert.deepEqual([spec.x, spec.y, spec.w, spec.h, spec.title], [0.5, 0.5, 0.2, 0.2, "Side"], "the window it was closed in");
+  assert.deepEqual(ws._frameEls.get(spec.id).getTree(), tabs("b"));
+  assert.deepEqual(b._filters.sets, [{ s: ["x"] }], "the state it had lands after the open event");
+  assert.deepEqual(b._sort.sets, ["-s"]);
+  assert.equal(ws._closed.has("b"), false);
+  assert.deepEqual(ws.getLayout().panes.b, { filters: { s: ["x"] }, sort: "-s" }, "now an open pane: its state, no rect");
+  // With nothing remembered, a pane still opens in a cascaded window.
+  ws.showPane("c");
+  const fresh = ws._frames.at(-1);
+  assert.deepEqual([fresh.w, fresh.h, fresh.title], [0.4, 0.4, null]);
+  assert.deepEqual(ws._paneEls.get("c").events, ["mkui-pane-open"]);
+  assert.deepEqual(ws._paneEls.get("c")._filters, undefined);
+});
+
+test("showPane applies a closed window's state once an async pane factory has installed its hooks", async () => {
+  const ws = makeWorkspace([{ id: "main", ...rect, layout: tabs("a") }]);
+  let ready;
+  ws._ensurePaneEl = ((orig) => function (id) {
+    const el = orig.call(ws, id);
+    if (id === "c" && !el._ready) el._ready = new Promise(r => { ready = () => { el._filters = hook({}); r(); }; });
+    return el;
+  })(ws._ensurePaneEl);
+  // A restored layout can close a pane this session never built.
+  ws.setLayout({ frames: [{ id: "main", ...rect, layout: tabs("a") }],
+                 panes: { c: { frame: { x: 0.1, y: 0.1, w: 0.3, h: 0.3 }, filters: { s: [1] } } } });
+  ws.showPane("c");
+  const c = ws._paneEls.get("c");
+  assert.equal(c._filters, undefined, "hooks aren't there yet");
+  ready();
+  await tick();
+  assert.deepEqual(c._filters.sets, [{ s: [1] }], "applied after the factory resolved");
+  assert.deepEqual([ws._frames.at(-1).x, ws._frames.at(-1).w], [0.1, 0.3]);
+});
+
+test("setLayout remembers the panes it closes, takes the layout's closed windows over, forgets the ones it opens", () => {
+  const ws = makeWorkspace([
+    { id: "main", ...rect, layout: tabs("a", "b") },
+    { id: "side", x: 0.5, y: 0.5, w: 0.2, h: 0.2, layout: tabs("c") },
+  ]);
+  ws._paneEls.get("b")._sort = hook("b1");
+  ws.closeFrame("side");                                  // c: remembered at side's rect
+  ws.setLayout({
+    frames: [{ id: "main", ...rect, layout: tabs("a", "c") }],
+    panes: { c: { sort: "c9" }, d: { frame: { x: 0.6, y: 0.6, w: 0.3, h: 0.3 }, sort: "d1" } },
+  });
+  const closed = Object.fromEntries(ws._closed);
+  assert.deepEqual(closed, {
+    b: { frame: { ...rect, title: null }, sort: "b1" },
+    d: { frame: { x: 0.6, y: 0.6, w: 0.3, h: 0.3, title: null }, sort: "d1" },
+  }, "b left main and is remembered there; d comes from the layout; c was opened and is forgotten");
+  assert.deepEqual(ws._paneEls.get("c").events, ["mkui-pane-close", "mkui-pane-open"]);
+  // A layout that says nothing about a closed pane leaves its memory alone…
+  ws.setLayout({ frames: [{ id: "main", ...rect, layout: tabs("a", "c") }], panes: {} });
+  assert.deepEqual([...ws._closed.keys()], ["b", "d"]);
+  // …a reset forgets every closed window.
+  ws.resetLayout();
+  assert.equal(ws._closed.size, 0);
+  assert.deepEqual(ws.getLayout().panes, {});
+});
+
+test("unregisterPane forgets a closed window", () => {
+  const ws = makeWorkspace([{ id: "main", ...rect, layout: tabs("a") }, { id: "side", ...rect, layout: tabs("b") }]);
+  ws.closeFrame("side");
+  assert.ok(ws._closed.has("b"));
+  ws._paneEls.get("b").remove = () => {};
+  ws.unregisterPane("b");
+  assert.equal(ws._closed.has("b"), false);
 });
 
 test("setLayout moves staying panes, closes leaving ones, opens arriving ones, then applies state", () => {

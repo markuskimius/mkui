@@ -45,6 +45,10 @@ class MkuiWorkspace extends HTMLElement {
     this._frames = [];              // frame specs, order = z-order (last = top)
     this._frameEls = new Map();     // frameId -> <mkui-frame>
     this._pool = null;              // hidden stash for detached panes
+    // paneId -> { frame: { x, y, w, h, title }, ...view state }: the windows
+    // closed this session (or by a restored layout), each remembered as it
+    // was so `showPane` brings it back there. See Saved layouts.
+    this._closed = new Map();
     this._dropOverlay = null;
     this._frameSeq = 0;
   }
@@ -419,6 +423,7 @@ class MkuiWorkspace extends HTMLElement {
     if (el) el.remove();
     this._paneEls.delete(id);
     this._panes.delete(id);
+    this._closed.delete(id);
   }
 
   _nextFrameId() {
@@ -599,8 +604,14 @@ class MkuiWorkspace extends HTMLElement {
   closeFrame(id) {
     const idx = this._frames.findIndex(f => f.id === id);
     if (idx < 0) return;
+    const spec = this._frames[idx];
     const el = this._frameEls.get(id);
     if (el) {
+      // A closed window is remembered before its panes hear of it: what a
+      // dialog or the login frame held is not (they are never in a layout).
+      if (!spec.noDock && !spec.stayOnTop) {
+        for (const paneId of listPanes(el.getTree?.() ?? null)) this._rememberPane(paneId, spec);
+      }
       for (const child of [...el.bodyEl.children]) {
         if (child.tagName === "MKUI-PANE") {
           child.dispatchEvent(new CustomEvent("mkui-pane-close"));
@@ -644,9 +655,14 @@ class MkuiWorkspace extends HTMLElement {
   // A layout is the dockable frames (z-order, fractional rects, trees —
   // so the active tabs come along) plus the view state of every pane open
   // in one, read through the `_filters` / `_sort` / `_columns` / `_link`
-  // hooks. Modal
-  // dialogs and the login frame (noDock) are never part of one. See
-  // lib/layouts.js for the format; src/layouts.js for the menu and stores.
+  // hooks — and the windows that were closed: for a pane in no frame,
+  // `_closed` keeps the rect and title of the window it was last in and
+  // the view state it had, snapshotted as the window closed, so `showPane`
+  // brings it back where and as it was. The layout carries those entries
+  // too (`panes[id].frame`), a restore takes them over, and a reset
+  // forgets them. Modal dialogs and the login frame (noDock) are never
+  // part of one. See lib/layouts.js for the format; src/layouts.js for
+  // the menu and stores.
 
   _dockedFrames() {
     return this._frames.filter(f => !f.noDock && !f.stayOnTop);
@@ -661,6 +677,47 @@ class MkuiWorkspace extends HTMLElement {
     return out;
   }
 
+  // A pane's view state through its hooks: what a layout carries for it.
+  _paneState(el) {
+    const st = {};
+    if (el._filters) st.filters = el._filters.get();
+    if (el._sort) st.sort = el._sort.get();
+    if (el._columns) st.visible = el._columns.get();
+    if (el._link) st.link = el._link.get();
+    // A detail window's subject configuration — where it gets its
+    // records, and whether it is pinned. Never the record itself: that
+    // comes back from the live broadcast, as a link's filters do.
+    if (el._record) st.record = el._record.config();
+    return st;
+  }
+
+  // Saved view state onto a pane — once its hooks exist: a pane built just
+  // now by an async factory (the startup restore, a first `showPane`) gets
+  // them only when `_ready` resolves; a later application supersedes a
+  // pending one.
+  _applyPaneState(el, st) {
+    const apply = () => {
+      if ("filters" in st) el._filters?.set(st.filters);
+      if ("sort" in st) el._sort?.set(st.sort);
+      if ("visible" in st) el._columns?.set(st.visible);
+      if ("link" in st) el._link?.set(st.link);
+      if ("record" in st) el._record?.follow(st.record);
+    };
+    const gen = el._viewGen = (el._viewGen ?? 0) + 1;
+    if (el._filters || el._sort || el._columns || el._link || el._record || !el._ready) apply();
+    else el._ready.then(() => { if (el._viewGen === gen) apply(); });
+  }
+
+  // Remember a pane's window as it closes: the frame it sat in and the
+  // view state it has now — read before the close event, which is what
+  // the pane will come back to.
+  _rememberPane(id, spec) {
+    const el = this._paneEls.get(id);
+    if (!el) return;
+    const frame = { x: spec.x, y: spec.y, w: spec.w, h: spec.h, title: spec.title ?? null };
+    this._closed.set(id, structuredClone({ frame, ...this._paneState(el) }));
+  }
+
   getLayout() {
     const frames = [];
     for (const spec of this._dockedFrames()) {
@@ -673,19 +730,17 @@ class MkuiWorkspace extends HTMLElement {
       });
     }
     const panes = {};
-    for (const id of this._openPaneIds()) {
+    const open = this._openPaneIds();
+    for (const id of open) {
       const el = this._paneEls.get(id);
       if (!el) continue;
-      const st = {};
-      if (el._filters) st.filters = el._filters.get();
-      if (el._sort) st.sort = el._sort.get();
-      if (el._columns) st.visible = el._columns.get();
-      if (el._link) st.link = el._link.get();
-      // A detail window's subject configuration — where it gets its
-      // records, and whether it is pinned. Never the record itself: that
-      // comes back from the live broadcast, as a link's filters do.
-      if (el._record) st.record = el._record.config();
+      const st = this._paneState(el);
       if (Object.keys(st).length) panes[id] = structuredClone(st);
+    }
+    // The closed windows, as remembered.
+    for (const [id, st] of this._closed) {
+      if (open.has(id) || !this._panes.has(id)) continue;
+      panes[id] = structuredClone(st);
     }
     const focused = frames.some(f => f.id === this._focusedId) ? this._focusedId : null;
     return { version: LAYOUT_VERSION, frames, focused, panes };
@@ -696,9 +751,10 @@ class MkuiWorkspace extends HTMLElement {
   // panes leaving get `mkui-pane-close`, panes arriving `mkui-pane-open`
   // and then their saved view state (open resets a table to its config).
   // `reopen` closes and reopens every pane — the config-defaults reset
-  // `resetLayout` wants. Throws on something that isn't a layout; returns
-  // the sanitized layout, whose `dropped` lists pane ids the app no longer
-  // has. A layout with no frames is applied as such.
+  // `resetLayout` wants, which also forgets every closed window. Throws on
+  // something that isn't a layout; returns the sanitized layout, whose
+  // `dropped` lists pane ids the app no longer has. A layout with no
+  // frames is applied as such.
   setLayout(layout, opts = {}) {
     const clean = sanitizeLayout(layout, this._panes);
     const reopen = opts.reopen === true;
@@ -707,6 +763,19 @@ class MkuiWorkspace extends HTMLElement {
     for (const f of clean.frames) for (const id of listPanes(f.layout)) after.add(id);
 
     this._clearMaximize();
+    // Closed windows: a pane the layout closes is remembered where it is
+    // now, then the layout's own closed entries take over — one it opens
+    // is forgotten, a reset forgets them all.
+    for (const spec of this._dockedFrames()) {
+      const tree = this._frameEls.get(spec.id)?.getTree?.();
+      if (!tree) continue;
+      for (const id of listPanes(tree)) if (!after.has(id)) this._rememberPane(id, spec);
+    }
+    if (reopen) this._closed.clear();
+    for (const id of after) this._closed.delete(id);
+    for (const [id, st] of Object.entries(clean.panes)) {
+      if (!after.has(id)) this._closed.set(id, structuredClone(st));
+    }
     for (const id of before) {
       if (reopen || !after.has(id)) {
         this._paneEls.get(id)?.dispatchEvent(new CustomEvent("mkui-pane-close"));
@@ -746,22 +815,9 @@ class MkuiWorkspace extends HTMLElement {
         this._paneEls.get(id)?.dispatchEvent(new CustomEvent("mkui-pane-open"));
       }
     }
-    // View state — once the pane's hooks exist: a pane built just now by
-    // an async factory (the startup restore) gets them only when `_ready`
-    // resolves; a later setLayout supersedes a pending one.
-    const applyView = (el, st) => {
-      if ("filters" in st) el._filters?.set(st.filters);
-      if ("sort" in st) el._sort?.set(st.sort);
-      if ("visible" in st) el._columns?.set(st.visible);
-      if ("link" in st) el._link?.set(st.link);
-      if ("record" in st) el._record?.follow(st.record);
-    };
     for (const [id, st] of Object.entries(clean.panes)) {
-      const el = this._paneEls.get(id);
-      if (!el) continue;
-      const gen = el._viewGen = (el._viewGen ?? 0) + 1;
-      if (el._filters || el._sort || el._columns || el._link || el._record || !el._ready) applyView(el, st);
-      else el._ready.then(() => { if (el._viewGen === gen) applyView(el, st); });
+      const el = after.has(id) ? this._paneEls.get(id) : null;
+      if (el) this._applyPaneState(el, st);
     }
 
     this._focusedId = clean.focused ?? last;
@@ -771,8 +827,8 @@ class MkuiWorkspace extends HTMLElement {
   }
 
   // Back to the startup layout: the config's frames, every pane at its
-  // configured filters, sort, and columns — as if the app had just loaded
-  // without a saved layout.
+  // configured filters, sort, and columns, no closed window remembered —
+  // as if the app had just loaded without a saved layout.
   resetLayout() {
     const frames = this._configFrameSpecs(this._app?.config?.frames);
     return this.setLayout({ version: LAYOUT_VERSION, frames, panes: {} }, { reopen: true });
@@ -792,15 +848,22 @@ class MkuiWorkspace extends HTMLElement {
         return;
       }
     }
-    const w = 0.4, h = 0.4;
+    // A parked pane: back to the window it was closed in, with the view
+    // state it had (a layout may have restored it closed); else a fresh
+    // window cascaded off the top one.
+    const mem = this._closed.get(paneId) ?? null;
+    this._closed.delete(paneId);
+    const w = mem?.frame?.w ?? 0.4, h = mem?.frame?.h ?? 0.4;
     const top = this._frames[this._frames.length - 1] ?? null;
-    const { x, y } = cascadePosition(top, w, h);
+    const { x, y } = mem?.frame ?? cascadePosition(top, w, h);
     this.addFrame({
-      x, y, w, h,
+      x, y, w, h, title: mem?.frame?.title ?? null,
       layout: { type: "tabs", active: 0, children: [paneId] },
     });
     const paneEl = this._paneEls.get(paneId);
-    if (paneEl) paneEl.dispatchEvent(new CustomEvent("mkui-pane-open"));
+    if (!paneEl) return;
+    paneEl.dispatchEvent(new CustomEvent("mkui-pane-open"));
+    if (mem) this._applyPaneState(paneEl, mem);
   }
 
   // All panes currently hosted in a frame ("open windows"), in frame

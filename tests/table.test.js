@@ -3455,6 +3455,18 @@ test("header starts with a select-all corner cell", async () => {
     assert.ok(row.classList.contains("mkui-selected"));
 });
 
+test("hiding a column keeps the row numbers and the selection styles on screen", async () => {
+  const { host } = await createSelTable();
+  getThead(host)._ch[0]._ch[0]._ev.click[0]({});
+  // Nothing about the view changes on a hide: the rows are rebuilt, and
+  // the walk that numbers and styles them must still run.
+  host._paneEl._columns.set(["name"]);
+  const trs = dataRows(host);
+  assert.deepEqual(trs.map(tr => tr._ch[0].textContent), ["1", "2", "3", "4"]);
+  assert.deepEqual(trs.map(tr => tr._ch.map(td => td.dataset.col ?? "#")), Array(4).fill(["#", "name"]));
+  for (const tr of trs) assert.ok(tr.classList.contains("mkui-selected"), "selection survives the rebuild");
+});
+
 test("modified clicks on the select-all corner are inert", async () => {
   const { host } = await createSelTable();
   const corner = getThead(host)._ch[0]._ch[0];
