@@ -1243,6 +1243,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   const anyExpanded = () => { for (const k of expanded) if (hasKids(k)) return true; return false; };
+  // Every parent open, at every level: what a shift-click on the header
+  // caret leaves behind, and the state it reverses from.
+  const allExpanded = () => { for (const k of kids.keys()) if (k !== null && !expanded.has(k)) return false; return true; };
 
   // The column that carries the carets: the configured one while it shows,
   // else the first visible column.
@@ -1282,7 +1285,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (!t) return;
     const open = anyExpanded();
     t.classList.toggle("open", open);
-    t.title = open ? "Collapse all" : "Expand all roots (shift: every level)";
+    t.title = !open ? "Expand all roots (shift: every level)"
+      : allExpanded() ? "Collapse all"
+      : "Collapse all (shift: every level)";
   }
 
   function onTreeKey(e) {
@@ -4290,7 +4295,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         all.addEventListener("click", (e) => {
           e.stopPropagation();
           if (e.ctrlKey || e.metaKey || e.altKey) return;
-          setExpandDepth(e.shiftKey ? Infinity : anyExpanded() ? 0 : 1);
+          // Plain: the roots, or close all once anything is open. Shift:
+          // every level, and again — once every level is open — close all,
+          // so the two clicks pair up the way a row's shift-clicks do.
+          if (e.shiftKey) setExpandDepth(allExpanded() ? 0 : Infinity);
+          else setExpandDepth(anyExpanded() ? 0 : 1);
         });
         inner.appendChild(all);
       }

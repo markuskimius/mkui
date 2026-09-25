@@ -6388,6 +6388,14 @@ test("tree: shift+click opens or closes a whole subtree; the header caret does a
   all._ev.click[0]({ stopPropagation() {} });
   all._ev.click[0]({ shiftKey: true, stopPropagation() {} });
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"], "shift: every level");
+  assert.equal(all.title, "Collapse all", "fully open: the tooltip promises the collapse either click does");
+  all._ev.click[0]({ shiftKey: true, stopPropagation() {} });
+  assert.deepEqual(treeNames(host), ["a", "b", "x1"], "shift again, every level open: collapse all");
+  assert.ok(!all.classList.contains("open"));
+  clickToggle(host, "a");
+  assert.equal(all.title, "Collapse all (shift: every level)", "partly open: shift still opens the rest");
+  all._ev.click[0]({ shiftKey: true, stopPropagation() {} });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"], "shift while partly open: every level, not collapse");
 });
 
 test("tree: expand config opens to a depth or everything; the _tree hook does the same at runtime", async () => {
@@ -6445,7 +6453,7 @@ test("tree: the header caret follows the rows the snapshot expanded", async () =
   const host = await treeTable({ tree: { child: "parent", parent: "id", expand: 1 } });
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "b1", "x1"], "roots open per tree.expand");
   assert.ok(treeAll(host).classList.contains("open"), "header caret open too");
-  assert.equal(treeAll(host).title, "Collapse all");
+  assert.equal(treeAll(host).title, "Collapse all (shift: every level)", "a2 is still closed under the depth-1 open");
   treeAll(host)._ev.click[0]({ stopPropagation() {} });
   assert.deepEqual(treeNames(host), ["a", "b", "x1"]);
   assert.ok(!treeAll(host).classList.contains("open"));
