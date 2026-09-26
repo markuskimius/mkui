@@ -15,8 +15,8 @@
 import "./frame.js";
 import { getPaneType, getWidget } from "../core.js";
 import { clampToDock, rectToFrac, fracToRect, dropZoneFor, previewRect, snapMove, snapResize, cascadePosition } from "../layout/drag.js";
-import { layout, insertPane, removePane, findPane, firstTabGroup, listPanes } from "../layout/tree.js";
-import { sanitizeLayout, LAYOUT_VERSION } from "../lib/layouts.js";
+import { layout, normalize, insertPane, removePane, findPane, firstTabGroup, listPanes } from "../layout/tree.js";
+import { sanitizeLayout, pruneTree, LAYOUT_VERSION } from "../lib/layouts.js";
 
 // Write a frame rect to an element's style in whole pixels. Frame geometry
 // is fractional (frac × workspace size, pointer deltas), but the frame's
@@ -398,10 +398,15 @@ class MkuiWorkspace extends HTMLElement {
   }
 
   // Frame specs from the config's `frames` array — the startup layout,
-  // which `resetLayout` returns to. Fresh spec objects each call: specs are
-  // mutated by moves and resizes.
+  // which `resetLayout` returns to. An entry with `open = false` is
+  // defined but not opened: a window `showFrame` brings up on demand.
+  // Fresh spec objects each call: specs are mutated by moves and resizes.
   _configFrameSpecs(frames) {
-    return (frames ?? []).map((f, i) => ({
+    return (frames ?? []).map((f, i) => f.open === false ? null : this._frameSpecFrom(f, i)).filter(Boolean);
+  }
+
+  _frameSpecFrom(f, i = 0) {
+    return {
       id: f.id ?? this._nextFrameId(),
       title: f.title ?? null,
       x: f.x ?? (0.08 + i * 0.03),
@@ -409,7 +414,16 @@ class MkuiWorkspace extends HTMLElement {
       w: f.w ?? 0.5,
       h: f.h ?? 0.5,
       layout: f.layout,
-    }));
+    };
+  }
+
+  // The windows the config defines, in its order: `{ id, title, open }`,
+  // `open` false for one kept closed at startup. What a `{ frames = true }`
+  // menu item lists.
+  configFrames() {
+    return (this._app?.config?.frames ?? [])
+      .filter(f => f && typeof f.id === "string" && f.id)
+      .map(f => ({ id: f.id, title: f.title ?? null, open: f.open !== false }));
   }
 
   getPaneSpec(id) { return this._panes.get(id); }
@@ -864,6 +878,52 @@ class MkuiWorkspace extends HTMLElement {
     if (!paneEl) return;
     paneEl.dispatchEvent(new CustomEvent("mkui-pane-open"));
     if (mem) this._applyPaneState(paneEl, mem);
+  }
+
+  // A window the config defines, by frame id — a composite of docked and
+  // tabbed panes whose links and record sources are in their own specs,
+  // so it comes up wired. Open under that id (a saved layout keeps frame
+  // ids), it is raised; else it is built from its definition at the
+  // definition's rect: a pane of it open in another window moves over, as
+  // a tab drag would move it, and a parked one opens with the view state
+  // it was closed with, as `showPane` gives it. Returns whether a window
+  // was raised or opened; a definition naming no known pane warns.
+  showFrame(frameId) {
+    const open = this._frameEls.get(frameId);
+    if (open) { this._raiseFrame(open); return true; }
+    const def = (this._app?.config?.frames ?? []).find(f => f?.id === frameId);
+    if (!def) return false;
+    const dropped = [];
+    const tree = pruneTree(def.layout, this._panes, dropped);
+    if (tree == null) {
+      console.warn(`mkui: frame ${frameId} names no pane the app has`);
+      return false;
+    }
+    const spec = this._frameSpecFrom(def);
+    spec.id = frameId;
+    spec.layout = tree;
+    const arriving = [];
+    for (const paneId of listPanes(normalize(tree))) {
+      let moved = false;
+      for (const f of this._frames) {
+        const el = this._frameEls.get(f.id);
+        if (!el || !findPane(el.getTree(), paneId)) continue;
+        el.setTree(removePane(el.getTree(), paneId));   // an emptied frame closes itself
+        moved = true;
+        break;
+      }
+      if (!moved) arriving.push(paneId);
+    }
+    this.addFrame(spec);
+    for (const paneId of arriving) {
+      const el = this._paneEls.get(paneId);
+      if (!el) continue;
+      const mem = this._closed.get(paneId) ?? null;
+      this._closed.delete(paneId);
+      el.dispatchEvent(new CustomEvent("mkui-pane-open"));
+      if (mem) this._applyPaneState(el, mem);
+    }
+    return true;
   }
 
   // All panes currently hosted in a frame ("open windows"), in frame

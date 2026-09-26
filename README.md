@@ -155,6 +155,31 @@ Minimal config:
 
 Frame positions (`x`, `y`, `w`, `h`) are fractions of the workspace rect.
 
+A frame is a **window** the config defines, and it need not be open from
+the start. `"open": false` keeps one closed at startup — a composite of
+docked and tabbed panes, linked through their own `link` and `record`
+blocks, that a single menu item brings up whole:
+
+```json
+{ "id": "desk", "title": "Order Desk", "open": false,
+  "x": 0.1, "y": 0.1, "w": 0.8, "h": 0.8,
+  "layout": { "type": "split", "dir": "h", "ratios": [0.6, 0.4],
+              "children": [{ "type": "tabs", "children": ["desk-orders"] },
+                           { "type": "tabs", "children": ["desk-detail"] }] } }
+```
+
+`frame.show` with the frame's id — a menu item's `action` and `args`, or
+`control.frame("desk")` from Python — opens it where the config puts it,
+its panes wired as configured. Open already, the window is raised, so
+the same item brings back a startup window that was closed. A pane
+lives in one window at a time: one open elsewhere moves into the window
+as a tab drag would move it, so a window meant to stand beside the main
+one uses panes of its own, with link names of its own; a pane that was
+parked comes back with the view state it was closed with, as `pane.show`
+brings it back. `{ "frames": true }` in a menu lists every defined
+window by `title` (else id), and `layout.reset` closes the on-demand
+ones again. The Order Book example's *Order Desk* is one.
+
 ## Statusbar
 
 `statusbar` is a top-level object with `left` and `right` widget arrays,
@@ -411,6 +436,7 @@ Item keys:
 | `items` | array | Child items — makes this a submenu (opens on hover) |
 | `sep` | boolean | `true` renders a horizontal separator line |
 | `windows` | boolean | `true` expands into one `pane.show` entry per open pane |
+| `frames` | boolean | `true` expands into one `frame.show` entry per window the config's `frames` defines, open or not (see [Configs](#configs)) |
 | `layouts` | boolean | `true` makes this a submenu of the saved layouts (see [Layouts](#layouts)) |
 | `disabled` | boolean / expression | Renders an inert, muted entry: `true`, or an expression over the menu scope (below) — `disabled = "!pane.can.copy"`. A submenu with nothing live in it greys out by itself |
 | `disabledTitle` | string | Tooltip of the item while it is disabled, saying why |
@@ -498,6 +524,9 @@ title. Selecting an entry raises the frame that contains the pane and
 switches to its tab (dialogs and other noDock frames are excluded).
 Static `pane.show` entries are still useful for reopening panes whose
 frame has been closed: a closed window comes back where and as it was.
+`frame.show` opens or raises a window the config's `frames` defines —
+one declared `"open": false` is closed until an item asks for it — and
+`{ "frames": true }` lists them all.
 
 Tabs can be renamed in place: ctrl+click (or cmd+click on macOS) a tab,
 edit the title, and press Enter (Escape cancels). The new title is
@@ -696,8 +725,9 @@ to 0 to disable that half of the rule; both at 0 keeps everything.
 expands into one `layout.restore` entry per save — the list refreshes
 whenever the menu opens, so saves from another tab appear.
 `layout.reset` returns to how the app looks at startup without a saved
-layout: the config's `frames`, every pane at its configured filters,
-sort, and columns, no closed window remembered. With `autoload` (the default), the user's newest save
+layout: the config's `frames` (one declared `open = false` closed), every
+pane at its configured filters, sort, and columns, no closed window
+remembered. With `autoload` (the default), the user's newest save
 is applied when the app starts, after login where there is one; the
 config frames load when there is none, or when the store doesn't answer
 within `timeout`.
@@ -795,6 +825,9 @@ link.chips = false              # no toolbar chips: pause from the advanced drop
 - **Layouts.** A saved layout carries every pane's link configuration —
   the maps and the paused flags — and restores it; the filters a link
   produces are not saved, they come back from the live selection.
+- **Whole windows.** A set of linked panes can be one window the config
+  defines and a menu item opens whole — a `frames` entry with `open =
+  false`, see [Configs](#configs).
 
 ## Detail windows
 
@@ -1146,6 +1179,7 @@ async def on_started():
     await control.record("order_detail", {"id": 4711})        # or just: show this one
     await control.send("table.filter", {"pane": "orders", "filters": {"status": ["open"]}})
     await control.send("pane.show", "executions", user="mark")  # one login's tabs only
+    await control.frame("desk")                               # a window the config defines
     await control.alert("Market closes in 5 minutes", kind="warn", id="close")   # a notice
     await control.confirm("Roll your day orders to tomorrow?", ok="Roll", user="ann",
                           submit={"service": "orders", "op": "roll", "data": {"desk": "fx"}})
@@ -1160,7 +1194,8 @@ builds the `table.link` action (`merge=False` replaces the whole
 configuration, so `link(pane, merge=False)` clears it);
 `record(pane, key)` shows one record in a detail window and
 `record(pane, listen=/follow=/state=/pin=/retain=/title=)` says where
-that window gets its records; `subscribers`
+that window gets its records; `frame(id)` opens or raises a window the
+client's `frames` defines (the `frame.show` action); `subscribers`
 and `users()` say who is listening. `alert(message, title=, kind=,
 details=, timeout=, id=, suppress=)` puts a [message box](#message-boxes)
 on screen — give one you may push again an `id`, and the second replaces
@@ -1360,8 +1395,8 @@ on mkui depends on:
   (`App`, `State`, `LinkHub`, the `register*` and `get*` functions,
   `ensureMkio`, `attachRecord` and the record subject, `openDialog` and
   `App`'s `dialog` / `alert` / `confirm`); the built-in
-  actions (`app.*`, `pane.*`, `window.*`, `edit.*`, `table.*`, `record.*`,
-  `layout.*`, `auth.*`, `dialog.*`) and their `args`; the documented state paths
+  actions (`app.*`, `pane.*`, `frame.*`, `window.*`, `edit.*`, `table.*`,
+  `record.*`, `layout.*`, `auth.*`, `dialog.*`) and their `args`; the documented state paths
   (`mkio.*` including `mkio.downSince` / `mkio.downFor`, `auth.*`,
   `layouts.list`, `link.<name>`, `status.message`, `dialog.suppressed`);
   and the pane hooks a custom pane type may implement (`_editActions`,
@@ -1370,7 +1405,7 @@ on mkui depends on:
 - The saved-layout format: a layout written by one 1.x release opens
   under any later 1.x.
 - The Python API — `mkui.control.install`, `ControlService` and the
-  handle's `send`, `link`, `record`, `users` and `subscribers` — and the
+  handle's `send`, `link`, `record`, `frame`, `users` and `subscribers` — and the
   `mkui` CLI: command names, arguments, flags, exit codes.
 - The theming contract: the `--mkui-*` custom properties `mkui.css`
   declares on `:root`, the `theme` attribute and `app.themes`.

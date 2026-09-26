@@ -310,8 +310,9 @@ def button_actions(client):
     return out
 
 
-def opened_panes(client):
-    """The panes the config's frames open at startup."""
+def framed_panes(client):
+    """The panes the config's frames name — opened at startup, or by
+    `frame.show` for a frame declared `open = false`."""
     out = set()
     for frame in client.get("frames", []) or []:
         out |= set(layout_panes(frame.get("layout")))
@@ -670,13 +671,50 @@ class TestMenubarWiring(unittest.TestCase):
                 if it.get("action") == "pane.show" and isinstance(it.get("args"), str)
             }
             # A history pane is opened by `table.history`, not by id.
-            for pid in sorted(set(panes(client)) - opened_panes(client)):
+            for pid in sorted(set(panes(client)) - framed_panes(client)):
                 with self.subTest(example=name, pane=pid):
                     self.assertIn(
                         pid, shown,
                         f"{name}: pane {pid!r} is in no frame and in no menu, "
                         f"so nothing can open it",
                     )
+
+    def test_every_frame_show_names_a_frame_that_exists(self):
+        """`frame.show` takes a frame id as `args`."""
+        seen = 0
+        for name, _server, client in examples():
+            known = {f.get("id") for f in client.get("frames", []) or []}
+            for item in menu_items(client):
+                if item.get("action") != "frame.show":
+                    continue
+                seen += 1
+                with self.subTest(example=name, item=item.get("label")):
+                    self.assertIn(
+                        item.get("args"), known,
+                        f"{name}: menu item {item.get('label')!r} shows frame "
+                        f"{item.get('args')!r}, which no [[frames]] declares",
+                    )
+        self.assertTrue(seen, "no menu item shows a frame any more")
+
+    def test_an_on_demand_frame_has_a_menu_item_of_its_own(self):
+        """A frame with `open = false` is closed at startup, so only a
+        `frame.show` item (or the `frames = true` expansion) can open it."""
+        seen = 0
+        for name, _server, client in examples():
+            items = menu_items(client)
+            listed = any(it.get("frames") for it in items)
+            shown = {it.get("args") for it in items if it.get("action") == "frame.show"}
+            for frame in client.get("frames", []) or []:
+                if frame.get("open", True) is not False:
+                    continue
+                seen += 1
+                with self.subTest(example=name, frame=frame.get("id")):
+                    self.assertTrue(
+                        listed or frame.get("id") in shown,
+                        f"{name}: frame {frame.get('id')!r} is closed at startup "
+                        f"and no menu item opens it",
+                    )
+        self.assertTrue(seen, "no example defines an on-demand frame any more")
 
     def test_every_menu_flag_compiles(self):
         """`disabled` / `showWhen` expressions: one that does not compile

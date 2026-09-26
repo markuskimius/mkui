@@ -174,6 +174,16 @@ class ControlService(Service):
         args["link"] = link
         return await self.send("table.link", args, user=user)
 
+    async def frame(self, frame: str, *, user: str | None = None) -> int:
+        """Bring up a window the client config's ``frames`` defines — the
+        ``frame.show`` action. A composite window (docked and tabbed panes,
+        linked through their own specs) declared with ``open = false`` is
+        closed at startup and opens on this; one already open is raised.
+        """
+        if not isinstance(frame, str) or not frame:
+            raise ValueError("frame must be a non-empty string")
+        return await self.send("frame.show", frame, user=user)
+
     async def record(
         self,
         pane: str | None,

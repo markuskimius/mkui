@@ -36,14 +36,21 @@ class FakeFrame {
     this.removed = false;
   }
   setAttribute(k, v) { this.attrs[k] = v; }
+  getAttribute(k) { return this.attrs[k]; }
   removeAttribute(k) { delete this.attrs[k]; }
   setup(ws, app, spec) {
-    this._tree = normalize(spec.layout);
-    this.bodyEl.children = listPanes(this._tree).map((id) => {
-      const el = ws._ensurePaneEl(id);
-      el.parentElement = this;
-      return el;
-    });
+    this._ws = ws; this._id = spec.id;
+    this.setTree(spec.layout);
+  }
+  // As the real one: panes no longer in the tree are parked, an emptied
+  // frame closes itself.
+  setTree(tree) {
+    this._tree = tree == null ? null : normalize(tree);
+    const wanted = listPanes(this._tree).map((id) => this._ws._ensurePaneEl(id));
+    for (const el of this.bodyEl.children) if (!wanted.includes(el)) this._ws._parkPane(el);
+    this.bodyEl.children = wanted;
+    for (const el of wanted) el.parentElement = this;
+    if (this._tree == null) this._ws.closeFrame(this._id);
   }
   getTree() { return this._tree; }
   remove() { this.removed = true; }
@@ -858,4 +865,92 @@ test("a submenu with nothing live in it does not open on hover", () => {
   assert.equal(opened, 0);
   live.fire("mouseenter");
   assert.equal(opened, 1);
+});
+
+// ── composite windows: the config's frames, on demand ───────────────
+
+const deskDef = {
+  id: "desk", title: "Desk", open: false, x: 0.1, y: 0.1, w: 0.8, h: 0.8,
+  layout: { type: "split", dir: "h", ratios: [0.5, 0.5], children: [tabs("b"), tabs("c", "zz")] },
+};
+
+test("a frame with open = false is defined but not opened: not at startup, not by a reset", () => {
+  const frames = [{ id: "main", ...rect, layout: tabs("a") }, deskDef];
+  const ws = makeWorkspace([], { frames });
+  assert.deepEqual(ws._configFrameSpecs(frames).map(f => f.id), ["main"]);
+  assert.deepEqual(ws.configFrames(), [
+    { id: "main", title: null, open: true },
+    { id: "desk", title: "Desk", open: false },
+  ], "what a { frames = true } menu lists");
+  ws.resetLayout();
+  assert.deepEqual(ws._frames.map(f => f.id), ["main"]);
+  assert.equal(ws.showFrame("desk"), true);
+  assert.deepEqual(ws._frames.map(f => f.id), ["main", "desk"]);
+  ws.resetLayout();
+  assert.deepEqual(ws._frames.map(f => f.id), ["main"], "a reset closes it again");
+});
+
+test("showFrame opens a defined window at its rect, wired as configured, its parked panes as they were closed", () => {
+  const ws = makeWorkspace([
+    { id: "main", ...rect, layout: tabs("a") },
+    { id: "side", title: "Side", x: 0.5, y: 0.5, w: 0.2, h: 0.2, layout: tabs("b") },
+  ], { frames: [{ id: "main", ...rect, layout: tabs("a") }, deskDef] });
+  const b = ws._paneEls.get("b");
+  b._filters = hook({ s: ["x"] });
+  ws.closeFrame("side");
+  b._filters.value = { reset: [1] };
+  const warned = [];
+  const warn = console.warn; console.warn = (m) => warned.push(m);
+  try { assert.equal(ws.showFrame("desk"), true); } finally { console.warn = warn; }
+  assert.deepEqual(warned, [], "an unknown pane in the definition is dropped quietly");
+  const spec = ws._frames.at(-1);
+  assert.deepEqual([spec.id, spec.title, spec.x, spec.y, spec.w, spec.h], ["desk", "Desk", 0.1, 0.1, 0.8, 0.8], "the definition's rect, not the closed window's");
+  assert.equal(ws._focusedId, "desk");
+  assert.deepEqual(ws._frameEls.get("desk").getTree(),
+    { type: "split", dir: "h", ratios: [0.5, 0.5], children: [tabs("b"), tabs("c")] });
+  assert.deepEqual(b.events, ["mkui-pane-close", "mkui-pane-open"]);
+  assert.deepEqual(b._filters.sets, [{ s: ["x"] }], "the state it was closed with, after the open event");
+  assert.equal(ws._closed.has("b"), false);
+  assert.deepEqual(ws._paneEls.get("c").events, ["mkui-pane-open"]);
+  // Open under its id, it is raised, not rebuilt.
+  ws._raiseFrame(ws._frameEls.get("main"));
+  assert.equal(ws._focusedId, "main");
+  assert.equal(ws.showFrame("desk"), true);
+  assert.deepEqual(ws._frames.map(f => f.id), ["main", "desk"]);
+  assert.equal(ws._focusedId, "desk");
+  assert.deepEqual(b.events, ["mkui-pane-close", "mkui-pane-open"], "nothing reopened");
+  // A saved layout keeps the frame id, so after a restore it still raises.
+  const saved = ws.getLayout();
+  assert.deepEqual(saved.frames.map(f => f.id), ["main", "desk"]);
+  ws.setLayout(saved);
+  assert.equal(ws.showFrame("desk"), true);
+  assert.deepEqual(ws._frames.map(f => f.id), ["main", "desk"]);
+});
+
+test("showFrame moves a pane open elsewhere into the window, closing a frame it leaves empty", () => {
+  const ws = makeWorkspace([
+    { id: "main", ...rect, layout: tabs("a", "b") },
+    { id: "side", x: 0.5, y: 0.5, w: 0.2, h: 0.2, layout: tabs("c") },
+  ], { frames: [deskDef] });
+  const b = ws._paneEls.get("b"), c = ws._paneEls.get("c");
+  assert.equal(ws.showFrame("desk"), true);
+  assert.deepEqual(ws._frames.map(f => f.id), ["main", "desk"], "side, emptied, is gone");
+  assert.deepEqual(ws._frameEls.get("main").getTree(), tabs("a"));
+  assert.deepEqual(listPanes(ws._frameEls.get("desk").getTree()), ["b", "c"]);
+  assert.deepEqual(b.events, [], "a moved pane keeps its state: no close, no open");
+  assert.deepEqual(c.events, []);
+  assert.equal(b.parentElement, ws._frameEls.get("desk"));
+  assert.deepEqual(ws.getLayout().panes, {}, "nothing remembered as closed");
+});
+
+test("showFrame refuses an unknown frame, and warns of a definition naming no pane the app has", () => {
+  const ws = makeWorkspace([{ id: "main", ...rect, layout: tabs("a") }], {
+    frames: [{ id: "ghost", open: false, layout: tabs("zz") }],
+  });
+  assert.equal(ws.showFrame("nope"), false);
+  const warned = [];
+  const warn = console.warn; console.warn = (m) => warned.push(m);
+  try { assert.equal(ws.showFrame("ghost"), false); } finally { console.warn = warn; }
+  assert.match(warned[0], /frame ghost names no pane/);
+  assert.deepEqual(ws._frames.map(f => f.id), ["main"]);
 });

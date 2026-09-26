@@ -69,6 +69,7 @@ class MkuiApp extends HTMLElement {
     this._app.registerAction("window.grid",     () => ws.arrangeGrid());
     this._app.registerAction("window.cascade",  () => ws.arrangeCascade());
     this._app.registerAction("pane.show",       (app, id) => ws.showPane(id));
+    this._app.registerAction("frame.show",      (app, id) => ws.showFrame(id));
     // Edit actions route to the focused frame's active pane (same hook the
     // Ctrl/Cmd+C / Ctrl/Cmd+A shortcuts use).
     this._app.registerAction("edit.copy",       () => ws.editAction("copy"));

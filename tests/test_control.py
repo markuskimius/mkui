@@ -99,6 +99,18 @@ class TestControlService(unittest.TestCase):
         run(svc.link(None, merge=False))
         self.assertEqual(ws.sent[-1]["row"]["args"], {"merge": False, "link": {}}, "no pane: the focused one; merge off with nothing: clears")
 
+    def test_frame_shows_a_configured_window(self):
+        svc = make()
+        svc.name = "_mkui"
+        ws = FakeWS(user="ann")
+        run(svc.on_subscribe(ws, {"subid": "s"}))
+        ws.sent.clear()
+        self.assertEqual(run(svc.frame("desk")), 1)
+        self.assertEqual(ws.sent[-1]["row"], {"action": "frame.show", "args": "desk"})
+        self.assertEqual(run(svc.frame("desk", user="bob")), 0, "another login's tabs only")
+        with self.assertRaises(ValueError):
+            run(svc.frame(""))
+
     def test_record_shows_one_record_or_says_where_to_get_them(self):
         svc = make()
         svc.name = "_mkui"

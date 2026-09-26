@@ -32,6 +32,9 @@ items = [
   { label = "Pending", action = "pane.show", args = "pending" },
   { label = "Order Tree", action = "pane.show", args = "order-tree" },
   { label = "Order Detail", action = "pane.show", args = "order-detail" },
+  { sep = true },
+  # A whole window — three linked panes — from one item (see the desk's panes).
+  { label = "Order Desk", action = "frame.show", args = "desk" },
 ]
 
 [[menubar]]
@@ -124,6 +127,9 @@ items = [
   { label = "Cascade", action = "window.cascade" },
   { sep = true },
   { windows = true },
+  { sep = true },
+  # Every window the config defines, open or not, by its `title`.
+  { frames = true },
 ]
 
 [[menubar]]
@@ -596,10 +602,56 @@ service = "last_trade"
 protocol = "subpub"
 topic = ["AAPL", "GOOG", "MSFT", "AMZN", "TSLA", "NVDA"]
 
+# ─── The Order Desk: a composite window, opened on demand ─────────────
+#
+# Three panes wired to each other through their own specs — the desk's
+# orders broadcast the selected id under a name private to the desk, the
+# children table listens for it, and the record pane follows the orders
+# table's selection — laid out in one frame the `[[frames]]` entry below
+# declares with `open = false`: closed at startup, brought up whole by
+# Orders → Order Desk (a `frame.show` item), or from the Window menu's
+# `{ frames = true }` list. A pane is in one window at a time, so the desk
+# has panes of its own rather than pulling All Orders out of the main
+# window. No chips: the links are the desk's wiring, not something to
+# fiddle with.
+[panes.desk-orders]
+title = "Desk Orders"
+type = "mkio-table"
+service = "all_orders"
+protocol = "query"
+columns = ["id", "ts", "side", "symbol", "qty", "price", "status", "tif"]
+sort = "-ts"
+link.broadcast = { desk_order = "id" }
+link.chips = false
+
+[panes.desk-children]
+title = "Children"
+type = "mkio-table"
+service = "all_orders"
+protocol = "query"
+columns = ["id", "side", "symbol", "qty", "price", "status"]
+link.listen = { desk_order = "parent_id" }
+link.chips = false
+
+[panes.desk-order]
+title = "Order"
+type = "mkio-record"
+service = "all_orders"
+table = "orders"
+key = "id"
+source = "desk-orders"
+record = "desk-orders"
+fields = ["id", "ts", "side", "symbol", "qty", "price", "status", "tif", "note"]
+groups = [
+  { label = "Instruction", columns = ["id", "ts", "side", "symbol", "qty", "price", "tif"] },
+  { label = "Progress", columns = ["status", "note"] },
+]
+
 # ─── Frames ───────────────────────────────────────────────────────────
 
 [[frames]]
 id = "main"
+title = "Order Book"
 x = 0.02
 y = 0.03
 w = 0.64
@@ -608,6 +660,7 @@ layout = { type = "tabs", active = 0, children = ["all-orders", "pending", "orde
 
 [[frames]]
 id = "sidebar"
+title = "Sidebar"
 x = 0.68
 y = 0.03
 w = 0.30
@@ -616,11 +669,33 @@ layout = { type = "tabs", active = 0, children = ["last-trade", "order-detail"] 
 
 [[frames]]
 id = "children"
+title = "Child Orders"
 x = 0.68
 y = 0.60
 w = 0.30
 h = 0.37
 layout = { type = "tabs", active = 0, children = ["child-orders"] }
+
+# The Order Desk (see its panes above): defined here, closed until asked
+# for. Once open it is a window like any other — it docks, saves into a
+# layout under this id, and Reset to Default closes it again.
+[[frames]]
+id = "desk"
+title = "Order Desk"
+open = false
+x = 0.08
+y = 0.08
+w = 0.84
+h = 0.84
+
+[frames.layout]
+type = "split"
+dir = "h"
+ratios = [0.6, 0.4]
+children = [
+  { type = "tabs", children = ["desk-orders"] },
+  { type = "split", dir = "v", ratios = [0.55, 0.45], children = [{ type = "tabs", children = ["desk-order"] }, { type = "tabs", children = ["desk-children"] }] },
+]
 
 # ─── mkio connection ──────────────────────────────────────────────────
 

@@ -24,7 +24,8 @@
 //
 // An item of `{ windows = true }` expands into one `pane.show` leaf per
 // currently-open pane — popups are rebuilt on every open, so the list
-// always reflects the live workspace.
+// always reflects the live workspace. `{ frames = true }` expands into one
+// `frame.show` leaf per window the config's `frames` defines, open or not.
 
 import { icon } from "../lib/icons.js";
 
@@ -122,6 +123,9 @@ class MkuiMenubar extends HTMLElement {
       if (item.windows) {
         const panes = this._app?._element?.workspace?.openPanes?.() ?? [];
         for (const p of panes) out.push({ label: p.title, action: "pane.show", args: p.id });
+      } else if (item.frames) {
+        const frames = this._app?._element?.workspace?.configFrames?.() ?? [];
+        for (const f of frames) out.push({ label: f.title ?? f.id, action: "frame.show", args: f.id });
       } else if (item.layouts) {
         out.push(this._layoutsSubmenu(item));
       } else {
