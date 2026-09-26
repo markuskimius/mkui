@@ -3832,7 +3832,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   //
   // `chips = false` keeps the link controls off the toolbar: no chips, so
   // pausing a direction or removing a link is done from the header
-  // dropdown's advanced row (alt/option-click), which then carries the
+  // dropdown's advanced row (ctrl/cmd-click), which then carries the
   // pause / resume toggles too. Presentation config, read once here:
   // setLink ignores it, getLink and layouts never carry it.
   const hub = app.links ?? null;
@@ -4407,7 +4407,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       filterBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         if (dropdownCol === c) { closeDropdown(); return; }
-        openFilterDropdown(c, th, { advanced: e.altKey }); // alt/option: link ops, scope row (tree tables)
+        openFilterDropdown(c, th, { advanced: e.ctrlKey || e.metaKey }); // ctrl/cmd: link ops, scope row (tree tables)
       });
 
       th.addEventListener("pointerdown", (e) => {
@@ -4573,7 +4573,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
             const th = thead.querySelector?.(`th[data-col="${CSS.escape(col)}"]`);
             if (!th) return;
             scrollHeaderIntoView(th);
-            openFilterDropdown(col, th, { advanced: !!e?.altKey, scope: f.scope });
+            openFilterDropdown(col, th, { advanced: !!(e?.ctrlKey || e?.metaKey), scope: f.scope });
           },
           () => clearFilters([key]),
           makeFilterCheck(key, f));
@@ -4681,7 +4681,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return t;
   }
 
-  // The header dropdown's link ops (alt/option-click): "Broadcast as…" /
+  // The header dropdown's link ops (ctrl/cmd-click): "Broadcast as…" /
   // "Listen for…", or the name the column already has in that direction. A click swaps the
   // op for an inline name input (the column's name is the default, and
   // the listen input offers every name currently broadcast); Enter or blur
@@ -5077,7 +5077,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     // Tree tables: one filter per scope, the scope row picking which the
     // dropdown edits — the default scope, else the first scoped one the
     // column has. A plain open on a column filtered only at the top looks
-    // like a flat table's; alt/option-click, a filter (or the default
+    // like a flat table's; ctrl/cmd-click, a filter (or the default
     // scope) off the top, or an asked-for scope shows the row.
     const mine = tree ? colFilters(col) : [];
     const scope = !tree ? null
@@ -5131,7 +5131,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       hideOp.addEventListener("click", () => hideColumn(col)); // closes the dropdown
     }
     colOps.appendChild(hideOp);
-    // Link ops are advanced: alt/option-click the button (or a chip) to
+    // Link ops are advanced: ctrl/cmd-click the button (or a chip) to
     // see them, like the tree scope row. An existing link stays visible
     // on the toolbar chips and the header mark either way; without the
     // chips, the pause / resume toggles sit here for the column's links.

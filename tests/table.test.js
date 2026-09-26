@@ -3181,8 +3181,11 @@ function clickHeader(th, { shift = false, ctrl = false, meta = false, alt = fals
                     target: { closest: () => null } });
 }
 
-function clickFilterBtn(th, { alt = false } = {}) {
-  th.querySelector(".mkui-filter-btn")._ev.click[0]({ stopPropagation() {}, altKey: alt });
+// `mod`: the ctrl/cmd modifier that opens the advanced dropdown (`meta`
+// for the cmd form); `alt` is what it used to be, kept so a test can show
+// alt/option no longer does it.
+function clickFilterBtn(th, { mod = false, meta = false, alt = false } = {}) {
+  th.querySelector(".mkui-filter-btn")._ev.click[0]({ stopPropagation() {}, ctrlKey: mod, metaKey: meta, altKey: alt });
 }
 
 // Describes what the header cell's single icon slot currently shows.
@@ -5520,7 +5523,7 @@ function chipStrip(host) {
     // Parts by class, not by index: a filter chip leads with its on/off box.
     flip: (col) => part("mkui-chip mkui-chip-sort", col, "main")._ev.click[0](),
     dropSort: (col) => part("mkui-chip mkui-chip-sort", col, "x")._ev.click[0]({ stopPropagation() {} }),
-    open: (col) => part("mkui-chip mkui-chip-filter", col, "main")._ev.click[0](),
+    open: (col, mods) => part("mkui-chip mkui-chip-filter", col, "main")._ev.click[0](mods),
     dropFilter: (col) => part("mkui-chip mkui-chip-filter", col, "x")._ev.click[0]({ stopPropagation() {} }),
     // The filter chip's checkbox: switch that filter off / back on.
     check: (col) => part("mkui-chip mkui-chip-filter", col, "check"),
@@ -6674,21 +6677,35 @@ test("tree: filters judge roots, children, or all — a hidden row hides its sub
   assert.deepEqual(api.get(), { qty: { type: "number", from: 2, to: null, empty: false, scope: "children" } });
 });
 
-// The scope row is the advanced view: alt/option-click the filter button
+// The scope row is the advanced view: ctrl/cmd-click the filter button
 // (or open a filter already scoped off the top level) to see it.
 function scopeRow(dd) {
   const scopes = dd._ch.find(c => String(c.className).includes("mkui-filter-scopes")) ?? null;
   return { scopes, btn: (s) => scopes?._ch.find(b => b.dataset?.scope === s) ?? null };
 }
-function openDropdownAlt(host, col) {
+function openDropdownAdvanced(host, col, mods = { ctrlKey: true }) {
   const th = getThs(host).find(t => t.dataset.col === col);
-  const click = () => th.querySelector(".mkui-filter-btn")._ev.click[0]({ stopPropagation() {}, altKey: true });
+  const click = () => th.querySelector(".mkui-filter-btn")._ev.click[0]({ stopPropagation() {}, ...mods });
   const open = () => host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).at(-1);
   click();
   if (!open()) click(); // the button toggles: a dropdown already open on this column closed
   return open();
 }
 const currentDropdown = (host) => host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).at(-1);
+
+test("tree: a filter chip's ctrl/cmd-click opens the advanced dropdown too; alt/option does not", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
+  const { dd } = openDropdown(host, "qty");
+  const cb1 = dd._ch.find(c => c.className === "mkui-filter-list")._ch.map(l => l._ch[0]).find(c => c.dataset.val === "1");
+  cb1.checked = false;
+  cb1._ev.change[0]();
+  clickFilterBtn(getThs(host).find(t => t.dataset.col === "qty")); // close
+  for (const [mods, want] of [[{ altKey: true }, false], [{ ctrlKey: true }, true], [{ metaKey: true }, true], [{}, false]]) {
+    chipStrip(host).open("qty", mods);
+    assert.equal(scopeRow(currentDropdown(host)).scopes != null, want, JSON.stringify(mods));
+    clickFilterBtn(getThs(host).find(t => t.dataset.col === "qty")); // close again
+  }
+});
 // Plain reopen of a column whose dropdown is still open (a change inside
 // the dropdown leaves it open): the first click closes, the second opens.
 function reopenDropdown(host, col) {
@@ -6696,7 +6713,7 @@ function reopenDropdown(host, col) {
   return openDropdown(host, col);
 }
 
-test("tree: a plain filter dropdown filters the top level; alt-click shows the scope row", async () => {
+test("tree: a plain filter dropdown filters the top level; ctrl/cmd-click shows the scope row, alt/option no longer does", async () => {
   const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
   let { dd } = openDropdown(host, "qty");
   assert.equal(scopeRow(dd).scopes, null, "no scope row on a plain open");
@@ -6707,9 +6724,13 @@ test("tree: a plain filter dropdown filters the top level; alt-click shows the s
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "x1"], "b (qty 1) went with its child; a1 (qty 1) stayed");
   assert.equal(host._paneEl._filters.get().qty.scope, "roots");
   assert.equal(filterTitle(host, "qty"), "All but 1 values");
-  dd = openDropdownAlt(host, "qty");
+  dd = openDropdownAdvanced(host, "qty", { altKey: true });
+  assert.equal(scopeRow(dd).scopes, null, "alt/option-click is a plain open now");
+  dd = openDropdownAdvanced(host, "qty", { metaKey: true });
+  assert.ok(scopeRow(dd).scopes, "cmd-click: the scope row shows");
+  dd = openDropdownAdvanced(host, "qty");
   let row = scopeRow(dd);
-  assert.ok(row.scopes, "alt-click: the scope row shows");
+  assert.ok(row.scopes, "ctrl-click: the scope row shows");
   assert.ok(row.btn("roots").classList.contains("active"));
   assert.ok(row.btn("roots").classList.contains("mkui-filter-scope-set"), "the top tab is marked: it holds a filter");
   assert.ok(!row.btn("children").classList.contains("mkui-filter-scope-set"));
@@ -6995,7 +7016,7 @@ test("tree: a flat table ignores filter scope and has no tree hook or scope row"
   assert.deepEqual(shownNames(host), ["a", "c"], "scope is inert without a tree");
   assert.deepEqual(host._paneEl._filters.get(), { status: { exclude: ["closed"] } }, "and isn't echoed back");
   assert.equal(host._paneEl._tree, undefined);
-  const dd = openDropdownAlt(host, "status");
+  const dd = openDropdownAdvanced(host, "status");
   assert.equal(scopeRow(dd).scopes, null, "alt-click on a flat table is a plain open");
 });
 
@@ -7689,7 +7710,7 @@ function linkChips(host) {
   };
 }
 const linkMark = (host, col) => getThs(host).find(t => t.dataset.col === col).querySelector(".mkui-th-linkmark");
-function linkOps(host, col, opts = { alt: true }) {
+function linkOps(host, col, opts = { mod: true }) {
   const { dd } = openDropdown(host, col, opts);
   const ops = byClass(dd, "mkui-filter-actions mkui-filter-colops")[0];
   const op = (dir) => ops._ch.find(c => String(c.className).includes(`mkui-link-op-${dir}`));
@@ -8018,7 +8039,7 @@ test("links: chips = false keeps the chips off the toolbar; the advanced dropdow
   assert.deepEqual(host._paneEl._link.get(), { broadcast: { order: "id" }, listen: { x: "qty" }, broadcasting: true, listening: false }, "chips is not link state");
   // The plain dropdown has no toggles; the advanced one has them for the
   // directions this column is linked in.
-  let ops = linkOps(host, "id", { alt: false });
+  let ops = linkOps(host, "id", { mod: false });
   const toggles = (o, dir) => byClass(o.dd, `mkui-filter-action mkui-link-toggle mkui-link-toggle-${dir}`);
   assert.equal(toggles(ops, "broadcast").length, 0);
   clickFilterBtn(getThs(host).find(t => t.dataset.col === "id"));
@@ -8084,7 +8105,7 @@ test("links: the header dropdown's ops appear on alt/option-click only, name a c
   const hub = new LinkHub();
   hub.publish("elsewhere", { order: ["1"] });
   const { host } = await createTable({ columns: LINK_COLS, link: { broadcast: { order: "id" } } }, { hub, id: "t" });
-  let ops = linkOps(host, "id", { alt: false });
+  let ops = linkOps(host, "id", { mod: false });
   assert.equal(ops.op("broadcast"), undefined, "a plain click shows no link ops, even on a linked column");
   assert.equal(ops.op("listen"), undefined);
   clickFilterBtn(ops.dd && getThs(host).find(t => t.dataset.col === "id")); // toggle the plain dropdown closed
