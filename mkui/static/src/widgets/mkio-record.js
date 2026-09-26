@@ -36,6 +36,10 @@ const el = (cls, tag = "div") => {
 
 let _subCounter = 0;
 
+// The config keys a detail window reads (beside `title`/`type`), for the
+// workspace's unknown-key check.
+const RECORD_KEYS = ["service", "source", "record", "fields", "groups", "labels", "display", "styles", "widgets", "table", "key"];
+
 registerPaneType("mkio-record", async (spec, app, host) => {
   const wsUrl = app.config?.mkio?.url;
   if (!wsUrl) {
@@ -440,4 +444,4 @@ registerPaneType("mkio-record", async (spec, app, host) => {
 
   follower.start();
   if (!follower.record) follower.refresh();
-});
+}, RECORD_KEYS);

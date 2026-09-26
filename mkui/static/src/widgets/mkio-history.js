@@ -57,6 +57,10 @@ function fmtWhen(ref) {
 
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+// The config keys a history window reads (beside `title`/`type`), for the
+// workspace's unknown-key check.
+const HISTORY_KEYS = ["source", "history", "record", "labels", "display"];
+
 registerPaneType("mkio-history", async (spec, app, host) => {
   const wsUrl = app.config?.mkio?.url;
   if (!wsUrl) {
@@ -896,4 +900,4 @@ registerPaneType("mkio-history", async (spec, app, host) => {
   // a retained broadcast, a selection already made. Only an empty one
   // needs prompting, so the window renders what it is waiting for.
   if (!follower.record) follower.refresh();
-});
+}, HISTORY_KEYS);

@@ -95,6 +95,13 @@ function formatTimeRange(fRef, lRef) {
 
 let _subCounter = 0;
 
+// The config keys the table reads (beside `title`/`type`): what the
+// workspace checks a pane's keys against, so a misspelt or misplaced one
+// (`expand` outside `tree`) is reported instead of ignored.
+const TABLE_KEYS = ["service", "protocol", "topic", "filter", "columns", "visible", "labels", "groups", "types",
+  "tree", "values", "display", "styles", "rowStyle", "buttons", "history", "select", "live", "start",
+  "rowColumn", "maxcount", "filters", "sort", "link"];
+
 registerPaneType("mkio-table", async (spec, app, host) => {
   const wsUrl = app.config?.mkio?.url;
   if (!wsUrl) {
@@ -1598,6 +1605,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   let cellRects = [];         // [{ aKey, aCol, aIdx, fKey, fCol, fIdx }]
   const cellOff = new Set();  // "key\0col" cells toggled off inside rects
   let focusCell = null;       // { key, col, idx }
+  // A second Esc withdrew the cursor's row from the broadcasts and
+  // `select.state`; the next click or arrow key (`publishSelection`) ends it.
+  let broadcastRetracted = false;
   let selRev = 0;             // bumped on any selection change
 
   const colIndex = (col) => (columns ? visibleColumns().indexOf(col) : -1);
@@ -1805,6 +1815,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // Publish a specific row object. Deduped, so the followers of a state path
   // only see a change when the row they track actually changed.
   function publishRow(row) {
+    if (broadcastRetracted && row !== null) return; // a live update while withdrawn stays withdrawn
     if (!selectStatePath || row === lastPublishedRow) return;
     lastPublishedRow = row;
     app.state.set(selectStatePath, row);
@@ -1836,6 +1847,20 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return had;
   }
 
+  // A second Esc, with nothing left to clear: withdraw the cursor's row from
+  // the table's broadcasts and its `select.state`. The focused cell stands
+  // in for a selection there, so without this a linked table could never be
+  // released from the keyboard. The next click or arrow key
+  // (`publishSelection`) puts the row back. Returns whether there was
+  // anything to withdraw.
+  function retractBroadcast() {
+    if (broadcastRetracted || !focusCell || (!hasBroadcast() && !selectStatePath)) return false;
+    broadcastRetracted = true;
+    broadcastSelection();
+    publishRow(null);
+    return true;
+  }
+
   function selectAllRows() {
     if (!view.length) return;
     clearCellSelection();
@@ -1855,6 +1880,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // An empty list is a full clear, cursor included. `focus` (default on)
   // puts the cursor on the first key and scrolls to it.
   function selectRows(keys, { focus = true } = {}) {
+    broadcastRetracted = false;
     const want = (keys == null ? [] : Array.isArray(keys) ? keys : [keys])
       .filter((k) => k != null).map(String);
     const result = { ok: true, selected: [], missing: [], hidden: [] };
@@ -1982,6 +2008,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function handleRowPointerDown(key, e) {
+    broadcastRetracted = false; // a click speaks again
     if (e.button !== 0 && e.button !== undefined) return;
     scrollHost.focus?.({ preventScroll: true });
     // The hit may land on a span inside the cell (tree text, rich
@@ -2182,6 +2209,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       // muscle memory); ctrl/cmd+space toggles it within the set.
       if (!ensureFocusCell()) return;
       clearCellSelection();
+      broadcastRetracted = false;
       const key = focusCell.key;
       if (meta) {
         if (selectedKeys.has(key)) selectedKeys.delete(key);
@@ -2201,6 +2229,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       (e.key === "Home" ? "home" : e.key === "End" ? "end" :
        e.key === "PageUp" ? "pgup" : e.key === "PageDown" ? "pgdn" : null);
     if (move == null) return;
+    broadcastRetracted = false; // an arrow key speaks again
     const hadFocus = focusCell != null;
     if (!ensureFocusCell()) return;
     if (!hadFocus) move = [0, 0]; // first keystroke just places the cursor
@@ -2472,6 +2501,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       else pos = first < 0 ? n - 1 : (first - 1 + n) % n;
     }
     findPos = pos;
+    broadcastRetracted = false;
     showMatch(findMatches[pos]);
     updateFindCount();
   }
@@ -3979,6 +4009,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // for the children of what was picked, and hiding one here would quietly
   // drop it from the other table's view of the same record.
   function getBroadcastRows() {
+    if (broadcastRetracted) return [];
     const sel = getSelectedRows();
     if (!tree || !sel.length) return sel;
     const seen = new Set(), out = [];
@@ -6200,11 +6231,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     // Edit hook: the workspace routes Ctrl/Cmd+C, Ctrl/Cmd+A, Ctrl/Cmd+F,
     // Ctrl/Cmd+G (shift: previous), Escape, and the edit.* menu actions to
     // the focused frame's active pane. Escape clears the selection first,
-    // then closes the find strip.
+    // then withdraws the cursor's row from the broadcasts, then closes the
+    // find strip.
     paneEl._editActions = {
       copy: () => copySelection(),
       selectAll: () => { selectAllRows(); return true; },
-      clearSelection: () => clearSelectionKeepFocus() || closeFind(),
+      clearSelection: () => clearSelectionKeepFocus() || retractBroadcast() || closeFind(),
       find: () => { openFind(); return true; },
       findNext: () => findStep(1),
       findPrev: () => findStep(-1),
@@ -6369,4 +6401,4 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // no data does, so this is O(visible rows).
   const ro = new ResizeObserver(() => render());
   ro.observe(scrollHost);
-});
+}, TABLE_KEYS);

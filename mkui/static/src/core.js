@@ -4,7 +4,7 @@
 // The state store is intentionally tiny: it's a Proxy over a plain object,
 // supports dot-path get/set, and notifies subscribers per path.
 
-export const VERSION = "1.16.1";
+export const VERSION = "1.17.0";
 export function version() { return VERSION; }
 
 import { registerExprFunction, registerExprLibrary, registerExprType, expr } from "./lib/expressions.js";
@@ -13,6 +13,7 @@ import { alertSpec, confirmSpec, needsClient } from "./lib/dialogs.js";
 
 const widgetTypes = new Map();
 const paneTypes = new Map();
+const paneTypeKeys = new Map();
 
 // The expression language (mkio's, vendored in lib/expr.js) is the
 // extension surface for derived values, styling rules, enable/showWhen
@@ -24,12 +25,19 @@ export function registerWidget(name, factory) {
   widgetTypes.set(name, factory);
 }
 // A pane type is a factory that renders custom content into a pane's
-// content host. Reference from config with `type = "<name>"`.
-export function registerPaneType(name, factory) {
+// content host. Reference from config with `type = "<name>"`. `keys` lists
+// the config keys the type reads (besides `title` and `type`): the
+// workspace reports a pane carrying any other key on the console, which
+// is what catches a misspelt or misplaced key that would otherwise be
+// ignored in silence. A type that declares none is not checked.
+export function registerPaneType(name, factory, keys = null) {
   paneTypes.set(name, factory);
+  paneTypeKeys.set(name, keys ? new Set(keys) : null);
 }
 export function getWidget(name) { return widgetTypes.get(name); }
 export function getPaneType(name) { return paneTypes.get(name); }
+// The keys a pane type declared, as a Set, or null for one that declared none.
+export function getPaneTypeKeys(name) { return paneTypeKeys.get(name) ?? null; }
 
 export class State {
   constructor(initial = {}) {

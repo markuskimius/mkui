@@ -3754,6 +3754,45 @@ test("edit hook: Escape clears selection but keeps the cursor", async () => {
   assert.equal(paneEl._editActions.clearSelection(), false, "nothing left to clear");
 });
 
+test("edit hook: a second Escape withdraws the cursor's row from the broadcast and select.state until a click or arrow key", async () => {
+  const t = await createTable({ rowColumn: true, link: { broadcast: { who: "name" } }, select: { state: "sel" } }, { id: "t" });
+  triggerVisible(t.io);
+  lastSubscribe().opts.onSnapshot(makeRows(4));
+  const { host, hub, state } = t;
+  const paneEl = host._paneEl;
+  const trs = dataRows(host);
+  pointerDown(trs[0], 0);
+  assert.deepEqual(hub.current("who")?.values, ["row-0"]);
+  assert.equal(state.get("sel")?.name, "row-0");
+  assert.equal(paneEl._editActions.clearSelection(), true, "first Esc: the selection");
+  assert.deepEqual(hub.current("who")?.values, ["row-0"], "the cursor's row still speaks for it");
+  assert.equal(state.get("sel")?.name, "row-0");
+  assert.equal(paneEl._editActions.clearSelection(), true, "second Esc: the cursor's row is withdrawn");
+  assert.equal(hub.current("who"), null, "the name is retracted");
+  assert.equal(state.get("sel"), null);
+  assert.ok(trs[0]._ch[1].classList.contains("mkui-cell-focus"), "the cursor itself stays");
+  assert.equal(paneEl._editActions.clearSelection(), false, "third Esc: nothing left (no find strip either)");
+  // A live update to the withdrawn row does not put it back.
+  lastSubscribe().opts.onUpdate?.({ ...makeRows(1)[0], value: 99 }, "update");
+  assert.equal(hub.current("who"), null);
+  keyDown(sh(host), "ArrowDown");
+  assert.deepEqual(hub.current("who")?.values, ["row-1"], "an arrow key speaks again");
+  assert.equal(state.get("sel")?.name, "row-1");
+  assert.equal(paneEl._editActions.clearSelection(), true);
+  assert.equal(hub.current("who"), null);
+  pointerDown(trs[2], 1);
+  assert.deepEqual(hub.current("who")?.values, ["row-2"], "a click speaks again");
+  assert.equal(state.get("sel")?.name, "row-2");
+});
+
+test("edit hook: without a broadcast or select.state the second Escape falls through", async () => {
+  const { host } = await createSelTable();
+  const paneEl = host._paneEl;
+  pointerDown(dataRows(host)[0], 0);
+  assert.equal(paneEl._editActions.clearSelection(), true);
+  assert.equal(paneEl._editActions.clearSelection(), false, "nothing to withdraw, no strip to close");
+});
+
 test("edit hook: selectAll selects every view row", async () => {
   const { host } = await createSelTable();
   host._paneEl._editActions.selectAll();

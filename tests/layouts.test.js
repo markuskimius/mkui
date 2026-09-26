@@ -966,3 +966,42 @@ test("showFrame refuses an unknown frame, and warns of a definition naming no pa
   assert.match(warned[0], /frame ghost names no pane/);
   assert.deepEqual(ws._frames.map(f => f.id), ["main"]);
 });
+
+// ── unknown pane keys ────────────────────────────────────────────────
+
+test("a pane key its type does not read is reported once on the console, against the type's declared keys", async () => {
+  const { registerPaneType, getPaneTypeKeys } = await import("../mkui/static/src/core.js");
+  registerPaneType("typed-kind", () => {}, ["service", "columns"]);
+  registerPaneType("untyped-kind", () => {});
+  assert.deepEqual([...getPaneTypeKeys("typed-kind")], ["service", "columns"]);
+  assert.equal(getPaneTypeKeys("untyped-kind"), null);
+  assert.equal(getPaneTypeKeys("no-such-kind"), null);
+  const errors = [];
+  const error = console.error; console.error = (m) => errors.push(m);
+  try {
+    const ws = makeWorkspace([]);
+    ws.setApp(new App({ frames: [], panes: {
+      good: { title: "Good", type: "typed-kind", service: "s", columns: ["a"] },
+      bad: { title: "Bad", type: "typed-kind", service: "s", expand: 1, colums: ["a"] },
+      custom: { title: "Custom", type: "untyped-kind", side: "client" },
+      widgets: { title: "W", widgets: [], foo: 1 },
+      content: { content: "hi" },
+      renamed: { title: "R", type: "typed-kind", titled: true, baseTitle: "R" },
+    } }));
+    assert.deepEqual(errors, [
+      '[mkui] pane "bad": unknown keys "expand", "colums" — pane type typed-kind takes columns, content, service, title, type, widgets',
+      '[mkui] pane "widgets": unknown key "foo" — a widgets pane takes content, title, type, widgets',
+    ], "setApp sweeps every declared pane; a type that declared no keys is not checked; runtime keys pass");
+    ws._ensurePaneEl("bad");
+    ws._ensurePaneEl("bad");
+    assert.equal(errors.length, 2, "reported once per pane, not again when built");
+    // A type registered after setApp is checked when its first pane is built.
+    ws._panes.set("late", { title: "L", type: "late-kind", nope: 1 });
+    ws._ensurePaneEl("late");
+    assert.equal(errors.length, 2, "unregistered type: nothing to check against");
+    registerPaneType("late-kind", () => {}, ["yes"]);
+    ws._panes.set("later", { title: "L", type: "late-kind", nope: 1 });
+    ws._ensurePaneEl("later");
+    assert.equal(errors.at(-1), '[mkui] pane "later": unknown key "nope" — pane type late-kind takes content, title, type, widgets, yes');
+  } finally { console.error = error; }
+});

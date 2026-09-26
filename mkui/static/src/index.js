@@ -14,7 +14,7 @@ export {
   App, State, LinkHub,
   registerWidget, registerPaneType,
   registerExprFunction, registerExprLibrary, registerExprType, expr,
-  getWidget, getPaneType,
+  getWidget, getPaneType, getPaneTypeKeys,
 } from "./core.js";
 export { ensureMkio } from "./mkio-bridge.js";
 // The record subject: what a custom detail pane needs to follow the link

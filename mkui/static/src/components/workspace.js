@@ -13,7 +13,7 @@
 // The workspace never owns a layout tree itself. Each frame is independent.
 
 import "./frame.js";
-import { getPaneType, getWidget } from "../core.js";
+import { getPaneType, getWidget, getPaneTypeKeys } from "../core.js";
 import { clampToDock, rectToFrac, fracToRect, dropZoneFor, previewRect, snapMove, snapResize, cascadePosition } from "../layout/drag.js";
 import { layout, normalize, insertPane, removePane, findPane, firstTabGroup, listPanes } from "../layout/tree.js";
 import { sanitizeLayout, pruneTree, LAYOUT_VERSION } from "../lib/layouts.js";
@@ -35,6 +35,11 @@ function applyFrameRect(el, r) {
   });
 }
 
+// The keys any pane may carry beside its type's own, and the ones the
+// workspace writes onto a spec at run time (`renamePane`, `setPaneAutoTitle`).
+const PANE_COMMON_KEYS = new Set(["title", "type", "widgets", "content"]);
+const PANE_RUNTIME_KEYS = new Set(["titled", "baseTitle"]);
+
 class MkuiWorkspace extends HTMLElement {
   constructor() {
     super();
@@ -42,6 +47,7 @@ class MkuiWorkspace extends HTMLElement {
     this._app = null;
     this._panes = new Map();        // paneId  -> pane spec
     this._paneEls = new Map();      // paneId  -> <mkui-pane> (authoritative)
+    this._keysReported = new Set(); // paneIds whose unknown keys were reported
     this._frames = [];              // frame specs, order = z-order (last = top)
     this._frameEls = new Map();     // frameId -> <mkui-frame>
     this._pool = null;              // hidden stash for detached panes
@@ -390,6 +396,10 @@ class MkuiWorkspace extends HTMLElement {
   setApp(app) {
     this._app = app;
     this._panes = new Map(Object.entries(app.config.panes ?? {}));
+    // Every pane the config declares, checked now for keys its type does
+    // not read; a type registered later than this is checked when its
+    // first pane is built (`_ensurePaneEl`), once per pane either way.
+    for (const [id, spec] of this._panes) this._reportUnknownPaneKeys(id, spec);
     this._frames = this._configFrameSpecs(app.config.frames);
     if (this._frames.length > 0) {
       this._focusedId = this._frames[this._frames.length - 1].id;
@@ -463,14 +473,38 @@ class MkuiWorkspace extends HTMLElement {
     // against a detached element.
     this._paneEls.set(id, el);
     this._pool.appendChild(el);
-    if (spec) el._ready = this._buildPaneContent(el.contentEl, spec);
-    else el.contentEl.textContent = `[mkui] unknown pane: ${id}`;
+    if (spec) {
+      this._reportUnknownPaneKeys(id, spec);
+      el._ready = this._buildPaneContent(el.contentEl, spec);
+    } else el.contentEl.textContent = `[mkui] unknown pane: ${id}`;
     return el;
   }
 
   _parkPane(el) {
     if (el.parentElement !== this._pool) this._pool.appendChild(el);
     el.style.display = "none";
+  }
+
+  // A pane key its type does not read is a mistake nobody sees — mkui reads
+  // the keys it knows and leaves the rest — so it is reported on the console
+  // (console.error, the browser's stderr), once per pane. A type's keys are
+  // what it gave `registerPaneType`; a custom type that gave none is not
+  // checked. A widgets/content pane takes the common keys alone. Returns
+  // the unknown keys.
+  _reportUnknownPaneKeys(id, spec) {
+    if (!spec || typeof spec !== "object" || this._keysReported.has(id)) return [];
+    const own = spec.type ? getPaneTypeKeys(spec.type)
+      : (spec.widgets || spec.content !== undefined) ? new Set() : null;
+    if (!own) return [];
+    this._keysReported.add(id);
+    const unknown = Object.keys(spec).filter(k => !own.has(k) && !PANE_COMMON_KEYS.has(k) && !PANE_RUNTIME_KEYS.has(k));
+    if (unknown.length) {
+      const known = [...new Set([...PANE_COMMON_KEYS, ...own])].sort().join(", ");
+      const what = spec.type ? `pane type ${spec.type}` : "a widgets pane";
+      console.error(`[mkui] pane "${id}": unknown key${unknown.length > 1 ? "s" : ""} ` +
+        `${unknown.map(k => `"${k}"`).join(", ")} — ${what} takes ${known}`);
+    }
+    return unknown;
   }
 
   // Returns the factory's promise for an async pane type, else null.
