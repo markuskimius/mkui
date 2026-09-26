@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   detectTimeKind, parseTime, strptime, kindForFormat, kindForSpec,
   inputToBound, boundToInput, inputTypeForKind, presetBounds, tzOffset,
-  refToDate, dateToRef,
+  refToDate, dateToRef, strftime, formatTime, formatsTime,
 } from "../mkui/static/src/lib/timeparse.js";
 
 const T = Date.UTC(2026, 7, 29, 9, 30, 0) / 1000; // 2026-08-29T09:30:00Z
@@ -160,4 +160,54 @@ test("dateToRef writes one back, zeroed below the second", () => {
 test("a ref round-trips through a Date", () => {
   const ref = "20260908 16:47:06.000000000000";
   assert.equal(dateToRef(refToDate(ref)), ref);
+});
+
+test("strftime writes the strptime token set, %f six digits or a fixed width", () => {
+  assert.equal(strftime(T + 0.25, "%S.%f %2f %9f", "UTC", "2500"), "00.2500 25 250000000", "stored digits win over the double");
+  assert.equal(strftime(T, "%Y-%m-%d %H:%M:%S"), "2026-08-29 09:30:00");
+  assert.equal(strftime(T, "%Y-%m-%d %H:%M:%S", "+02:00"), "2026-08-29 11:30:00");
+  assert.equal(strftime(T + 0.25, "%S.%f"), "00.250000");
+  assert.equal(strftime(T + 0.123456, "%S.%3f %6f %9f"), "00.123 123456 123456000", "truncated, never rounded; a double keeps microseconds");
+  assert.equal(strftime(T, "%H:%M %z", "-05:30"), "04:00 -0530");
+  assert.equal(strftime(T, "%H:%M %Z"), "09:30 UTC");
+  assert.equal(strftime(T, "%Z", "utc"), "UTC");
+  assert.equal(strftime(T, "%Z", "-05:30"), "-05:30", "a fixed offset is named as written");
+  const zone = strftime(T, "%Z", "local");
+  assert.match(zone, /^\S+$/, "the browser's own zone has a short name");
+  assert.equal(zone, new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(new Date(T * 1000)).find(p => p.type === "timeZoneName").value);
+  assert.throws(() => strftime(T, "%3Z"), /Bad time format token/);
+  assert.equal(strftime(T, "50%% %H:%M"), "50% 09:30");
+  assert.equal(strftime(34215, "%H:%M:%S"), "09:30:15", "seconds since midnight under UTC");
+  assert.throws(() => strftime(T, "%Q"), /Bad time format token/);
+  assert.throws(() => strftime(T, "%3Y"), /Bad time format token/);
+  assert.throws(() => strftime(T, "%H", "PST"), /Unknown time zone/);
+});
+
+test("formatTime renders a value under its column spec", () => {
+  const fix = { parse: "%Y%m%d-%H:%M:%S.%f" };
+  assert.equal(formatsTime(fix), false, "parse alone leaves the cell as it is");
+  assert.ok(formatsTime({ ...fix, zone: "local" }));
+  assert.ok(formatsTime({ format: "%H:%M" }));
+  assert.equal(formatTime("20260829-09:30:15.250", { ...fix, format: "%H:%M:%S.%3f", zone: "+01:00" }), "10:30:15.250");
+  assert.equal(formatTime("20260829-09:30:15.250", { ...fix, zone: "+01:00" }), "20260829-10:30:15.250", "zone alone keeps the parse pattern and the digits as stored");
+  assert.equal(formatTime("20260829-09:30:15.250123456", { ...fix, format: "%S.%f" }), "15.250123456", "a bare %f writes the stored fraction back, every digit");
+  assert.equal(formatTime("20260829-09:30:15.250123456789", { ...fix, format: "%S.%f %3f %9f" }), "15.250123456789 250 250123456", "picoseconds parse; a width truncates the stored digits");
+  assert.equal(formatTime("20260829-09:30:15.2", { ...fix, format: "%S.%f %6f" }), "15.2 200000", "a width pads them");
+  assert.equal(formatTime("20260829-09:30:15", { parse: "%Y%m%d-%H:%M:%S", format: "%S.%f" }), "15.000000", "no %f in the parse pattern: six computed digits");
+  assert.equal(formatTime("09:30:15.25", { parse: "%H:%M:%S.%f", format: "%H:%M:%S.%f" }), "09:30:15.25", "a clock time keeps its digits too");
+  assert.equal(formatTime("20260829-09:30:15.250", { ...fix, format: "%d/%m %H:%M" }), "29/08 09:30", "format alone never shifts the clock");
+  assert.equal(formatTime("20260829-09:30:15.250", { ...fix, tz: "+02:00", format: "%H:%M" }), "09:30", "…even when the column reads in an offset");
+  assert.equal(formatTime("20260829-09:30:15.250", { ...fix, tz: "+02:00", format: "%H:%M", zone: "UTC" }), "07:30");
+  assert.equal(formatTime("2026-08-29T09:30:00Z", { zone: "+02:00" }), "2026-08-29 11:30:00", "a native stamp gets the kind's default pattern");
+  assert.equal(formatTime("2026-08-29", { zone: "+02:00", format: "%d/%m/%Y" }), "29/08/2026", "a bare date keeps its day");
+  assert.equal(formatTime("29/08/2026", { parse: "%d/%m/%Y", zone: "-05:00" }), "29/08/2026");
+  assert.equal(formatTime("09:30", { format: "%H:%M:%S", zone: "+02:00" }), "09:30:00", "a clock time has no zone to move");
+  assert.equal(formatTime(1787995800250, { unit: "ms", format: "%H:%M:%S.%3f", zone: "+00:00" }), "09:30:00.250");
+  assert.equal(formatTime("nope", { ...fix, zone: "local" }), null, "unparseable: the caller shows the value");
+  assert.equal(formatTime("", { ...fix, zone: "local" }), null);
+  const local = new Date(T * 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  assert.equal(formatTime("20260829-09:30:00.000", { ...fix, format: "%Y-%m-%d %H:%M", zone: "local" }),
+    `${local.getFullYear()}-${p(local.getMonth() + 1)}-${p(local.getDate())} ${p(local.getHours())}:${p(local.getMinutes())}`,
+    "local is the browser's zone");
 });

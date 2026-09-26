@@ -14,7 +14,7 @@ import {
 } from "../lib/history.js";
 import {
   detectTimeKind, parseTime, kindForSpec, kindForFormat, inputToBound, boundToInput,
-  inputTypeForKind, presetBounds, PRESETS, dateToRef,
+  inputTypeForKind, presetBounds, PRESETS, dateToRef, formatsTime, formatTime, strftime, tzOffset,
 } from "../lib/timeparse.js";
 
 const AS_OF_TITLE = "Show the table as it stood at a moment";
@@ -416,8 +416,15 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // is recognised natively); `types = { col = "time" | "number" | "text" |
   // { type = "time", parse = "%d/%m/%Y", tz = "local", unit = "ms" } }`
   // overrides that inference — the only way to range-filter a column in a
-  // format the table would otherwise refuse to guess.
-  const colTypes = {}; // col -> { type, parse?, tz?, unit? }
+  // format the table would otherwise refuse to guess. A time type may also
+  // say how the column shows: `format = "%H:%M:%S"` renders each value
+  // through strftime and `zone = "local"` (or `UTC`, `+HH:MM`) picks the
+  // zone it is rendered in, so stored UTC stamps read in the viewer's
+  // time. Like a `display` template it changes the text alone — sorting
+  // and range filtering keep the value — and a value that doesn't parse
+  // shows as it is.
+  const colTypes = {}; // col -> { type, parse?, tz?, unit?, format?, zone? }
+  const timeShown = {}; // col -> (value) => text, for time types with format/zone
   for (const [c, t] of Object.entries(spec.types ?? {})) {
     const o = typeof t === "string" ? { type: t } : { ...t };
     if (!["number", "time", "text"].includes(o.type)) {
@@ -427,6 +434,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (o.type === "time" && o.parse && !kindForFormat(String(o.parse))) {
       console.warn(`[mkio-table] bad types.${c}: parse format has no date or time fields`);
       continue;
+    }
+    if (o.type === "time" && formatsTime(o)) {
+      try {
+        if (o.format != null) strftime(0, o.format, "UTC");
+        if (o.zone != null) tzOffset(o.zone);
+      } catch (e) {
+        console.warn(`[mkio-table] bad types.${c}: ${e.message}`);
+        continue;
+      }
+      timeShown[c] = (v) => formatTime(v, o) ?? (v == null ? "" : String(v));
     }
     colTypes[c] = o;
   }
@@ -610,10 +627,17 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
   const hasDisplay = Object.keys(displayExprs).length > 0;
 
+  // Columns whose shown text is not the value's own: a display template,
+  // or a time type rendered through `format`/`zone`.
+  const shownDifferently = (col) => !!(displayExprs[col] || timeShown[col]);
+
   // -> { text, rich | null, error | null }
   function cellDisplay(row, col) {
     const t = displayExprs[col];
-    if (!t) return { text: cellText(row, col), rich: null, error: null };
+    if (!t) {
+      const f = timeShown[col];
+      return { text: f ? f(cellValue(row, col)) : cellText(row, col), rich: null, error: null };
+    }
     const scope = cellScope(row, col, true);
     scope.vars.value = cellValue(row, col);
     try {
@@ -814,7 +838,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       // Widths and decimal padding measure what's shown (the display text,
       // plus the boxes icons and bars occupy); whether the column is numeric
       // is judged on the value.
-      const d = displayExprs[k] ? cellDisplay(row, k) : null;
+      const d = shownDifferently(k) ? cellDisplay(row, k) : null;
       const s = d ? d.text : String(v);
       let extraW = d?.rich ? richExtraWidth(d.rich) : 0;
       // The caret column carries the indent and the toggle too.
@@ -2382,7 +2406,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (!findRe || !columns) { findScanning = false; updateFindCount(); refreshFindHeaderStyles(); return; }
     const cols = visibleColumns();
     for (const c of cols) if (headerMatches(c)) findMatches.push({ key: null, col: c, idx: -1 });
-    const texts = cols.map((c) => displayExprs[c]
+    const texts = cols.map((c) => shownDifferently(c)
       ? (row) => cellDisplay(row, c).text
       : (row) => cellText(row, c));
     const chunk = Math.max(FIND_CHUNK, Math.ceil(view.length / 50));
@@ -3310,7 +3334,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
   const timeSpec = (col) => colTypes[col]?.type === "time" ? colTypes[col] : {};
   const timeKindOf = (col) => kindForSpec(timeSpec(col)) ?? colStats.get(col)?.timeKind ?? "datetime";
-  const isLocalCol = (col) => colTypes[col]?.tz === "local";
+  // The range picker speaks the frame the cells show: a column rendered
+  // in the browser's zone takes its bounds as local wall-clock time even
+  // when its stored values are UTC (a bare date keeps its own zone, as
+  // formatTime does).
+  const isLocalCol = (col) => {
+    const o = colTypes[col];
+    if (!o) return false;
+    const zone = o.zone != null && timeKindOf(col) !== "date" ? o.zone : o.tz;
+    return zone === "local";
+  };
 
   // Preset bounds move with the clock; memoised per second so a full view
   // rebuild costs one resolution, not one per row.
@@ -5691,7 +5724,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         // Cells whose value changed re-render; display cells also re-render
         // when their template's output changed (it may read other columns).
         const isChanged = changedCols.has(c);
-        if (!isChanged && !displayExprs[c]) continue;
+        if (!isChanged && !shownDifferently(c)) continue;
         const td = tr.querySelector(`td[data-col="${CSS.escape(c)}"]`);
         if (!td) continue;
         if (!isChanged && displayText(row, c) === td._mkuiText) continue;

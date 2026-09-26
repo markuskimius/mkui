@@ -5010,6 +5010,83 @@ test("types.tz = local reads naive strings in the browser's zone", async () => {
   assert.deepEqual(shownNames(host), ["2"], "picker and cells share the local frame");
 });
 
+test("types.format and types.zone render time cells in the shown zone, the value still sorts", async () => {
+  const FIX = "%Y%m%d-%H:%M:%S.%f";
+  const { host, io } = await createTable({
+    protocol: "query", columns: ["name", "ts"],
+    types: { ts: { type: "time", parse: FIX, format: "%Y-%m-%d %H:%M:%S.%3f", zone: "+02:00" } },
+  });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", ts: "20260829-09:30:00.250" },
+    { _mkio_row: "2", name: "b", ts: "20260829-23:15:00.000" },
+    { _mkio_row: "3", name: "c", ts: "not a stamp" },
+    { _mkio_row: "4", name: "d", ts: "" },
+  ]);
+  const shown = () => colCells(host, "ts").map(td => td.textContent);
+  assert.deepEqual(shown(), ["2026-08-29 11:30:00.250", "2026-08-30 01:15:00.000", "not a stamp", ""],
+    "rendered in the zone; what doesn't parse shows as stored");
+  const th = getThead(host)._ch[0]._ch.find(t => t.dataset.col === "ts");
+  clickHeader(th); clickHeader(th);   // desc
+  const names = shownNames(host);
+  assert.ok(names.indexOf("b") < names.indexOf("a"), "sorted on the value, not the shown text");
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "1", name: "a", ts: "20260829-10:00:00.000" });
+  assert.ok(shown().includes("2026-08-29 12:00:00.000"), "a live update re-renders through the format");
+});
+
+test("types.format %f shows each stamp's fraction as stored", async () => {
+  const { host, io } = await createTable({
+    protocol: "query", columns: ["name", "ts"],
+    types: { ts: { type: "time", parse: "%Y%m%d-%H:%M:%S.%f", format: "%H:%M:%S.%f", zone: "UTC" } },
+  });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", ts: "20260829-09:30:00.250" },
+    { _mkio_row: "2", name: "b", ts: "20260829-09:30:00.250123" },
+    { _mkio_row: "3", name: "c", ts: "20260829-09:30:00.250123456789" },
+  ]);
+  assert.deepEqual(colCells(host, "ts").map(td => td.textContent),
+    ["09:30:00.250", "09:30:00.250123", "09:30:00.250123456789"],
+    "milliseconds, microseconds and picoseconds each keep their own digits");
+});
+
+test("types.zone = local shows cells in the browser's zone and the range picker follows", async () => {
+  const { host, io } = await createTable({ protocol: "query", types: { ts: { type: "time", zone: "local" } } });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([
+    { _mkio_row: "1", name: "a", ts: "2026-08-29 09:00:00" },
+    { _mkio_row: "2", name: "2", ts: "2026-08-29 09:30:00" },
+  ]);
+  const d = new Date(Date.UTC(2026, 7, 29, 9, 30, 0));
+  const p = (n) => String(n).padStart(2, "0");
+  const wall = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  assert.equal(colCells(host, "ts")[1].textContent, wall, "UTC stored, shown as local wall-clock time");
+  const dd = openDropdown(host, "ts");
+  dd.modeBtn("range")._ev.click[0]();
+  typeBound(dd.lo, wall.slice(0, 16).replace(" ", "T"));
+  assert.deepEqual(shownNames(host), ["2"], "the bound is read in the frame the cells show");
+});
+
+test("a bad types.format or types.zone warns and leaves the column undeclared", async () => {
+  const warned = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warned.push(a.join(" "));
+  try {
+    const { host, io } = await createTable({
+      protocol: "query",
+      types: { ts: { type: "time", format: "%Q" }, when: { type: "time", zone: "Mars/Olympus" } },
+    });
+    triggerVisible(io);
+    lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", name: "a", ts: "2026-08-29 09:00:00", when: "2026-08-29 09:00:00" }]);
+    assert.equal(colCells(host, "ts")[0].textContent, "2026-08-29 09:00:00");
+    assert.equal(colCells(host, "when")[0].textContent, "2026-08-29 09:00:00");
+    assert.equal(warned.filter(w => w.includes("bad types.ts") && w.includes("%Q")).length, 1);
+    assert.equal(warned.filter(w => w.includes("bad types.when") && w.includes("Unknown time zone")).length, 1);
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
 test("range filters see the derived value and reset on pane reopen", async () => {
   const { host, io } = await createTable({ protocol: "query", values: { value: "NUM_OF(value) * 2" } });
   triggerVisible(io);

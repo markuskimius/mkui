@@ -16,6 +16,11 @@
 // Naive strings (no offset) are UTC, matching the expression language's
 // EPOCH(); `tz = "local"` reads them in the browser's zone instead, and a
 // `+HH:MM` fixes an offset.
+//
+// The same spec can say how the column *shows*: `format` is an strftime
+// pattern for the cell and `zone` the zone it is rendered in (`local` for
+// the browser's), so a table of UTC stamps reads in the viewer's time
+// while sorting and range filtering keep the stored value (`formatTime`).
 
 const REF_RE = /^(\d{4})(\d{2})(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,12}))?$/;
 const ISO_RE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?)?(Z|[+-]\d{2}:?\d{2})?$/;
@@ -95,7 +100,7 @@ function parseNative(s, tz) {
 // format with: %Y %m %d %H %M %S %f %z, plus %% and literal text.
 const TOKEN_RE = {
   Y: /^\d{4}/, m: /^\d{1,2}/, d: /^\d{1,2}/, H: /^\d{1,2}/, M: /^\d{1,2}/, S: /^\d{1,2}/,
-  f: /^\d{1,9}/, z: /^(?:Z|[+-]\d{2}:?\d{2})/,
+  f: /^\d{1,12}/, z: /^(?:Z|[+-]\d{2}:?\d{2})/,
 };
 
 /** Which kind a strptime format yields: date fields, clock fields, or both. */
@@ -106,8 +111,16 @@ export function kindForFormat(fmt) {
 
 /** Parse `s` with a strftime-style format; null when it does not match. */
 export function strptime(s, fmt, tz) {
+  return strptimeFields(s, fmt, tz)?.secs ?? null;
+}
+
+// strptime keeping the fraction's digits as written (`stored`, null when
+// the format has no `%f`): a double holding epoch seconds can't carry
+// them all back, so strftime's bare `%f` reads them from here.
+function strptimeFields(s, fmt, tz) {
   const t = String(s).trim();
   const v = { Y: 1970, m: 1, d: 1, H: 0, M: 0, S: 0, f: 0, z: undefined };
+  let stored = null;
   let i = 0, j = 0;
   while (j < fmt.length) {
     const c = fmt[j];
@@ -129,16 +142,114 @@ export function strptime(s, fmt, tz) {
     const m = re.exec(t.slice(i));
     if (!m) return null;
     i += m[0].length;
-    if (tok === "f") v.f = frac(m[0]);
+    if (tok === "f") { v.f = frac(m[0]); stored = m[0]; }
     else if (tok === "z") v.z = m[0];
     else v[tok] = parseInt(m[0], 10);
   }
   if (i !== t.length) return null;
   const kind = kindForFormat(fmt);
-  if (kind === "time") return v.H * 3600 + v.M * 60 + v.S + v.f;
+  if (kind === "time") return { secs: v.H * 3600 + v.M * 60 + v.S + v.f, stored };
   const off = v.z === undefined ? tzOffset(tz) : v.z === "Z" ? 0 : tzOffset(v.z);
   const secs = assemble(v.Y, v.m, v.d, v.H, v.M, v.S, v.f, off);
-  return Number.isFinite(secs) ? secs : null;
+  return Number.isFinite(secs) ? { secs, stored } : null;
+}
+
+// strftime over strptime's token set plus `%Z`. `%f` is the fraction as
+// stored when the value was read through a `parse` pattern (`stored`, its
+// digits as written — a stamp keeps its own precision) and otherwise the
+// six-digit fraction the expression language's DATE()/TIME() write;
+// `%1f`..`%9f` fix the width instead (`%3f` for milliseconds), truncating
+// rather than rounding so the digits shown are digits stored. `%Z` is the zone's short
+// name — what the browser calls its own zone at that instant (EDT, GMT+1),
+// `UTC`, or the fixed offset as written — where `%z` is the numeric offset.
+const p2 = (n) => String(n).padStart(2, "0");
+const FMT_TOKEN_RE = /%([1-9])?(.)/g;
+
+let localZoneNames = null; // Intl formatter, built once: it is costly to make
+function zoneName(secs, tz) {
+  const off = tzOffset(tz);
+  if (off !== null) return off === 0 && (tz === undefined || tz === null || tz === "" || /^utc$/i.test(tz)) ? "UTC" : String(tz);
+  try {
+    localZoneNames ??= new Intl.DateTimeFormat(undefined, { timeZoneName: "short" });
+    const part = localZoneNames.formatToParts(new Date(secs * 1000)).find((x) => x.type === "timeZoneName");
+    if (part) return part.value;
+  } catch { /* no Intl zone names: fall through to the offset */ }
+  const z = -new Date(secs * 1000).getTimezoneOffset(), a = Math.abs(z);
+  return `${z < 0 ? "-" : "+"}${p2(Math.floor(a / 60))}:${p2(a % 60)}`;
+}
+
+/** Broken-down fields for `secs` in the zone `tz` names. */
+function fieldsOf(secs, tz) {
+  const off = tzOffset(tz);
+  const whole = Math.floor(secs);
+  // Microseconds, as the expression language keeps them: a double holding
+  // epoch seconds carries no more, so a wider `%f` pads with zeros.
+  let micro = Math.round((secs - whole) * 1e6);
+  let base = whole;
+  if (micro >= 1e6) { micro -= 1e6; base += 1; }
+  if (off === null) {
+    const d = new Date(base * 1000);
+    return { Y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate(), H: d.getHours(), M: d.getMinutes(), S: d.getSeconds(), micro, z: -d.getTimezoneOffset() };
+  }
+  const d = new Date((base + off * 60) * 1000);
+  return { Y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), H: d.getUTCHours(), M: d.getUTCMinutes(), S: d.getUTCSeconds(), micro, z: off };
+}
+
+/**
+ * Format seconds since the epoch with an strftime-style pattern (strptime's
+ * tokens plus `%Z`) in the given zone (`UTC` when omitted). Seconds since midnight (the "time"
+ * kind) format the same way under UTC, where only the clock tokens mean
+ * anything. `stored` is the fraction's digits as parsed, which a bare
+ * `%f` writes back verbatim. Throws on an unknown token.
+ */
+export function strftime(secs, fmt, tz, stored = null) {
+  const f = fieldsOf(secs, tz);
+  const digits = stored ?? String(f.micro).padStart(6, "0");
+  return String(fmt).replace(FMT_TOKEN_RE, (_, width, t) => {
+    if (width && t !== "f") throw new Error(`Bad time format token: %${width}${t}`);
+    switch (t) {
+      case "Y": return String(f.Y).padStart(4, "0");
+      case "m": return p2(f.m);
+      case "d": return p2(f.d);
+      case "H": return p2(f.H);
+      case "M": return p2(f.M);
+      case "S": return p2(f.S);
+      case "f": return width ? digits.padEnd(+width, "0").slice(0, +width) : digits;
+      case "z": { const a = Math.abs(f.z); return `${f.z < 0 ? "-" : "+"}${p2(Math.floor(a / 60))}${p2(a % 60)}`; }
+      case "Z": return zoneName(secs, tz);
+      case "%": return "%";
+      default: throw new Error(`Bad time format token: %${t}`);
+    }
+  });
+}
+
+const DEFAULT_FORMAT = { datetime: "%Y-%m-%d %H:%M:%S", date: "%Y-%m-%d", time: "%H:%M:%S" };
+
+/** Whether a column spec asks for its values to be rendered. */
+export const formatsTime = (spec) => !!spec && (spec.format != null || spec.zone != null);
+
+/**
+ * The text a cell shows under a spec naming `format` and/or `zone`; null
+ * when the value does not parse (the caller shows it as it is). `format`
+ * defaults to the parse pattern, else the kind's ISO-like form; `zone` to
+ * `tz`, so a format alone never shifts the clock. A bare date keeps its
+ * own zone whatever `zone` says — moving 2026-08-29 to the evening before
+ * would be a lie — and a clock time has no zone to move.
+ */
+export function formatTime(v, spec = {}) {
+  let secs, stored = null;
+  if (spec.parse && typeof v === "string" && v !== "") {
+    const r = strptimeFields(v, spec.parse, spec.tz);
+    if (!r) return null;
+    ({ secs, stored } = r);
+  } else {
+    secs = parseTime(v, spec);
+    if (secs === null) return null;
+  }
+  const kind = kindForSpec(spec) ?? (typeof v === "string" ? detectTimeKind(v) : "datetime") ?? "datetime";
+  const fmt = spec.format ?? spec.parse ?? DEFAULT_FORMAT[kind];
+  const tz = kind === "datetime" ? (spec.zone ?? spec.tz) : kind === "date" ? spec.tz : "UTC";
+  return strftime(secs, fmt, tz, stored);
 }
 
 const UNIT_DIV = { s: 1, ms: 1e3, us: 1e6, ns: 1e9 };
@@ -180,8 +291,6 @@ export function kindForSpec(spec = {}) {
 // whole unit the user typed: a date bound ends at the next midnight, 10:30
 // at 10:31, 10:30:15 at 10:30:16 (an epsilon subtracted from an epoch
 // value would vanish in double precision, so callers compare `< hi`).
-
-const p2 = (n) => String(n).padStart(2, "0");
 
 /**
  * Seconds for an input control value at one edge of a range; null when the
