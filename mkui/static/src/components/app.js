@@ -497,7 +497,12 @@ class MkuiApp extends HTMLElement {
   // else the config's.
   async _loadFrames(config) {
     if (this._layouts && await this._layouts.restoreLatest()) return;
+    // The same filter the workspace applies when it builds the startup
+    // frames itself: a window defined with `open = false` waits for
+    // `frame.show`, here too — an app with layouts or a login took this
+    // path and opened every window at startup.
     for (const f of config.frames ?? []) {
+      if (f.open === false) continue;
       this._workspace.addFrame(f);
     }
   }

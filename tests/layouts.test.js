@@ -890,6 +890,18 @@ test("a frame with open = false is defined but not opened: not at startup, not b
   assert.deepEqual(ws._frames.map(f => f.id), ["main"], "a reset closes it again");
 });
 
+test("the app's own startup path (layouts, or a login) keeps a closed frame closed too", async () => {
+  // With `[layouts]` or auth the app opens the startup frames itself, after
+  // the owner's latest layout was looked for, and 1.16.0 added every config
+  // frame there — an app with saved layouts saw its on-demand windows open at
+  // startup while one without did not.
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../mkui/static/src/components/app.js", import.meta.url), "utf8");
+  const body = src.slice(src.indexOf("async _loadFrames(config)"), src.indexOf("setTheme(name)"));
+  assert.match(body, /if \(f\.open === false\) continue;/);
+  assert.ok(body.indexOf("f.open === false") < body.indexOf("addFrame(f)"), "the skip precedes the add");
+});
+
 test("showFrame opens a defined window at its rect, wired as configured, its parked panes as they were closed", () => {
   const ws = makeWorkspace([
     { id: "main", ...rect, layout: tabs("a") },
