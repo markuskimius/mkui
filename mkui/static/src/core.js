@@ -4,7 +4,7 @@
 // The state store is intentionally tiny: it's a Proxy over a plain object,
 // supports dot-path get/set, and notifies subscribers per path.
 
-export const VERSION = "1.14.0";
+export const VERSION = "1.15.0";
 export function version() { return VERSION; }
 
 import { registerExprFunction, registerExprLibrary, registerExprType, expr } from "./lib/expressions.js";

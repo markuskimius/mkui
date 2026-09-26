@@ -14,13 +14,13 @@ function mockEl(tag) {
     tagName: (tag ?? "").toUpperCase(),
     className: "", title: "", disabled: false, hidden: false,
     dataset: {}, _ch: [], _ev: {}, _parent: null, _text: null,
-    style: { setProperty() {}, removeProperty() {} },
+    style: { _p: {}, setProperty(k, v) { this._p[k] = v; }, removeProperty(k) { delete this._p[k]; } },
     classList: {
       _s: new Set(),
       add(...cs) { for (const c of cs) this._s.add(c); },
       remove(...cs) { for (const c of cs) this._s.delete(c); },
       toggle(c, f) { f === undefined ? (this._s.has(c) ? this._s.delete(c) : this._s.add(c)) : f ? this._s.add(c) : this._s.delete(c); },
-      contains(c) { return this._s.has(c); },
+      contains(c) { return this._s.has(c) || String(el.className).split(" ").includes(c); },
     },
     append(...ns) { for (const n of ns) el.appendChild(n); },
     appendChild(n) {
@@ -34,7 +34,9 @@ function mockEl(tag) {
     addEventListener(e, fn) { (el._ev[e] ??= []).push(fn); },
     removeEventListener() {},
     dispatchEvent(ev) { for (const fn of el._ev[ev.type] ?? []) fn(ev); return true; },
-    getBoundingClientRect: () => el._rect ?? { top: 0, left: 0, width: 400, height: 500 },
+    // A box is where it was put (`_rect`), else where its parent is — so
+    // a hidden host hides everything in it — else a 400×500 default.
+    getBoundingClientRect: () => el._rect ?? el._parent?.getBoundingClientRect() ?? { top: 0, left: 0, width: 400, height: 500 },
     offsetWidth: 0,
     querySelector(sel) {
       const cls = sel.startsWith(".") ? sel.slice(1) : null;
@@ -220,7 +222,8 @@ async function makePane(opts = {}) {
   requests = [];
   clipboard = [];
   stub = null;
-  const host = mockEl("div");
+  const host = opts.host ?? mockEl("div");
+  if (opts.rect) host._rect = opts.rect;
   const paneEl = mockEl("mkui-pane");
   paneEl.dataset.id = "history";   // as the workspace stamps it
   const ws = makeWorkspace(opts);
@@ -733,6 +736,147 @@ test("a right-click on the divider starts nothing", async () => {
   assert.ok(!sp.classList.contains("dragging"));
   fireWindow("mousemove", { clientY: 100 });
   assert.equal(tableShare(host), "65.00%");
+});
+
+/* ── The panel's columns ──────────────────────────────────────────────── */
+
+const colsHead = (host) => find(host, "mkui-history-cols");
+const colTitles = (host) => colsHead(host)._ch.map((c) => c._ch.filter((n) => n.nodeType === 3).map((n) => n.textContent).join(""));
+const grips = (host) => findAll(host, "mkui-history-colgrip");
+const shares = (host) => ({ ...find(host, "mkui-history-panel").style._p });
+// Lay the head out as a browser would: the list 400 wide from x=0, the
+// name column 100, the gap 8, the arrow (or blame's provenance) 12 wide.
+function layOut(host, fixedWidth = 12) {
+  find(host, "mkui-history-fields")._rect = { left: 0, top: 0, width: 400, height: 100 };
+  const [c0, c1, c2, c3] = colsHead(host)._ch;
+  c0._rect = { left: 8, width: 92, right: 100 };
+  c1._rect = { left: 108, width: 140, right: 248 };
+  c2._rect = { left: 256, width: fixedWidth, right: 256 + fixedWidth };
+  if (c3) c3._rect = { left: 276, width: 116, right: 392 };
+}
+// Take hold at x0 and move to x1: the column moves by the travel, so
+// where on the grip the hold was taken does not matter.
+const drag = (grip, x0, x1) => {
+  grip._ev.mousedown[0]({ button: 0, clientX: x0, preventDefault() {}, stopPropagation() {} });
+  fireWindow("mousemove", { clientX: x1 });
+  fireWindow("mouseup", {});
+};
+
+test("the panel's lines sit under a head naming the columns, per view", async () => {
+  const { host, table } = await makePane({ rows: [liveRow()] });
+  assert.deepEqual(colTitles(host), ["Field", "v2", "", "v3"]);
+  assert.equal(find(host, "mkui-history-fields").dataset.view, "diff");
+  table().select([ORDER_CHAIN[0]]);
+  assert.deepEqual(colTitles(host), ["Field", "—", "", "v1"], "the first version has no before");
+  showBlame(host);
+  assert.deepEqual(colTitles(host), ["Field", "Value", "Last set"]);
+  assert.equal(find(host, "mkui-history-fields").dataset.view, "blame");
+  // The head is not one of the lines: copy does not pulse it.
+  click(copyBtn(host));
+  assert.ok(!colsHead(host).classList.contains("mkui-flash-copy"));
+  assert.ok(findAll(host, "mkui-history-blame").every((l) => l.classList.contains("mkui-flash-copy")));
+});
+
+// The mock lays every box out 400 wide: each column's content reads as
+// 400, so the fit caps all three at a third of the panel's 400.
+const FITTED = { "--mkui-hist-name": "133px", "--mkui-hist-mid": "133px", "--mkui-hist-last": "133px" };
+
+test("the columns are fixed from the first render: content width, capped at a third of the panel", async () => {
+  const { host, table } = await makePane({ rows: [liveRow()] });
+  assert.deepEqual(shares(host), FITTED);
+  const box = find(host, "mkui-history-fields");
+  assert.equal(box.style.gridTemplateColumns, "", "the content-sized layout was for the measure only");
+  // A fit is once: another record, another view keep the widths.
+  table().select([ORDER_CHAIN[0]]);
+  showBlame(host);
+  assert.deepEqual(shares(host), FITTED);
+});
+
+test("the grips drag every column, in pixels that stay put", async () => {
+  const { host } = await makePane({ rows: [liveRow()] });
+  const [g0, g1, g2] = grips(host);
+  assert.equal(grips(host).length, 3);
+  assert.ok(g1.classList.contains("mkui-history-colgrip-wide"), "the arrow column is the grip between before and after");
+  assert.ok(g2.classList.contains("mkui-history-colgrip-end"), "the last column's grip is on its own end");
+  assert.equal(g2._parent, colsHead(host)._ch[3]);
+  layOut(host);
+  drag(g0, 104, 154);                             // the name is 100 wide: +50
+  assert.deepEqual(shares(host), { ...FITTED, "--mkui-hist-name": "150px" });
+  drag(g1, 262, 314);                             // the value 140: +52, from mid-arrow
+  assert.deepEqual(shares(host), { ...FITTED, "--mkui-hist-name": "150px", "--mkui-hist-mid": "192px" });
+  drag(g2, 400, 450);                             // the after column is 116: +50
+  assert.equal(shares(host)["--mkui-hist-last"], "166px");
+  fireWindow("mousemove", { clientX: 10 });
+  assert.equal(shares(host)["--mkui-hist-mid"], "192px", "let go");
+  // Blame has the same three. The field column is the diff's; the value
+  // and provenance columns are its own, fitted afresh.
+  showBlame(host);
+  assert.equal(grips(host).length, 3);
+  assert.deepEqual(shares(host), { ...FITTED, "--mkui-hist-name": "150px" });
+  assert.equal(grips(host)[2]._parent, colsHead(host)._ch[2]);
+  layOut(host, 100);
+  drag(grips(host)[2], 360, 400);                 // the provenance column is 100: +40
+  assert.equal(shares(host)["--mkui-hist-last"], "140px");
+  // ...and back: the diff's are as they were.
+  click(views(host)[0]);
+  assert.deepEqual(shares(host), { ...FITTED, "--mkui-hist-name": "150px", "--mkui-hist-mid": "192px", "--mkui-hist-last": "166px" });
+});
+
+test("a column keeps a floor, and has no ceiling: the panel scrolls", async () => {
+  const { host } = await makePane({ rows: [liveRow()] });
+  layOut(host);
+  const [g0, g1, g2] = grips(host);
+  drag(g0, 104, -50);
+  assert.equal(shares(host)["--mkui-hist-name"], "64px", "56px plus the line's padding");
+  drag(g0, 104, 5000);
+  assert.equal(shares(host)["--mkui-hist-name"], "4996px");
+  drag(g1, 262, -100);
+  assert.equal(shares(host)["--mkui-hist-mid"], "56px");
+  drag(g2, 400, 0);
+  assert.equal(shares(host)["--mkui-hist-last"], "56px");
+});
+
+test("a double-click on a grip refits the column: its content, or a third of the panel", async () => {
+  const { host } = await makePane({ rows: [liveRow()] });
+  layOut(host);                                   // content: name 92, value 140, after 116
+  const [g0, g1, g2] = grips(host);
+  drag(g0, 104, 154);
+  drag(g1, 262, 314);
+  drag(g2, 400, 450);
+  const dbl = (g) => g._ev.dblclick[0]({ preventDefault() {}, stopPropagation() {} });
+  dbl(g0);
+  assert.equal(shares(host)["--mkui-hist-name"], "100px", "92 plus the line's padding");
+  dbl(g1);
+  assert.equal(shares(host)["--mkui-hist-mid"], "133px", "140 is more than a third of 400");
+  dbl(g2);
+  assert.equal(shares(host)["--mkui-hist-last"], "116px");
+});
+
+test("a panel with no width yet fits its columns at its first layout", async () => {
+  const saved = globalThis.ResizeObserver;
+  let cb = null;
+  globalThis.ResizeObserver = class { constructor(fn) { cb = fn; } observe() {} };
+  try {
+    const host0 = mockEl("div");
+    // Hidden: every box measures 0 wide until the pane shows.
+    const { host } = await makePane({ rows: [liveRow()] , host: host0, rect: { left: 0, top: 0, width: 0, height: 0 } });
+    assert.deepEqual(shares(host), {}, "nothing to measure against yet");
+    find(host, "mkui-history-panel")._rect = { left: 0, top: 0, width: 600, height: 300 };
+    cb();
+    assert.deepEqual(shares(host), { "--mkui-hist-name": "200px", "--mkui-hist-mid": "200px", "--mkui-hist-last": "200px" });
+  } finally {
+    globalThis.ResizeObserver = saved;
+  }
+});
+
+test("a right-click on a grip starts nothing", async () => {
+  const { host } = await makePane({ rows: [liveRow()] });
+  layOut(host);
+  const [g0] = grips(host);
+  g0._ev.mousedown[0]({ button: 2, clientX: 100, preventDefault() {}, stopPropagation() {} });
+  assert.ok(!g0.classList.contains("dragging"));
+  fireWindow("mousemove", { clientX: 150 });
+  assert.deepEqual(shares(host), FITTED);
 });
 
 /* ── Where the controls live ──────────────────────────────────────────── */

@@ -734,6 +734,36 @@ test("a folded dialog section hides its body; the head reads as a button", () =>
   assert.equal(declaration(".mkui-dialog-group-summary", "text-transform"), "none", "the pill is not shouted like the header");
 });
 
+// The history panel's lines are one grid — each line a subgrid of it, so
+// a column is one width down the list — with the tracks in pixels off
+// the panel's custom properties, a content-sized arrow (an `auto` track
+// would take the room left over), and a trailing filler so a line spans
+// the list whatever its columns add up to. The list is at least the
+// panel and grows past it, which is what the panel scrolls sideways for;
+// the head over it stays put, and its cells stretch so the empty arrow
+// cell still has a grip to hit. The last column's grip stays inside the
+// list's edge: past it, it would be scrollable overflow.
+test("the history panel's lines share one grid the head's grips size", () => {
+  const cols = declaration(".mkui-history-fields", "grid-template-columns");
+  assert.match(cols, /^var\(--mkui-hist-name, minmax\(80px, 25%\)\) var\(--mkui-hist-mid, 1fr\) max-content var\(--mkui-hist-last, 1fr\) minmax\(0, 1fr\)$/);
+  assert.match(declaration('.mkui-history-fields[data-view="blame"]', "grid-template-columns"),
+    /^var\(--mkui-hist-name, minmax\(80px, 25%\)\) var\(--mkui-hist-mid, 1fr\) var\(--mkui-hist-last, auto\) minmax\(0, 1fr\)$/);
+  assert.equal(declaration(".mkui-history-fields", "width"), "fit-content");
+  assert.equal(declaration(".mkui-history-fields", "min-width"), "100%");
+  const lines = rule(".mkui-history-cols, .mkui-history-field, .mkui-history-blame");
+  assert.match(lines, /grid-template-columns:\s*subgrid/);
+  assert.match(lines, /grid-column:\s*1 \/ -1/);
+  assert.equal(declaration(".mkui-history-cols", "position"), "sticky");
+  assert.equal(declaration(".mkui-history-cols", "align-items"), "stretch");
+  assert.equal(declaration(".mkui-history-col", "position"), "relative");
+  assert.doesNotMatch(rule(".mkui-history-col"), /(^|;)\s*overflow\s*:/, "a clipped cell would clip its grip");
+  assert.equal(declaration(".mkui-history-colgrip", "cursor"), "col-resize");
+  assert.equal(declaration(".mkui-history-colgrip-end", "right"), "-4px");
+  assert.equal(declaration(".mkui-history-colgrip-wide", "left"), "-8px");
+  assert.equal(declaration(".mkui-history-colgrip-wide", "right"), "-8px");
+  assert.equal(declaration(".mkui-history-diffhead", "position"), "sticky");
+});
+
 // The As of button is a toggle: pressed while its bar is up, in the same
 // accent border every toolbar toggle wears, so the state reads at a glance.
 // The bar's × borrows the find bar's button chrome rather than inventing one.

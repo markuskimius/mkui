@@ -171,6 +171,136 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     window.addEventListener("mouseup", up);
   });
 
+  // The panel's columns — the field's name, the value before (or at)
+  // the version, the value after (or what last set it) — are dragged at
+  // the grips in the head row over the lines, as a table's are. The
+  // lines are one grid (each line a subgrid of it), so a column is one
+  // width down the whole list. Widths are pixels — set on the panel
+  // itself, which outlives every render — and fixed from the first
+  // render: a column starts just wide enough for what it shows, capped
+  // at a third of the panel (`sizeColumns`), and stays put whatever the
+  // pane does, the panel scrolling sideways when they outgrow it. `null`
+  // is a column not yet fitted, which the next render (or the panel's
+  // first layout, if it was hidden) fits; a double-click on a grip
+  // refits it. The field column is the same in both views and has one
+  // width; the other two hold different things in Diff (before, after)
+  // and Blame (value, provenance), so each view keeps its own.
+  const WIDTH_VARS = ["--mkui-hist-name", "--mkui-hist-mid", "--mkui-hist-last"];
+  const MIN_COL = 56, LINE_PAD = 8, FIT_SHARE = 1 / 3;
+  const widths = { name: null, diff: [null, null], blame: [null, null] };
+  const getWidth = (i) => (i === 0 ? widths.name : widths[view][i - 1]);
+  const setWidth = (i, px) => { if (i === 0) widths.name = px; else widths[view][i - 1] = px; };
+  function applyColWidths() {
+    WIDTH_VARS.forEach((v, i) => {
+      const px = getWidth(i);
+      if (px == null) panel.style.removeProperty(v);
+      else panel.style.setProperty(v, `${Math.round(px)}px`);
+    });
+  }
+  // Which of the head's cells a width index is: the last is the last
+  // column, whichever that is in the view (the diff's fourth, blame's
+  // third); a track is its cell, plus the line's padding for the first
+  // (the list's last track is an empty filler, so the last column's cell
+  // is not inset).
+  const cellOf = (i, cells) => (i === WIDTH_VARS.length - 1 ? cells.length - 1 : i);
+  const padOf = (col) => (col === 0 ? LINE_PAD : 0);
+  const unfitted = () => WIDTH_VARS.some((_, i) => getWidth(i) == null);
+
+  // Fit the unfitted columns: lay the list out content-sized for a
+  // moment, read each track, and fix it at that or a third of the
+  // panel, whichever is less. A panel with no width yet (a hidden tab)
+  // is left for its first layout.
+  function sizeColumns(box, cells) {
+    const width = unfitted() ? panel.getBoundingClientRect?.()?.width : 0;
+    if (width) {
+      const cap = Math.floor(width * FIT_SHARE);
+      box.style.gridTemplateColumns = cells.map(() => "max-content").join(" ");
+      WIDTH_VARS.forEach((_, i) => {
+        if (getWidth(i) != null) return;
+        const col = cellOf(i, cells);
+        const pad = padOf(col);
+        const track = Math.ceil(cells[col].getBoundingClientRect().width) + pad;
+        setWidth(i, Math.max(MIN_COL + pad, Math.min(cap, track)));
+      });
+      box.style.gridTemplateColumns = "";
+    }
+    applyColWidths();                  // this view's, fitted or not
+  }
+  const headCells = () => {
+    const box = panel.querySelector?.(".mkui-history-fields");
+    const head = box?.querySelector(".mkui-history-cols");
+    return head ? [box, [...head.children]] : null;
+  };
+  if (typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(() => {
+      const found = unfitted() && headCells();
+      if (found) sizeColumns(...found);
+    }).observe(panel);
+  }
+
+  // The head over the lines: what each column is, and a grip per
+  // column — on the left edge of the cell after it, or, for the last,
+  // its own right edge. The diff's third column is the arrow: an empty
+  // cell, so its whole column is the grip between before and after.
+  function colsHead(box, titles) {
+    const head = el("mkui-history-cols");
+    const cells = titles.map((t) => {
+      const c = el("mkui-history-col");
+      c.appendChild(document.createTextNode(t));
+      c.title = t;
+      head.appendChild(c);
+      return c;
+    });
+    const last = cells.length - 1;
+    for (let i = 0; i < WIDTH_VARS.length; i++) {
+      const grip = el("mkui-history-colgrip");
+      const end = i === WIDTH_VARS.length - 1;     // the last column's own
+      const at = end ? last : i + 1;               // the cell that carries it
+      if (end) grip.classList.add("mkui-history-colgrip-end");
+      else if (titles[at] === "") grip.classList.add("mkui-history-colgrip-wide");
+      grip.title = "Drag to resize; double-click to reset";
+      grip.addEventListener("mousedown", (ev) => {
+        if (ev.button !== 0) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        dragColumn(i, grip, box, cells, ev.clientX);
+      });
+      grip.addEventListener("dblclick", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        setWidth(i, null);
+        sizeColumns(box, cells);
+      });
+      cells[at].appendChild(grip);
+    }
+    box.appendChild(head);
+    return head;
+  }
+
+  // The drag moves the column by the pointer's travel, so wherever on
+  // the grip it took hold, nothing jumps; there is no ceiling — the
+  // panel scrolls — only a floor.
+  function dragColumn(i, grip, box, cells, x0) {
+    const col = cellOf(i, cells);
+    const cell = cells[col].getBoundingClientRect?.();
+    if (!cell?.width) return;
+    const pad = padOf(col);
+    const start = cell.width + pad;
+    const lo = MIN_COL + pad;
+    grip.classList.add("dragging");
+    const move = (e) => {
+      setWidth(i, Math.max(lo, start + e.clientX - x0));
+      applyColWidths();
+    };
+    const up = () => {
+      grip.classList.remove("dragging");
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }
+
   /* ── State ────────────────────────────────────────────────────────── */
 
   let record = null;      // { key, row, version, of } — the record on show
@@ -544,6 +674,8 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     panelHead(`as at v${at}`, `${known.length} of ${plural(cols.length, "field")} set`);
 
     const fields = el("mkui-history-fields");
+    fields.dataset.view = "blame";
+    const head = colsHead(fields, ["Field", "Value", "Last set"]);
     for (const col of cols) {
       const b = who[col];
       const line = el("mkui-history-blame");
@@ -572,6 +704,7 @@ registerPaneType("mkio-history", async (spec, app, host) => {
       fields.appendChild(line);
     }
     panel.appendChild(fields);
+    sizeColumns(fields, [...head.children]);
   }
 
   function renderDiff() {
@@ -586,6 +719,8 @@ registerPaneType("mkio-history", async (spec, app, host) => {
               changed.length ? plural(changed.length, "change") : "no changes");
 
     const fields = el("mkui-history-fields");
+    fields.dataset.view = "diff";
+    const head = colsHead(fields, ["Field", fromV == null ? "—" : `v${fromV}`, "", `v${toV}`]);
     for (const d of rows) {
       if (d.kind === "same" && !showUnchanged) continue;
       const line = el(`mkui-history-field mkui-history-${d.kind}`);
@@ -601,6 +736,7 @@ registerPaneType("mkio-history", async (spec, app, host) => {
       fields.appendChild(line);
     }
     panel.appendChild(fields);
+    sizeColumns(fields, [...head.children]);
   }
 
   // One side of a field's change, rendered as the table would render it —
@@ -703,7 +839,7 @@ registerPaneType("mkio-history", async (spec, app, host) => {
   // The lines the grid was built from — a diff's fields, or blame's.
   function panelLines() {
     const box = panel.querySelector?.(".mkui-history-fields");
-    return box ? [...(box.children ?? [])] : [];
+    return box ? [...(box.children ?? [])].filter((n) => !n.classList.contains("mkui-history-cols")) : [];
   }
 
   /* ── Following the record ─────────────────────────────────────────── */

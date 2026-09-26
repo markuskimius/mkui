@@ -2108,6 +2108,8 @@ mkui-app[modal] mkui-statusbar { pointer-events: none; opacity: 0.6; }
 }
 
 .mkui-history-diffhead {
+  position: sticky;        /* in view while the list scrolls sideways */
+  left: 0;
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -2165,16 +2167,85 @@ mkui-app[modal] mkui-statusbar { pointer-events: none; opacity: 0.6; }
 .mkui-history-toggle.active:hover { background: color-mix(in srgb, var(--mkui-accent) 25%, var(--mkui-bg-alt)); }
 
 /* A field's change: name, before, after. Unchanged fields are hidden
-   unless asked for, so what moved is what shows. */
-.mkui-history-fields { padding: 4px 0; }
-.mkui-history-field {
+   unless asked for, so what moved is what shows. The lines are one grid
+   — each line a subgrid of it, so a column is one width down the list
+   and the content-sized ones (the arrow, blame's provenance) agree line
+   to line — whose tracks are pixels on `--mkui-hist-name` / `-mid` /
+   `-last`, fitted at the first render (the pane's `sizeColumns`) and
+   dragged at the head's grips; the fallbacks here show only until that
+   fit. A width holds whatever the pane does: the list is as wide as its
+   columns, at least the panel, and the panel scrolls sideways when they
+   outgrow it; the arrow is `max-content`, not `auto`, or it would take
+   the room left over — a last, empty track does, so each line (and the
+   head's background) spans the list whatever its columns add up to. */
+.mkui-history-fields {
   display: grid;
-  grid-template-columns: minmax(80px, 25%) 1fr auto 1fr;
-  gap: 8px;
+  grid-template-columns: var(--mkui-hist-name, minmax(80px, 25%)) var(--mkui-hist-mid, 1fr) max-content var(--mkui-hist-last, 1fr) minmax(0, 1fr);
+  column-gap: 8px;
+  padding: 4px 0;
+  width: fit-content;
+  min-width: 100%;
+}
+.mkui-history-fields[data-view="blame"] {
+  grid-template-columns: var(--mkui-hist-name, minmax(80px, 25%)) var(--mkui-hist-mid, 1fr) var(--mkui-hist-last, auto) minmax(0, 1fr);
+}
+.mkui-history-cols, .mkui-history-field, .mkui-history-blame {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: baseline;
   padding: 3px 8px;
 }
 .mkui-history-field:hover { background: var(--mkui-bg-hover); }
+/* The head over the lines names the columns and carries the grips; it
+   stays put as the list scrolls, the way a table's header does. */
+.mkui-history-cols {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  align-items: stretch;    /* an empty cell (the arrow's) still has height */
+  background: var(--mkui-bg-alt);
+  color: var(--mkui-fg-mute);
+  font-size: 11px;
+  border-bottom: 1px solid var(--mkui-border);
+}
+.mkui-history-col {
+  position: relative;      /* anchors the grip on its left edge — so no
+                              `overflow: hidden` here, or it clips the grip */
+  min-width: 0;
+  white-space: nowrap;
+}
+/* The grip sits centred in the gap before its cell, as the table's
+   `.mkui-col-resizer` does on a divider: the column it resizes is the
+   one to its left — or, at the end of the last cell, that cell's. */
+.mkui-history-colgrip {
+  position: absolute;
+  top: 0; bottom: 0;
+  left: -7.5px;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 1;
+}
+.mkui-history-colgrip:hover, .mkui-history-colgrip.dragging {
+  background: linear-gradient(to right,
+    transparent 2.5px, var(--mkui-accent) 2.5px 4.5px, transparent 4.5px);
+}
+/* The last column's grip sits on that column's own end: inside the
+   list's edge (hanging past it would be scrollable overflow, and a
+   sideways scrollbar for nothing) and clear of the frame's east resize
+   handle, which owns the pane's outer 3px when the list fills it. */
+.mkui-history-colgrip-end { left: auto; right: -4px; }
+/* Between before and after the divider is the arrow column itself: the
+   grip covers it and both gaps, the line drawn down its middle. */
+.mkui-history-colgrip-wide {
+  left: -8px;
+  right: -8px;
+  width: auto;
+}
+.mkui-history-colgrip-wide:hover, .mkui-history-colgrip-wide.dragging {
+  background: linear-gradient(to right,
+    transparent calc(50% - 1px), var(--mkui-accent) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px));
+}
 .mkui-history-fname { color: var(--mkui-fg-mute); overflow: hidden; text-overflow: ellipsis; }
 .mkui-history-from, .mkui-history-to { overflow-wrap: anywhere; }
 .mkui-history-from { opacity: 0.75; }
@@ -2212,14 +2283,7 @@ mkui-app[modal] mkui-statusbar { pointer-events: none; opacity: 0.6; }
 
 /* A blame line: the field, its value at the version on show, and the
    version that last set it — clicking goes there. */
-.mkui-history-blame {
-  display: grid;
-  grid-template-columns: minmax(80px, 25%) 1fr auto;
-  gap: 8px;
-  align-items: baseline;
-  padding: 3px 8px;
-  cursor: pointer;
-}
+.mkui-history-blame { cursor: pointer; }
 .mkui-history-blame:hover { background: var(--mkui-bg-hover); }
 .mkui-history-unset { cursor: default; opacity: 0.6; }
 .mkui-history-bvalue { overflow-wrap: anywhere; }
