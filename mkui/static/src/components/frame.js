@@ -74,13 +74,20 @@ class MkuiFrame extends HTMLElement {
       this.appendChild(h);
     }
 
-    // Raise to the top of z-order on any interaction inside the frame, and
-    // mark whichever tab group sits under the click as the keyboard-focus
-    // target. Capture phase so inner stopPropagation can't hide the click.
+    // Raise to the top of z-order on any interaction inside the frame (under
+    // sloppy focus: focus it), and mark whichever tab group sits under the
+    // click as the keyboard-focus target. Capture phase so inner
+    // stopPropagation can't hide the click.
     this.addEventListener("mousedown", (ev) => {
-      this._workspace?._raiseFrame(this);
+      this._workspace?._pressFrame(this);
       if (!ev.target.closest(".mkui-frame-btn"))
         this._activateTabGroupFromEvent(ev);
+    }, true);
+    // Sloppy focus's window clicks — raise, lower, the title bar's still
+    // click — ahead of everything in the frame: a pointerdown, since a tab
+    // cancels its press's mousedown.
+    this.addEventListener("pointerdown", (ev) => {
+      this._workspace?._framePointerDown?.(ev, this);
     }, true);
 
     // Re-render the internal layout whenever the body resizes (either from
@@ -330,7 +337,7 @@ class MkuiFrame extends HTMLElement {
   // the tab group may re-render the chrome, so the live tab is looked up
   // afterwards rather than captured from the event.
   _beginTabRename(paneId, tabGroup) {
-    this._workspace?._raiseFrame(this);
+    this._workspace?._pressFrame(this);
     this._setActiveTabGroup(tabGroup);
     let bar = null;
     for (const child of this._bodyEl.children) {

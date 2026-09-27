@@ -30,7 +30,7 @@ const OUTLINE_NAMES = [
   "columns", "chevron-up", "chevron-down", "search", "regex", "case-sensitive",
   "link", "radio", "ear", "clock", "check", "undo", "redo", "copy",
 ];
-const FILLED_NAMES = ["caret-up", "caret-down", "dot", "filter"];
+const FILLED_NAMES = ["caret-up", "caret-down", "dot", "filter", "pointer"];
 
 test("unknown icon name throws", () => {
   assert.throws(() => icon("no-such-icon"), /unknown icon: no-such-icon/);

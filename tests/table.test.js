@@ -3181,11 +3181,11 @@ function clickHeader(th, { shift = false, ctrl = false, meta = false, alt = fals
                     target: { closest: () => null } });
 }
 
-// `mod`: the ctrl/cmd modifier that opens the advanced dropdown (`meta`
-// for the cmd form); `alt` is what it used to be, kept so a test can show
-// alt/option no longer does it.
-function clickFilterBtn(th, { mod = false, meta = false, alt = false } = {}) {
-  th.querySelector(".mkui-filter-btn")._ev.click[0]({ stopPropagation() {}, ctrlKey: mod, metaKey: meta, altKey: alt });
+// `mod`: the shift modifier that opens the advanced dropdown; `ctrl`,
+// `meta` and `alt` are what it used to be, kept so a test can show they
+// no longer do it.
+function clickFilterBtn(th, { mod = false, ctrl = false, meta = false, alt = false } = {}) {
+  th.querySelector(".mkui-filter-btn")._ev.click[0]({ stopPropagation() {}, shiftKey: mod, ctrlKey: ctrl, metaKey: meta, altKey: alt });
 }
 
 // Describes what the header cell's single icon slot currently shows.
@@ -6677,13 +6677,13 @@ test("tree: filters judge roots, children, or all — a hidden row hides its sub
   assert.deepEqual(api.get(), { qty: { type: "number", from: 2, to: null, empty: false, scope: "children" } });
 });
 
-// The scope row is the advanced view: ctrl/cmd-click the filter button
+// The scope row is the advanced view: shift-click the filter button
 // (or open a filter already scoped off the top level) to see it.
 function scopeRow(dd) {
   const scopes = dd._ch.find(c => String(c.className).includes("mkui-filter-scopes")) ?? null;
   return { scopes, btn: (s) => scopes?._ch.find(b => b.dataset?.scope === s) ?? null };
 }
-function openDropdownAdvanced(host, col, mods = { ctrlKey: true }) {
+function openDropdownAdvanced(host, col, mods = { shiftKey: true }) {
   const th = getThs(host).find(t => t.dataset.col === col);
   const click = () => th.querySelector(".mkui-filter-btn")._ev.click[0]({ stopPropagation() {}, ...mods });
   const open = () => host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).at(-1);
@@ -6693,14 +6693,14 @@ function openDropdownAdvanced(host, col, mods = { ctrlKey: true }) {
 }
 const currentDropdown = (host) => host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).at(-1);
 
-test("tree: a filter chip's ctrl/cmd-click opens the advanced dropdown too; alt/option does not", async () => {
+test("tree: a filter chip's shift-click opens the advanced dropdown too; ctrl/cmd and alt/option do not", async () => {
   const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
   const { dd } = openDropdown(host, "qty");
   const cb1 = dd._ch.find(c => c.className === "mkui-filter-list")._ch.map(l => l._ch[0]).find(c => c.dataset.val === "1");
   cb1.checked = false;
   cb1._ev.change[0]();
   clickFilterBtn(getThs(host).find(t => t.dataset.col === "qty")); // close
-  for (const [mods, want] of [[{ altKey: true }, false], [{ ctrlKey: true }, true], [{ metaKey: true }, true], [{}, false]]) {
+  for (const [mods, want] of [[{ altKey: true }, false], [{ ctrlKey: true }, false], [{ metaKey: true }, false], [{ shiftKey: true }, true], [{}, false]]) {
     chipStrip(host).open("qty", mods);
     assert.equal(scopeRow(currentDropdown(host)).scopes != null, want, JSON.stringify(mods));
     clickFilterBtn(getThs(host).find(t => t.dataset.col === "qty")); // close again
@@ -6713,7 +6713,7 @@ function reopenDropdown(host, col) {
   return openDropdown(host, col);
 }
 
-test("tree: a plain filter dropdown filters the top level; ctrl/cmd-click shows the scope row, alt/option no longer does", async () => {
+test("tree: a plain filter dropdown filters the top level; shift-click shows the scope row, ctrl/cmd no longer does", async () => {
   const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
   let { dd } = openDropdown(host, "qty");
   assert.equal(scopeRow(dd).scopes, null, "no scope row on a plain open");
@@ -6725,12 +6725,14 @@ test("tree: a plain filter dropdown filters the top level; ctrl/cmd-click shows 
   assert.equal(host._paneEl._filters.get().qty.scope, "roots");
   assert.equal(filterTitle(host, "qty"), "All but 1 values");
   dd = openDropdownAdvanced(host, "qty", { altKey: true });
-  assert.equal(scopeRow(dd).scopes, null, "alt/option-click is a plain open now");
+  assert.equal(scopeRow(dd).scopes, null, "alt/option-click is a plain open");
   dd = openDropdownAdvanced(host, "qty", { metaKey: true });
-  assert.ok(scopeRow(dd).scopes, "cmd-click: the scope row shows");
+  assert.equal(scopeRow(dd).scopes, null, "cmd-click is a plain open now");
+  dd = openDropdownAdvanced(host, "qty", { ctrlKey: true });
+  assert.equal(scopeRow(dd).scopes, null, "ctrl-click is a plain open now");
   dd = openDropdownAdvanced(host, "qty");
   let row = scopeRow(dd);
-  assert.ok(row.scopes, "ctrl-click: the scope row shows");
+  assert.ok(row.scopes, "shift-click: the scope row shows");
   assert.ok(row.btn("roots").classList.contains("active"));
   assert.ok(row.btn("roots").classList.contains("mkui-filter-scope-set"), "the top tab is marked: it holds a filter");
   assert.ok(!row.btn("children").classList.contains("mkui-filter-scope-set"));
@@ -7017,7 +7019,7 @@ test("tree: a flat table ignores filter scope and has no tree hook or scope row"
   assert.deepEqual(host._paneEl._filters.get(), { status: { exclude: ["closed"] } }, "and isn't echoed back");
   assert.equal(host._paneEl._tree, undefined);
   const dd = openDropdownAdvanced(host, "status");
-  assert.equal(scopeRow(dd).scopes, null, "alt-click on a flat table is a plain open");
+  assert.equal(scopeRow(dd).scopes, null, "shift-click on a flat table is a plain open");
 });
 
 test("tree: the caret column keeps its caret through display templates and live updates", async () => {
@@ -8101,7 +8103,7 @@ test("links: linked columns wear a header mark, dimmed while the direction is of
   assert.equal(linkMark(host, "id"), null, "gone with the link");
 });
 
-test("links: the header dropdown's ops appear on alt/option-click only, name a column's links, and take a name inline", async () => {
+test("links: the header dropdown's ops appear on shift-click only, name a column's links, and take a name inline", async () => {
   const hub = new LinkHub();
   hub.publish("elsewhere", { order: ["1"] });
   const { host } = await createTable({ columns: LINK_COLS, link: { broadcast: { order: "id" } } }, { hub, id: "t" });

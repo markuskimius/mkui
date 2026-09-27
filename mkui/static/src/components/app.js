@@ -15,6 +15,7 @@ import { historyCapabilities } from "../lib/history.js";
 import { judgeServer, incompatibleMap } from "../lib/verify.js";
 import { phaseOf, offlineOptions, Outage, offlineTitle, restoreIconHref, OFFLINE_FAVICON } from "../lib/connection.js";
 import { icon } from "../lib/icons.js";
+import { installWm } from "../lib/wm.js";
 import "./menubar.js";
 import "./statusbar.js";
 import "./workspace.js";
@@ -167,6 +168,9 @@ class MkuiApp extends HTMLElement {
       st.set("auth.role", "");
       this._app.registerAction("auth.logout", () => location.reload());
     }
+
+    // Sloppy focus: its preferences and the `focus.*` actions (lib/wm.js).
+    installWm(this._app, ws, store, { auth: hasAuth });
 
     if (config.mkio?.url) {
       let verifyGen = 0;

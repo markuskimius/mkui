@@ -261,7 +261,7 @@ test("frame raise fires on any button (matches OS convention)", () => {
   const captured = {};
   frame.addEventListener = (name, fn) => { captured[name] = fn; };
   frame._build();
-  frame._workspace = { _raiseFrame: () => raised.push(1) };
+  frame._workspace = { _pressFrame: () => raised.push(1) };
   frame._activateTabGroupFromEvent = () => {};
   for (const button of [0, 1, 2])
     captured.mousedown({ button, target: { closest: () => null } });

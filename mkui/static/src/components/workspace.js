@@ -17,6 +17,8 @@ import { getPaneType, getWidget, getPaneTypeKeys } from "../core.js";
 import { clampToDock, rectToFrac, fracToRect, dropZoneFor, previewRect, snapMove, snapResize, cascadePosition } from "../layout/drag.js";
 import { layout, normalize, insertPane, removePane, findPane, firstTabGroup, listPanes } from "../layout/tree.js";
 import { sanitizeLayout, pruneTree, LAYOUT_VERSION } from "../lib/layouts.js";
+import { wmKey, takesFromField, Mover, realMove, clickOp, plainPress, stillClick, lowerOrder, isApple, WINDOW_CLICKS } from "../lib/wm.js";
+import { icon } from "../lib/icons.js";
 
 // Write a frame rect to an element's style in whole pixels. Frame geometry
 // is fractional (frac × workspace size, pointer deltas), but the frame's
@@ -33,6 +35,12 @@ function applyFrameRect(el, r) {
     width: (Math.round(r.x + r.w) - x) + "px",
     height: (Math.round(r.y + r.h) - y) + "px",
   });
+}
+
+// Where typing goes: keys it takes (Alt/Option+letters, a word jump on
+// alt+arrows) are the field's, not a shortcut's.
+function isEditable(t) {
+  return !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
 }
 
 // The keys any pane may carry beside its type's own, and the ones the
@@ -57,6 +65,19 @@ class MkuiWorkspace extends HTMLElement {
     this._closed = new Map();
     this._dropOverlay = null;
     this._frameSeq = 0;
+    // Sloppy focus (see Window focus): focus follows the pointer into a
+    // frame and stays when it leaves for empty space; only a still click
+    // on the title bar, a `windowClick`-modified click or a key raises.
+    this._sloppy = false;
+    this._windowClick = "alt";
+    // The effective pointer, { x, y }: the real one's last position, or
+    // the virtual cursor's while it shows (`_vcOn`).
+    this._pointer = null;
+    this._lastReal = null;          // { screenX, screenY }: the real pointer, for `realMove`
+    this._vc = null;                // the virtual cursor's element
+    this._vcOn = false;
+    this._mover = new Mover();      // held Alt+H/J/K/L / arrows
+    this._moverRaf = 0;
   }
 
   connectedCallback() {
@@ -71,11 +92,28 @@ class MkuiWorkspace extends HTMLElement {
     this._ro.observe(this);
     window.addEventListener("resize", this._onWindowResize);
     window.addEventListener("keydown", this._onKeyDown);
+    // Capture: a window key must beat the pane's own (a table's
+    // alt+arrow would move its cursor too).
+    window.addEventListener("keydown", this._onWmKey, true);
+    window.addEventListener("keyup", this._onWmKeyUp, true);
+    window.addEventListener("blur", this._onWmBlur);
+    document.addEventListener("visibilitychange", this._onWmBlur);
+    for (const t of ["pointermove", "pointerdown", "wheel"]) window.addEventListener(t, this._onTrackPointer, { capture: true, passive: true });
+    this.addEventListener("pointermove", this._onPointerMove);
+    this.addEventListener("focusin", this._onFocusIn);
   }
   disconnectedCallback() {
     this._ro?.disconnect();
     window.removeEventListener("resize", this._onWindowResize);
     window.removeEventListener("keydown", this._onKeyDown);
+    window.removeEventListener("keydown", this._onWmKey, true);
+    window.removeEventListener("keyup", this._onWmKeyUp, true);
+    window.removeEventListener("blur", this._onWmBlur);
+    document.removeEventListener("visibilitychange", this._onWmBlur);
+    for (const t of ["pointermove", "pointerdown", "wheel"]) window.removeEventListener(t, this._onTrackPointer, true);
+    this.removeEventListener("pointermove", this._onPointerMove);
+    this._hideVCursor();
+    this.removeEventListener("focusin", this._onFocusIn);
   }
   _onWindowResize = () => this._layoutFrames();
 
@@ -609,6 +647,7 @@ class MkuiWorkspace extends HTMLElement {
       root?.removeAttribute("modal");
       return;
     }
+    this._hideVCursor(); // a modal answers the real mouse
     if (!this._scrim) {
       this._scrim = document.createElement("div");
       this._scrim.className = "mkui-scrim";
@@ -647,6 +686,273 @@ class MkuiWorkspace extends HTMLElement {
       this._frames.splice(insertAt, 0, spec);
     }
     this._applyZOrder();
+  }
+
+  // Sloppy focus ──────────────────────────────────────────────────────────
+  //
+  // With it on, focus follows the pointer: entering a frame focuses it —
+  // `[data-focused]`, the hotkeys, the Edit menu — without raising it, and
+  // leaving for empty workspace, the menubar or the statusbar keeps it. A
+  // held button, an open menu or a modal holds focus still. A frame is
+  // raised by a still click on its title bar (pressed and released on the
+  // same spot: a drag moves it where it is), a still `windowClick`-
+  // modified click (shift added lowers; dragged, it moves the frame from
+  // anywhere in it) or Alt/Option+N (+P lowers). Alt/Option+H/J/K/L or
+  // the arrows drive a virtual cursor that takes the pointer's part until
+  // the real mouse moves; with shift they move the focused frame.
+  // lib/wm.js decides which, and how fast a held key goes.
+
+  setSloppyFocus(on) {
+    this._sloppy = !!on;
+    if (!this._sloppy) this._hideVCursor();
+    const st = this._app?.state;
+    if (st) st.set("focus.sloppy", this._sloppy);
+  }
+  sloppyFocus() { return this._sloppy; }
+
+  // `"alt"` or `"ctrl+alt"`: the modifier of the raise click; anything
+  // else warns and is `"alt"`.
+  setWindowClick(mod) {
+    if (!WINDOW_CLICKS.includes(mod)) {
+      console.warn(`[mkui] bad windowClick ${JSON.stringify(mod)}: want ${WINDOW_CLICKS.map((m) => `"${m}"`).join(" or ")}`);
+      mod = "alt";
+    }
+    this._windowClick = mod;
+    const st = this._app?.state;
+    if (st) st.set("focus.windowClick", mod);
+  }
+  windowClick() { return this._windowClick; }
+
+  // A press anywhere in a frame (frame.js, and the tab gestures that
+  // cancel the mousedown): it raises, or under sloppy focus only focuses.
+  _pressFrame(frameEl) {
+    if (this._sloppy) this._focusFrame(frameEl.getAttribute("data-id"));
+    else this._raiseFrame(frameEl);
+  }
+
+  // Focus without raising. The keyboard follows: the element this frame
+  // last had focused gets it back — unless a field is being typed in,
+  // which keeps it — else the old frame's element lets go, so its keys
+  // don't reach a frame the pointer has left.
+  _focusFrame(id) {
+    if (id == null || id === this._focusedId || !this._frameEls.has(id)) return;
+    this._focusedId = id;
+    this._applyZOrder();
+    const frameEl = this._frameEls.get(id);
+    const ae = typeof document !== "undefined" ? document.activeElement : null;
+    if (isEditable(ae) || (ae && frameEl.contains?.(ae))) return;
+    const last = frameEl._lastFocus;
+    if (last?.isConnected && frameEl.contains?.(last)) last.focus?.({ preventScroll: true });
+    else if (ae?.closest?.("mkui-frame")) ae.blur?.();
+  }
+
+  _onFocusIn = (e) => {
+    const f = e.target?.closest?.("mkui-frame");
+    if (f) f._lastFocus = e.target;
+  };
+
+  // An open menu or a modal holds the focus where it is.
+  _focusHeld() {
+    return !!this._app?._element?._menubar?._rootAnchor || this._frames.some((f) => f.modal);
+  }
+
+  // The real pointer, anywhere on the page (window, capture): where it
+  // is — and, while the virtual cursor shows, the real mouse at work
+  // (lib/wm.js `realMove`) takes the pointer's part back.
+  _onTrackPointer = (e) => {
+    if (this._vcOn) {
+      if (!realMove(e, this._lastReal)) return;
+      this._hideVCursor();
+    }
+    if (e.screenX != null) this._lastReal = { screenX: e.screenX, screenY: e.screenY };
+    if (e.clientX != null) this._pointer = { x: e.clientX, y: e.clientY };
+  };
+
+  _onPointerMove = (e) => {
+    if (!this._sloppy || e.buttons || this._vcOn || this._focusHeld()) return;
+    const frameEl = e.target?.closest?.("mkui-frame");
+    if (frameEl && frameEl.parentElement === this) this._focusFrame(frameEl.getAttribute("data-id"));
+  };
+
+  // Whatever is under the effective pointer has the focus: after a
+  // lower, and as the virtual cursor moves.
+  _refocusUnderPointer() {
+    if (!this._pointer || this._focusHeld() || typeof document === "undefined" || !document.elementFromPoint) return;
+    const hit = document.elementFromPoint(this._pointer.x, this._pointer.y)?.closest?.("mkui-frame");
+    if (hit && hit.parentElement === this) this._focusFrame(hit.getAttribute("data-id"));
+  }
+
+  _now() { return typeof performance !== "undefined" ? performance.now() : Date.now(); }
+
+  // The virtual cursor: shown at the effective pointer (else the focused
+  // frame's middle), the real one hidden page-wide (`data-mkui-vcursor`
+  // on the root: CSS) until `_onTrackPointer` hears the real mouse.
+  _showVCursor() {
+    if (this._vcOn || typeof document === "undefined") return;
+    if (!this._vc) {
+      this._vc = document.createElement("div");
+      this._vc.className = "mkui-vcursor";
+      this._vc.setAttribute("aria-hidden", "true");
+      this._vc.appendChild(icon("pointer"));
+    }
+    (this.closest?.("mkui-app") ?? document.body)?.appendChild(this._vc);
+    this._vcOn = true;
+    document.documentElement?.setAttribute("data-mkui-vcursor", "");
+    let at = this._pointer;
+    if (!at) {
+      const r = (this._frameEls.get(this._focusedId) ?? this).getBoundingClientRect?.();
+      at = r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: 0, y: 0 };
+    }
+    this._placeVCursor(at.x, at.y);
+  }
+
+  _hideVCursor() {
+    this._mover.clear();
+    if (!this._vcOn) return;
+    this._vcOn = false;
+    this._vc?.remove();
+    if (typeof document !== "undefined") document.documentElement?.removeAttribute("data-mkui-vcursor");
+  }
+
+  // Kept on the page; the effective pointer follows.
+  _placeVCursor(x, y) {
+    const w = typeof window !== "undefined" && window.innerWidth ? window.innerWidth : Infinity;
+    const h = typeof window !== "undefined" && window.innerHeight ? window.innerHeight : Infinity;
+    x = Math.max(0, Math.min(w - 1, x));
+    y = Math.max(0, Math.min(h - 1, y));
+    this._pointer = { x, y };
+    this._vc.style.transform = `translate(${x}px, ${y}px)`;
+  }
+
+  _moveVCursor(dx, dy) {
+    this._showVCursor();
+    this._placeVCursor(this._pointer.x + dx, this._pointer.y + dy);
+    this._refocusUnderPointer();
+  }
+
+  // The frame's title bar: its top-edge tab bars — tabs, the drag strip,
+  // a dialog's title — but not the buttons, scroll arrows or a rename.
+  _inTitlebar(target, frameEl) {
+    const bar = target?.closest?.(".mkui-tabbar-top");
+    if (!bar || !frameEl.contains?.(bar)) return false;
+    return !target.closest(".mkui-frame-actions, .mkui-tab-scroll, .mkui-tab-rename");
+  }
+
+  // frame.js's capture-phase pointerdown, before anything in the frame
+  // sees the press. Sloppy focus only.
+  _framePointerDown(ev, frameEl) {
+    if (!this._sloppy || typeof window === "undefined") return;
+    const hit = clickOp(ev, this._windowClick, isApple());
+    if (hit) {
+      // The window's press, not the content's: it and the click it makes
+      // go no further (cancelling the pointerdown holds back the
+      // mousedown and mouseup). Dragged, it moves the frame where it is;
+      // released in place, it raises (shift: lowers).
+      ev.stopPropagation();
+      const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+      window.addEventListener("click", stop, true);
+      this._focusFrame(frameEl.getAttribute("data-id"));
+      const down = { x: ev.clientX, y: ev.clientY };
+      this._beginFrameMove(ev, frameEl, { pointer: true, onEnd: (e) => {
+        setTimeout(() => window.removeEventListener("click", stop, true), 0);
+        if (e?.type !== "pointerup" || !stillClick(down, { x: e.clientX, y: e.clientY })) return;
+        if (hit.op === "raise") this._raiseFrame(frameEl);
+        else this._lowerFrame(frameEl);
+      } });
+      return;
+    }
+    if (!plainPress(ev) || !this._inTitlebar(ev.target, frameEl)) return;
+    const down = { x: ev.clientX, y: ev.clientY };
+    const up = (e) => {
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("pointercancel", up, true);
+      if (e.type === "pointerup" && stillClick(down, { x: e.clientX, y: e.clientY }) && frameEl.isConnected)
+        this._raiseFrame(frameEl);
+    };
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("pointercancel", up, true);
+  }
+
+  // Alt/Option keys, ahead of the pane's own keys (and of Alt+Shift+
+  // arrows' tab reorder). A movement key's first press steps at once; a
+  // held one glides (`_runMover`) — the OS's key repeat is ignored.
+  _onWmKey = (e) => {
+    if (!this._sloppy) return;
+    const now = this._now();
+    if (this._mover.active) {
+      if (!e.altKey) this._mover.clear();
+      else if (e.key === "Shift") this._mover.rekind("move", now);
+    }
+    const k = wmKey(e);
+    if (!k || (isEditable(e.target) && !takesFromField(k, isApple()))) return;
+    const el = this._frameEls.get(this._focusedId);
+    if (k.op !== "point" && !el) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (k.op === "front") this._raiseFrame(el);
+    else if (k.op === "back") this._lowerFrame(el);
+    else {
+      const step = this._mover.press(k.op, k.code, k.dir, now);
+      if (step) this._wmStep(k.op, step);
+      this._runMover();
+    }
+  };
+
+  // A release ends that key's part; Alt's, the gesture; Shift's turns a
+  // window move back into a cursor move.
+  _onWmKeyUp = (e) => {
+    if (!this._mover.active) return;
+    if (!e.altKey) this._mover.clear();
+    else if (e.key === "Shift") this._mover.rekind("point", this._now());
+    else this._mover.release(e.code);
+  };
+
+  // A key's release can go unheard once the page loses focus.
+  _onWmBlur = () => this._mover.clear();
+
+  _wmStep(kind, { dx, dy }) {
+    if (kind === "point") this._moveVCursor(dx, dy);
+    else if (kind === "move") this.nudgeFrame(this._focusedId, dx, dy);
+  }
+
+  _runMover() {
+    if (this._moverRaf || typeof requestAnimationFrame !== "function") return;
+    const frame = () => {
+      this._moverRaf = 0;
+      if (!this._mover.active) return;
+      const d = this._mover.tick(this._now());
+      if (d.dx || d.dy) this._wmStep(this._mover.kind, d);
+      this._moverRaf = requestAnimationFrame(frame);
+    };
+    this._moverRaf = requestAnimationFrame(frame);
+  }
+
+  // Send a frame to the bottom of its band (lib/wm.js `lowerOrder`).
+  _lowerFrame(frameEl) {
+    const next = lowerOrder(this._frames, frameEl.getAttribute("data-id"));
+    if (next) {
+      this._frames.splice(0, this._frames.length, ...next);
+      this._applyZOrder();
+    }
+    this._refocusUnderPointer();
+  }
+
+  // Move a frame by (dx, dy) px, clamped to the workspace and unsnapped;
+  // a tiled frame leaves its tile state, a maximized one stays. True if
+  // it could move.
+  nudgeFrame(id, dx, dy) {
+    const spec = this._frames.find((f) => f.id === id);
+    const el = this._frameEls.get(id);
+    const ws = { x: 0, y: 0, w: this.clientWidth, h: this.clientHeight };
+    if (!spec || !el || this.isMaximized(id) || !ws.w || !ws.h) return false;
+    const r = fracToRect({ xFrac: spec.x, yFrac: spec.y, wFrac: spec.w, hFrac: spec.h }, ws);
+    const clamped = clampToDock({ ...r, x: r.x + dx, y: r.y + dy }, ws);
+    this._clearTileState(spec, el);
+    const frac = rectToFrac(clamped, ws);
+    spec.x = frac.xFrac; spec.y = frac.yFrac;
+    spec.w = frac.wFrac; spec.h = frac.hFrac;
+    applyFrameRect(el, clamped);
+    return true;
   }
 
   closeFrame(id) {
@@ -1189,7 +1495,10 @@ class MkuiWorkspace extends HTMLElement {
     return { vLines, hLines };
   }
 
-  _beginFrameMove(ev, frameEl) {
+  // `pointer`: follow pointer events — a press whose pointerdown was
+  // cancelled (sloppy focus's Alt-drag) gets no mouse events. `onEnd(e)`
+  // hears the release.
+  _beginFrameMove(ev, frameEl, { pointer = false, onEnd = null } = {}) {
     ev.preventDefault();
     const spec = this._frameSpecFor(frameEl);
     if (!spec) return;
@@ -1230,12 +1539,16 @@ class MkuiWorkspace extends HTMLElement {
         top: Math.round(clamped.y) + "px",
       });
     };
-    const up = () => {
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
+    const [MOVE, UP] = pointer ? ["pointermove", "pointerup"] : ["mousemove", "mouseup"];
+    const up = (e) => {
+      window.removeEventListener(MOVE, move);
+      window.removeEventListener(UP, up);
+      if (pointer) window.removeEventListener("pointercancel", up);
+      onEnd?.(e);
     };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
+    window.addEventListener(MOVE, move);
+    window.addEventListener(UP, up);
+    if (pointer) window.addEventListener("pointercancel", up);
   }
 
   _beginFrameResize(ev, frameEl, dir) {
@@ -1295,7 +1608,7 @@ class MkuiWorkspace extends HTMLElement {
 
   _beginPaneDrag(ev, sourceFrame, paneId, tabGroup, tabBarEl) {
     ev.preventDefault();
-    this._raiseFrame(sourceFrame);
+    this._pressFrame(sourceFrame);
     if (sourceFrame._activeTabGroup !== tabGroup) {
       sourceFrame._activeTabGroup = tabGroup;
       sourceFrame._renderInternal();

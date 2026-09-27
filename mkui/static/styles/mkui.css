@@ -1799,6 +1799,43 @@ mkui-app[modal] mkui-statusbar { pointer-events: none; opacity: 0.6; }
 }
 .mkui-frame-nudge { animation: mkui-frame-nudge 160ms ease-in-out 2; }
 
+/* Sloppy focus's keyboard cursor (workspace `_showVCursor`): the real one
+   hidden across the page while it shows, and the arrow drawn over
+   everything, its tip (5, 2 of the 24-box) on the point; the accent dot
+   says it is the keyboard's. */
+:root[data-mkui-vcursor],
+:root[data-mkui-vcursor] * { cursor: none !important; }
+.mkui-vcursor {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 2147483647;
+  pointer-events: none;
+  margin: -1.67px 0 0 -4.17px;
+  will-change: transform;
+}
+.mkui-vcursor .mkui-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  color: var(--mkui-fg);
+  stroke: var(--mkui-bg);
+  stroke-width: 2.5px;
+  stroke-linejoin: round;
+  paint-order: stroke;
+}
+.mkui-vcursor::after {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 16px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mkui-accent);
+  box-shadow: 0 0 0 1.5px var(--mkui-bg);
+}
+
 /* A message box: the kind's icon (or the app's image) beside what it
    says. The text is selectable (the app shell is not) so a version or an
    error can be copied out of it. */

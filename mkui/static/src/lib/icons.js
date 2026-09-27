@@ -81,6 +81,9 @@ const FILLED = {
   // the carets so solid bars don't read taller than a triangle; same
   // 24-box, so the filter button's icon swap on sort keeps the same
   // footprint.
+  // The keyboard's virtual mouse cursor (workspace, sloppy focus): an
+  // arrow with its tip at (5, 2).
+  pointer: ["M5 2v18.5l4.6-4.4 3.3 7.2 3.2-1.5-3.2-7H19.5z"],
   filter: ["M4.5 6h15v3h-15z", "M4.5 10.5h15v3h-15z", "M4.5 15h15v3h-15z"],
 };
 

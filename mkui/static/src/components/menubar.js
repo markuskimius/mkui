@@ -27,12 +27,18 @@
 // always reflects the live workspace. `{ frames = true }` expands into one
 // `frame.show` leaf per window the config's `frames` defines, open or not;
 // the open ones carry a checkmark.
+//
+// A `windows` list is followed by *Sloppy Focus* (lib/wm.js
+// `wmMenuItems`): offered when shift is held as the menu opens, or once
+// it is on, ticked while on; with shift and sloppy focus on, the
+// Ctrl+Alt-click switch too (not on Apple platforms).
 
 import { icon } from "../lib/icons.js";
 
 import { formatShortcut } from "../lib/shortcut.js";
 import { asks, confirmed } from "../lib/dialogs.js";
 import { menuScope, itemFlags, visibleItems, itemStatePaths } from "../lib/menu.js";
+import { wmMenuItems, isApple } from "../lib/wm.js";
 export { formatShortcut };
 
 class MkuiMenubar extends HTMLElement {
@@ -45,6 +51,7 @@ class MkuiMenubar extends HTMLElement {
     this._docUpHandler = null;
     this._pressActive = false;         // true between opening mousedown and its matching mouseup
     this._unsubs = [];                 // state subscriptions of the open menu
+    this._shift = false;               // shift was held as the open menu opened
   }
 
   _scope() {
@@ -68,13 +75,13 @@ class MkuiMenubar extends HTMLElement {
         if (ev.button !== 0) return;
         ev.stopPropagation();
         if (this._rootAnchor === el) this._closeAll();
-        else { this._closeAll(); this._openRoot(el, menu); this._pressActive = true; }
+        else { this._closeAll(); this._openRoot(el, menu, ev); this._pressActive = true; }
       });
-      el.addEventListener("mouseenter", () => {
+      el.addEventListener("mouseenter", (ev) => {
         // Swap between open menus when hovering across the menubar.
         if (!this._rootAnchor || this._rootAnchor === el) return;
         this._closeAll();
-        this._openRoot(el, menu);
+        this._openRoot(el, menu, ev);
       });
       this.appendChild(el);
     }
@@ -99,7 +106,8 @@ class MkuiMenubar extends HTMLElement {
     }
   }
 
-  _openRoot(anchor, menu) {
+  _openRoot(anchor, menu, ev = null) {
+    this._shift = !!ev?.shiftKey;
     this._rootAnchor = anchor;
     anchor.classList.add("open");
     const popup = this._buildPopup(menu.items ?? [], 0);
@@ -124,6 +132,13 @@ class MkuiMenubar extends HTMLElement {
       if (item.windows) {
         const panes = this._app?._element?.workspace?.openPanes?.() ?? [];
         for (const p of panes) out.push({ label: p.title, action: "pane.show", args: p.id });
+        const ws = this._app?._element?.workspace;
+        out.push(...wmMenuItems({
+          shift: this._shift,
+          sloppy: ws?.sloppyFocus?.() ?? false,
+          windowClick: ws?.windowClick?.() ?? "alt",
+          apple: isApple(),
+        }));
       } else if (item.frames) {
         const frames = this._app?._element?.workspace?.configFrames?.() ?? [];
         for (const f of frames) out.push({ label: f.title ?? f.id, action: "frame.show", args: f.id, checked: f.shown });

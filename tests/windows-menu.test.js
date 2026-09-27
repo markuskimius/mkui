@@ -172,6 +172,46 @@ test("expandItems replaces the frames marker with frame.show leaves, one per con
   assert.deepEqual(mb._expandItems([{ frames: true }]), []);
 });
 
+// After a window list: Sloppy Focus, when shift opened the menu or it is
+// on; with both, the Ctrl+Alt-click switch — except on Apple platforms.
+test("expandItems follows a window list with the sloppy focus items", (t) => {
+  const had = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const setPlatform = (platform) => Object.defineProperty(globalThis, "navigator", { value: { platform }, configurable: true, writable: true });
+  t.after(() => { if (had) Object.defineProperty(globalThis, "navigator", had); else delete globalThis.navigator; });
+  setPlatform("Linux x86_64");
+  const ws = makeWorkspace([{ id: "f1", tree: tabs("a") }]);
+  const mb = new MkuiMenubar();
+  mb._app = { _element: { workspace: ws } };
+  const labels = () => mb._expandItems([{ windows: true }, { label: "Cascade", action: "window.cascade" }])
+    .map((i) => (i.sep ? "---" : `${i.label}${i.checked ? " ✓" : ""}`));
+  assert.deepEqual(labels(), ["a", "Cascade"], "off, no shift: nothing");
+  mb._shift = true;
+  assert.deepEqual(labels(), ["a", "---", "Sloppy Focus", "Cascade"], "shift offers it");
+  ws.setSloppyFocus(true);
+  assert.deepEqual(labels(), ["a", "---", "Sloppy Focus ✓", "Raise with Ctrl+Alt-click", "Cascade"]);
+  ws.setWindowClick("ctrl+alt");
+  assert.deepEqual(labels(), ["a", "---", "Sloppy Focus ✓", "Raise with Ctrl+Alt-click ✓", "Cascade"]);
+  setPlatform("MacIntel");
+  assert.deepEqual(labels(), ["a", "---", "Sloppy Focus ✓", "Cascade"], "no ctrl+alt switch on a Mac");
+  mb._shift = false;
+  assert.deepEqual(labels(), ["a", "---", "Sloppy Focus ✓", "Cascade"], "on: shown without shift");
+  assert.deepEqual(mb._expandItems([{ label: "Cascade", action: "window.cascade" }]).length, 1, "only after a window list");
+});
+
+test("the menu opened with shift held says so; opened plainly, it doesn't", () => {
+  const mb = new MkuiMenubar();
+  mb._buildPopup = () => ({ style: {}, classList: { add() {} } });
+  mb.appendChild = () => {};
+  mb.clientHeight = 20;
+  const anchor = { offsetLeft: 0, classList: { add() {} } };
+  mb._openRoot(anchor, { items: [] }, { shiftKey: true });
+  assert.equal(mb._shift, true);
+  mb._openRoot(anchor, { items: [] }, { shiftKey: false });
+  assert.equal(mb._shift, false);
+  mb._openRoot(anchor, { items: [] });
+  assert.equal(mb._shift, false);
+});
+
 test("expandItems passes ordinary items through untouched", () => {
   const mb = new MkuiMenubar();
   const items = [{ label: "Quit", action: "app.quit" }];
@@ -223,7 +263,7 @@ function makeRenameFixture(group, specs) {
     for (const t of tabs) t.input = null;
   };
   frame._workspace = {
-    _raiseFrame: () => calls.push(["raise"]),
+    _pressFrame: () => calls.push(["raise"]),
     getPaneSpec: (id) => specs[id],
     renamePane: (id, title) => calls.push(["rename", id, title]),
   };
