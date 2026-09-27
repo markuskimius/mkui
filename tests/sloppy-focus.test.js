@@ -63,8 +63,14 @@ test("wmKey: alt/option moves the cursor, shift added the window; matched on the
   assert.deepEqual(wmKey({ altKey: true, key: "ArrowUp" }), { op: "point", code: "ArrowUp", dir: [0, -1] }, "no code: an arrow's key will do");
   assert.equal(wmKey({ altKey: true, key: "n" }), null, "no code: a letter's key is not trusted");
   assert.equal(wmKey({ altKey: true, shiftKey: true, code: "KeyN" }), null, "shift+N is nothing");
-  for (const mods of [{}, { ctrlKey: true }, { metaKey: true }])
+  for (const mods of [{}, { ctrlKey: true, altKey: false }, { metaKey: true }, { ctrlKey: true, metaKey: true }])
     assert.equal(wmKey({ altKey: !!Object.keys(mods).length, ...mods, code: "KeyH" }), null, JSON.stringify(mods));
+  for (const shiftKey of [false, true]) {
+    assert.deepEqual(wmKey({ altKey: true, ctrlKey: true, shiftKey, code: "KeyL" }), { op: "resize", code: "KeyL", dir: [1, 0] },
+      `ctrl${shiftKey ? "+shift" : ""}+alt+L: the window's corner`);
+    assert.deepEqual(wmKey({ altKey: true, ctrlKey: true, shiftKey, code: "ArrowUp" }), { op: "resize", code: "ArrowUp", dir: [0, -1] });
+  }
+  assert.equal(wmKey({ altKey: true, ctrlKey: true, code: "KeyP" }), null, "ctrl+alt+P is nothing");
   assert.equal(wmKey({ altKey: true, code: "KeyX" }), null);
 });
 
@@ -76,6 +82,7 @@ test("takesFromField: alt+H/J/K/L off a Mac, never the arrows", () => {
     assert.equal(takesFromField(k(c), true), false, `${c} on a Mac types a character`);
   }
   assert.equal(takesFromField(k("ArrowLeft")), false, "a word jump");
+  assert.equal(takesFromField(wmKey({ altKey: true, ctrlKey: true, code: "KeyH" })), false, "ctrl+alt is AltGr on Windows");
   assert.equal(takesFromField(k("KeyN")), false);
   assert.equal(takesFromField(null), false);
 });
@@ -624,6 +631,109 @@ test("nudgeFrame clamps to the workspace, clears tile state, leaves a maximized 
   ws._maximized = { frameId: "a" };
   assert.equal(ws.nudgeFrame("a", 5, 0), false);
   assert.equal(ws.nudgeFrame("zz", 5, 0), false);
+});
+
+test("keys: alt+ctrl+H/J/K/L resize the focused frame, snapping unless shift is held", () => {
+  const { ws, el } = makeWs(["a", "b"]);
+  ws.setSloppyFocus(true);
+  ws._focusFrame("a");
+  const a = ws._frames[0];
+  Object.assign(a, { x: 0, y: 0, w: 0.3, h: 0.3, preTileRect: { x: 0.2, y: 0.2, w: 0.3, h: 0.3 } });   // 300 × 240
+  Object.assign(ws._frames[1], { x: 0.5, y: 0.5, w: 0.3, h: 0.3 });   // edges at x 500, 800; y 400, 640
+  const px = () => ({ w: Math.round(a.w * 1000), h: Math.round(a.h * 800) });
+  const key = (code, extra = {}) => ws._onWmKey(keyEv(code, { ctrlKey: true, ...extra }));
+  const up = (code, extra = {}) => ws._onWmKeyUp({ altKey: true, ctrlKey: true, code, key: code, ...extra });
+  ws._pointer = { x: 150, y: 120 };                    // the frame's middle
+  key("KeyL"); up("KeyL");
+  key("KeyJ"); up("KeyJ");
+  assert.deepEqual(px(), { w: 305, h: 245 }, "a tap: 5 px wider, then taller");
+  assert.equal(a.x, 0, "the top-left corner stays");
+  assert.equal(a.preTileRect, undefined, "a resized tile is a plain frame");
+  assert.equal(ws._vcOn, true, "the cursor comes along");
+  assert.deepEqual(ws._pointer, { x: 152.5, y: 122.5 }, "on the same relative spot");
+  key("KeyH"); up("KeyH");
+  key("KeyK"); up("KeyK");
+  assert.deepEqual(px(), { w: 300, h: 240 }, "H/K shrink");
+
+  // One gesture: the right edge catches b's left edge at 500, then pulls free.
+  key("KeyL");
+  ws._wmStep("resize", { dx: 185, dy: 0 });            // raw 490
+  assert.equal(px().w, 500, "snapped to b's edge");
+  ws._wmStep("resize", { dx: 10, dy: 0 });             // raw 500
+  ws._wmStep("resize", { dx: 5, dy: 0 });              // raw 505
+  assert.equal(px().w, 500, "held there within the threshold");
+  ws._wmStep("resize", { dx: 11, dy: 0 });             // raw 516
+  assert.equal(px().w, 516, "and let go past it, not stepped back");
+  ws._onWmKey(keyEv("ShiftLeft", { key: "Shift", ctrlKey: true, shiftKey: true }));
+  assert.equal(ws._mover.kind, "resize", "shift doesn't turn a resize into a move");
+  ws._wmStep("resize", { dx: -20, dy: 0 });            // raw 496
+  assert.equal(px().w, 496, "shift held: no snap");
+  up("ShiftLeft", { key: "Shift" });
+  ws._wmStep("resize", { dx: 0, dy: 0 });
+  assert.equal(px().w, 500, "shift let go: it snaps again");
+  up("ControlLeft", { key: "Control", ctrlKey: false });
+  assert.equal(ws._mover.active, false, "ctrl let go ends a resize");
+
+  key("KeyL", { shiftKey: true });
+  assert.equal(px().w, 505, "a fresh shift press: unsnapped from where it is");
+  up("KeyL", { shiftKey: true });
+  ws._wmStep("resize", { dx: -1000, dy: -1000 });
+  assert.deepEqual(px(), { w: 180, h: 80 }, "a floor");
+  ws._wmStep("resize", { dx: 5000, dy: 5000 });
+  assert.deepEqual(px(), { w: 1000, h: 800 }, "a ceiling: the workspace");
+  ws._hideVCursor();
+  ws._maximized = { frameId: "a" };
+  assert.equal(ws._kbResizeStep("a", 5, 0, true), null, "a maximized frame stays");
+  assert.equal(el("a").style.width, "1000px");
+});
+
+test("keys: a resize leaves text fields alone; ctrl pressed or let go mid-gesture ends it", () => {
+  const { ws } = makeWs(["a"]);
+  ws.setSloppyFocus(true);
+  ws._focusFrame("a");
+  ws._pointer = { x: 900, y: 700 };                    // off the frame: the cursor stays
+  const a = ws._frames[0];
+  const w0 = a.w;
+  const before = keyEv.prevented;
+  ws._onWmKey(keyEv("KeyL", { ctrlKey: true, target: { tagName: "INPUT" } }));
+  assert.equal(keyEv.prevented, before, "AltGr+L in a field is the field's");
+  assert.equal(a.w, w0);
+  ws._onWmKey(keyEv("KeyL", { ctrlKey: true }));
+  assert.ok(Math.abs(a.w * 1000 - (w0 * 1000 + NUDGE)) < 1e-9);
+  assert.equal(ws._vcOn, false, "a pointer off the window brings no cursor");
+  assert.equal(ws._mover.kind, "resize");
+  ws._onWmKey(keyEv("ControlLeft", { key: "Control", ctrlKey: false }));
+  assert.equal(ws._mover.active, false, "a keydown without ctrl: ctrl went unheard");
+  ws._onWmKey(keyEv("KeyL", { shiftKey: true }));
+  assert.equal(ws._mover.kind, "move");
+  ws._onWmKey(keyEv("ControlLeft", { key: "Control", ctrlKey: true, shiftKey: true }));
+  assert.equal(ws._mover.active, false, "ctrl pressed mid-move ends the move");
+  assert.equal(ws._kbResize, null, "and a fresh gesture starts a fresh resize rect");
+  ws._hideVCursor();
+});
+
+test("a mouse drag moves freely, snapping with shift; a resize snaps, but not with shift", () => {
+  const { ws, el } = makeWs(["a", "b"]);
+  ws.getBoundingClientRect = () => ({ left: 0, top: 0 });
+  const a = ws._frames[0];
+  Object.assign(a, { x: 0.1, y: 0.1, w: 0.3, h: 0.3 });   // 100..400 × 80..320
+  Object.assign(ws._frames[1], { x: 0.5, y: 0.5, w: 0.3, h: 0.3 });
+  const down = { button: 0, clientX: 200, clientY: 100, preventDefault() {}, stopPropagation() {} };
+  ws._beginFrameMove(down, el("a"));
+  fireWin("mousemove", { clientX: 295, clientY: 100 });           // right edge 495, near b's 500
+  assert.equal(el("a").style.left, "195px", "no snap");
+  fireWin("mousemove", { clientX: 295, clientY: 100, shiftKey: true });
+  assert.equal(el("a").style.left, "200px", "shift: snapped to b's edge");
+  fireWin("mouseup", {});
+
+  Object.assign(a, { x: 0.1, y: 0.1, w: 0.3, h: 0.3 });
+  ws._beginFrameResize({ ...down, clientX: 400, clientY: 320 }, el("a"), "se");
+  fireWin("mousemove", { clientX: 495, clientY: 320 });
+  assert.equal(el("a").style.width, "400px", "snapped to b's edge");
+  fireWin("mousemove", { clientX: 495, clientY: 320, shiftKey: true });
+  assert.equal(el("a").style.width, "395px", "shift: no snap");
+  fireWin("mouseup", {});
+  for (const t of ["mousemove", "mouseup"]) assert.equal(winEv[t]?.size ?? 0, 0, `no ${t} listener left`);
 });
 
 // ── wiring: the app's preferences and actions, the frame, the menubar ──

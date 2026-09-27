@@ -67,10 +67,13 @@ entirely inside frames.
 ## Interactions
 
 - **Top tab row** → drag the whitespace next to the tabs to move the
-  frame (clamped). **Double-click** the same region to toggle maximize.
+  frame (clamped; hold **Shift** to snap its edges to other windows'
+  and the workspace's). **Double-click** the same region to toggle maximize.
   On non-docking frames (dialogs, login) the title tab itself also
   drags the frame — it acts as titlebar text.
-  **Frame edges/corners** → 8-way resize (clamped, min 180×80).
+  **Frame edges/corners** → 8-way resize (clamped, min 180×80); the
+  moving edges snap to other windows' and the workspace's edges, unless
+  **Shift** is held.
 - **Dragging a tiled or maximized frame** restores it to its pre-tile
   size under the cursor on first motion. Resize handles or explicit
   maximize-toggle also clear the restore state.
@@ -148,11 +151,12 @@ With sloppy focus on:
 | Click inside the window | Focuses it, without bringing it forward |
 | Alt/Option-click anywhere in the window | Brings it to the front, on release |
 | Shift+Alt/Option-click | Sends it to the back (a dialog that stays on top goes behind the other such dialogs, still over the ordinary windows; a modal one stays put) |
-| Alt/Option-drag anywhere in the window (Shift too, or not) | Moves it, as dragging its title bar does (snapping to other windows' edges; a tiled or maximized window returns to its own size) — without bringing it forward |
+| Alt/Option-drag anywhere in the window (Shift too, or not) | Moves it, as dragging its title bar does (snapping to other windows' edges with Shift; a tiled or maximized window returns to its own size) — without bringing it forward |
 | Alt/Option+P | Brings the focused window to the front |
 | Alt/Option+N | Sends it to the back; the focus goes to whatever is now under the pointer |
 | Alt/Option+H / J / K / L, or Alt/Option+arrows | Moves a **virtual mouse cursor** left / down / up / right (below) |
 | Alt/Option+Shift+H / J / K / L, or Alt/Option+Shift+arrows | Moves the focused window left / down / up / right, the virtual cursor (below) riding along on the same spot of the window — it appears if the real mouse had the part — while the focus stays with the window. It doesn't snap; a tiled window becomes an ordinary one, a maximized one stays |
+| Alt/Option+Ctrl+H / J / K / L, or Alt/Option+Ctrl+arrows | Resizes the focused window by its bottom-right corner: L / → and J / ↓ grow it, H / ← and K / ↑ shrink it (down to 180×80). The moving edges snap to other windows' edges as a mouse resize does — a held key pulls free past one — unless Shift is held too. A pointer over the window keeps its spot on it, as the virtual cursor; a tiled window becomes an ordinary one, a maximized one stays. In a text field these keys are the field's (Ctrl+Alt is AltGr on Windows) |
 
 A page can't move the real mouse, so the movement keys drive a
 stand-in: the real cursor disappears and an arrow with a small accent
@@ -163,11 +167,11 @@ focus goes to what is under it — but it doesn't click, and hover effects
 stay where the real mouse is. Move, click or scroll the real mouse and
 the arrow goes, the real cursor coming back where it was.
 
-A tap moves the cursor or the window 5 pixels; held, it glides after a
+A tap moves the cursor or the window, or resizes it, 5 pixels; held, it glides after a
 quarter second, speeding up as you hold it — the cursor to about 1,500
 pixels a second, a window, more gently, to 600 — and two keys together
 go diagonally. Pressing or letting go of Shift mid-glide switches
-between the cursor and the window. With sloppy focus on, Alt+Shift+←/→
+between the cursor and the window (in a resize, snapping off and on). With sloppy focus on, Alt+Shift+←/→
 moves the window rather than the active tab (drag the tab to reorder
 it). The keys match the physical key, so Option's special characters on
 a Mac (˙, ∆, ˚, ¬) don't get in the way. In a text field the arrows are

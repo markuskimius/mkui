@@ -18,10 +18,11 @@ export function isApple(nav = typeof navigator !== "undefined" ? navigator : nul
 }
 
 // Alt/Option keys: P front, N back; H/J/K/L or the arrows move the
-// virtual cursor (`point`), with shift the focused window (`move`).
+// virtual cursor (`point`), with shift the focused window (`move`), with
+// ctrl its bottom-right corner (`resize`; shift added: without snapping).
 // Matched on `code`, the physical key: Option on a Mac turns H into "˙"
 // and N into a dead key. `{ op: "front" | "back" }`,
-// `{ op: "point" | "move", code, dir: [x, y] }`, or null.
+// `{ op: "point" | "move" | "resize", code, dir: [x, y] }`, or null.
 const DIRS = {
   KeyH: [-1, 0], ArrowLeft: [-1, 0],
   KeyJ: [0, 1], ArrowDown: [0, 1],
@@ -29,8 +30,9 @@ const DIRS = {
   KeyL: [1, 0], ArrowRight: [1, 0],
 };
 export function wmKey(e) {
-  if (!e?.altKey || e.ctrlKey || e.metaKey) return null;
+  if (!e?.altKey || e.metaKey) return null;
   const code = e.code || (typeof e.key === "string" && e.key.startsWith("Arrow") ? e.key : "");
+  if (e.ctrlKey) return DIRS[code] ? { op: "resize", code, dir: DIRS[code] } : null;
   if (!e.shiftKey && code === "KeyP") return { op: "front" };
   if (!e.shiftKey && code === "KeyN") return { op: "back" };
   const dir = DIRS[code];
@@ -40,7 +42,7 @@ export function wmKey(e) {
 // Whether a text field gives up a key it would otherwise take: Alt+
 // H/J/K/L (shift or not) off Apple platforms, where they type nothing.
 // Arrows stay the field's (a word jump), and on a Mac Option+letters
-// type characters.
+// type characters. A resize never: Ctrl+Alt is AltGr on Windows.
 export function takesFromField(k, apple = false) {
   return !apple && (k?.op === "point" || k?.op === "move") && /^Key[HJKL]$/.test(k.code);
 }
@@ -50,6 +52,7 @@ export function takesFromField(k, apple = false) {
 export const CURVES = {
   point: { step: NUDGE, delay: 250, from: 300, to: 1500, ramp: 1000 },
   move: { step: NUDGE, delay: 250, from: 150, to: 600, ramp: 1000 },
+  resize: { step: NUDGE, delay: 250, from: 150, to: 600, ramp: 1000 },
 };
 
 // The held movement keys of one gesture, and how far they have gone.
@@ -60,7 +63,7 @@ export const CURVES = {
 export class Mover {
   constructor() {
     this.held = new Map();          // code -> [x, y]
-    this.kind = null;               // "point" | "move"
+    this.kind = null;               // "point" | "move" | "resize"
     this.since = 0;                 // when the gesture (or its kind) began
     this.last = 0;                  // the last tick
   }

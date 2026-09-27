@@ -6,18 +6,18 @@ mkui: a config-driven, zero-dependency Web Components GUI framework: floating fr
 
 ## Architecture
 
-- **Workspace** (`<mkui-workspace>`): z-ordered floating **frames**
-- **Frames** (`<mkui-frame>`): top-level chrome with 8-way resize handles, each owning a normalized layout tree. No titlebar: every top-edge tab bar doubles as a drag region, the right-most carrying the window controls
-- **Panes** (`<mkui-pane>`): leaf content hosts inside frames, always in a TabGroup
-- Pane elements are pooled at workspace level with stable identity, `appendChild` moving them between frames (pooled *before* their content is built)
-- Frame positions are workspace fractions, split ratios sum to 1: proportional resize is automatic. Frame rects are painted in whole pixels (`applyFrameRect` rounds edges, not sizes, so snapped frames stay flush).
-- Frame moves/resizes all go through `clampToDock`
-- Focus model: the focused frame (`_focusedId`: the last raised; `closeFrame` hands it to the top one left) gets `[data-focused]` (`_applyZOrder`); each frame tracks an `_activeTabGroup`, updated on tab or pane interaction; hotkeys act on it.
-- Sloppy focus (`lib/wm.js`, `tests/sloppy-focus.test.js`): hover → `_focusFrame` (no raise; restores `_lastFocus` unless typing); presses → `_pressFrame`. Capture `pointerdown` → `_framePointerDown`: a `clickOp` press is the window's (`_beginFrameMove({ pointer })`; a still release raises/lowers), as is a still click on `.mkui-tabbar-top`. `_onWmKey` (capture, `e.code`): H/J/K/L/arrows via `Mover` (step, rAF glide) move `.mkui-vcursor` (`_pointer` follows; root `[data-mkui-vcursor]` hides the real one; `realMove` hands back), shift: `_nudge` (cursor rides, no refocus). Prefs: `installWm` (per `auth.user`; `focus.*` save).
-- Tab drag: pointer events on tabs (`touch-action: none`); in a bar a ghost label + drop indicator reorder on release; outside it the pane tears into a new frame. On noDock frames (dialogs, login) the tab is titlebar text: mousedown moves the frame, click activates it; CSS must keep them pointer-interactive.
+- **Workspace** (`<mkui-workspace>`): z-ordered **frames**
+- **Frames** (`<mkui-frame>`): chrome with 8-way resize handles, each owning a normalized layout tree. No titlebar: every top-edge tab bar is a drag region, the right-most holding the window controls
+- **Panes** (`<mkui-pane>`): leaf content, always in a TabGroup
+- Pane elements are pooled workspace-wide (stable identity; `appendChild` moves them; pooled *before* their content is built)
+- Frame positions are workspace fractions, split ratios sum to 1 (proportional resize is automatic); `applyFrameRect` paints whole pixels, rounding edges, not sizes, so snapped frames stay flush.
+- Frame moves/resizes all go through `clampToDock`. Snap: a mouse move with Shift, a resize without; `_nudge` never; `_kbResizeStep` unless `_wmShift` (off the unsnapped `_kbResize`)
+- Focus model: the focused frame (`_focusedId`: the last raised; `closeFrame` passes it to the top one) gets `[data-focused]` (`_applyZOrder`); a frame's `_activeTabGroup` (set by tab/pane interaction) takes hotkeys.
+- Sloppy focus (`lib/wm.js`, `tests/sloppy-focus.test.js`): hover → `_focusFrame` (no raise; restores `_lastFocus` unless typing); presses → `_pressFrame`. Capture `pointerdown` → `_framePointerDown`: a `clickOp` press is the window's (`_beginFrameMove({ pointer })`; a still release raises/lowers), as is a still click on `.mkui-tabbar-top`. `_onWmKey` (capture, `e.code`): H/J/K/L/arrows (`Mover`: step, rAF glide) move `.mkui-vcursor` (`_pointer` follows; root `[data-mkui-vcursor]` hides the real one; `realMove` hands back), shift `_nudge` (cursor rides, no refocus), ctrl resize (Ctrl up ends it). Prefs: `installWm` (per `auth.user`; `focus.*` save).
+- Tab drag: pointer events (`touch-action: none`); in a bar a ghost label + drop indicator reorder on release; outside it the pane tears out. On noDock frames (dialogs, login) the tab is titlebar text (mousedown moves the frame, click activates); CSS keeps them pointer-interactive.
 - Tab overflow: past `min-width: 3em` `.mkui-tabs` clips, `.mkui-tab-scroll` arrows appear, the bar gets `.mkui-tabbar-overflow` (`updateArrows`). Rename: ctrl/cmd+click swaps the label for `.mkui-tab-rename`; `workspace.renamePane` sets `titled`, which stops `setPaneAutoTitle` overwriting a chosen name.
 - Tab strip look: the bar's bottom line is a `.mkui-tabbar::after` overlay (never a border) the selected tab covers (`z-index: 1`); selected tabs outside the focused group flatten to idle.
-- Theming: `dark`/`light` come from `mkui.css` via `[theme=...]`; custom themes in `config.app.themes[name]` are `{ "--mkui-*": value }` overrides applied inline by `MkuiApp.setTheme(name)`.
+- Theming: `dark`/`light` from `mkui.css` via `[theme=...]`; custom `config.app.themes[name]` = `{ "--mkui-*": value }` overrides, applied inline by `MkuiApp.setTheme(name)`.
 
 ## Key files
 

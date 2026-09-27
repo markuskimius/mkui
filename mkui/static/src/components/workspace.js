@@ -20,6 +20,11 @@ import { sanitizeLayout, pruneTree, LAYOUT_VERSION } from "../lib/layouts.js";
 import { wmKey, takesFromField, Mover, realMove, clickOp, plainPress, stillClick, lowerOrder, isApple, WINDOW_CLICKS } from "../lib/wm.js";
 import { icon } from "../lib/icons.js";
 
+// The smallest a resize leaves a frame. 180 keeps the top bar's minimum
+// row intact: scroll arrows + one min-width tab + reduced drag grab area
+// + window controls.
+const MIN_FRAME_W = 180, MIN_FRAME_H = 80;
+
 // Write a frame rect to an element's style in whole pixels. Frame geometry
 // is fractional (frac × workspace size, pointer deltas), but the frame's
 // internal layout measures its body via clientWidth/clientHeight — integers
@@ -77,6 +82,8 @@ class MkuiWorkspace extends HTMLElement {
     this._vc = null;                // the virtual cursor's element
     this._vcOn = false;
     this._mover = new Mover();      // held Alt+H/J/K/L / arrows
+    this._kbResize = null;          // a keyboard resize's unsnapped rect (`_kbResizeStep`)
+    this._wmShift = false;          // Shift, as the last key event had it
     this._moverRaf = 0;
   }
 
@@ -880,10 +887,12 @@ class MkuiWorkspace extends HTMLElement {
   _onWmKey = (e) => {
     if (!this._sloppy) return;
     const now = this._now();
+    this._wmShift = !!e.shiftKey;
     if (this._mover.active) {
-      if (!e.altKey) this._mover.clear();
-      else if (e.key === "Shift") this._mover.rekind("move", now);
+      if (!e.altKey || (this._mover.kind === "resize") !== !!e.ctrlKey) this._mover.clear();
+      else if (e.key === "Shift" && this._mover.kind !== "resize") this._mover.rekind("move", now);
     }
+    if (!this._mover.active) this._kbResize = null;
     const k = wmKey(e);
     if (!k || (isEditable(e.target) && !takesFromField(k, isApple()))) return;
     const el = this._frameEls.get(this._focusedId);
@@ -899,12 +908,14 @@ class MkuiWorkspace extends HTMLElement {
     }
   };
 
-  // A release ends that key's part; Alt's, the gesture; Shift's turns a
-  // window move back into a cursor move.
+  // A release ends that key's part; Alt's (Ctrl's in a resize), the
+  // gesture; Shift's turns a window move back into a cursor move, and a
+  // resize back to snapping.
   _onWmKeyUp = (e) => {
+    this._wmShift = !!e.shiftKey;
     if (!this._mover.active) return;
-    if (!e.altKey) this._mover.clear();
-    else if (e.key === "Shift") this._mover.rekind("point", this._now());
+    if (!e.altKey || (this._mover.kind === "resize" && !e.ctrlKey)) this._mover.clear();
+    else if (e.key === "Shift") { if (this._mover.kind !== "resize") this._mover.rekind("point", this._now()); }
     else this._mover.release(e.code);
   };
 
@@ -917,6 +928,7 @@ class MkuiWorkspace extends HTMLElement {
   // the window; the focus stays with the window being moved.
   _wmStep(kind, { dx, dy }) {
     if (kind === "point") { this._moveVCursor(dx, dy); return; }
+    if (kind === "resize") { this._kbResizeStep(this._focusedId, dx, dy, !this._wmShift); return; }
     if (kind !== "move") return;
     const went = this._nudge(this._focusedId, dx, dy);
     if (!went) return;
@@ -968,6 +980,48 @@ class MkuiWorkspace extends HTMLElement {
     spec.w = frac.wFrac; spec.h = frac.hFrac;
     applyFrameRect(el, clamped);
     return { dx: clamped.x - r.x, dy: clamped.y - r.y };
+  }
+
+  // A keyboard resize step: the bottom-right corner by (dx, dy) px,
+  // snapping (`snap`) as a mouse resize does. `_kbResize` is the
+  // gesture's unsnapped rect, so a glide pulls free of an edge it caught
+  // rather than snapping back to it step by step; a fresh press starts
+  // it over (`_onWmKey`). A pointer inside the frame keeps its relative
+  // spot on it — the virtual cursor, which also stops the real one's
+  // hover handing the focus away. How far it went, or null.
+  _kbResizeStep(id, dx, dy, snap) {
+    const spec = this._frames.find((f) => f.id === id);
+    const el = this._frameEls.get(id);
+    const ws = { x: 0, y: 0, w: this.clientWidth, h: this.clientHeight };
+    if (!spec || !el || this.isMaximized(id) || !ws.w || !ws.h) return null;
+    const r = fracToRect({ xFrac: spec.x, yFrac: spec.y, wFrac: spec.w, hFrac: spec.h }, ws);
+    let g = this._kbResize;
+    if (!g || g.id !== id) {
+      this._clearTileState(spec, el);
+      g = this._kbResize = { id, ...r };
+    }
+    g.w = Math.max(MIN_FRAME_W, Math.min(ws.w - g.x, g.w + dx));
+    g.h = Math.max(MIN_FRAME_H, Math.min(ws.h - g.y, g.h + dy));
+    let rect = { x: g.x, y: g.y, w: g.w, h: g.h };
+    if (snap) {
+      const { vLines, hLines } = this._getSnapLines(id);
+      rect = snapResize(rect, "se", vLines, hLines);
+    }
+    const clamped = clampToDock(rect, ws);
+    const frac = rectToFrac(clamped, ws);
+    spec.x = frac.xFrac; spec.y = frac.yFrac;
+    spec.w = frac.wFrac; spec.h = frac.hFrac;
+    applyFrameRect(el, clamped);
+    const went = { dw: clamped.w - r.w, dh: clamped.h - r.h };
+    const at = this._pointer;
+    const off = this.getBoundingClientRect?.() ?? { left: 0, top: 0 };
+    const fx = at && r.w ? (at.x - off.left - r.x) / r.w : -1;
+    const fy = at && r.h ? (at.y - off.top - r.y) / r.h : -1;
+    if (fx >= 0 && fx <= 1 && fy >= 0 && fy <= 1) {
+      this._showVCursor();
+      this._placeVCursor(at.x + fx * went.dw, at.y + fy * went.dh);
+    }
+    return went;
   }
 
   closeFrame(id) {
@@ -1544,7 +1598,7 @@ class MkuiWorkspace extends HTMLElement {
       }
       const wr = this.getBoundingClientRect();
       const raw = { x: e.clientX - wr.left - offX, y: e.clientY - wr.top - offY, w: start.w, h: start.h };
-      const snapped = snapMove(raw, snap.vLines, snap.hLines);
+      const snapped = e.shiftKey ? snapMove(raw, snap.vLines, snap.hLines) : raw;
       const clamped = clampToDock(snapped, ws);
       const frac = rectToFrac(clamped, ws);
       spec.x = frac.xFrac; spec.y = frac.yFrac;
@@ -1577,9 +1631,7 @@ class MkuiWorkspace extends HTMLElement {
     const sx = ev.clientX, sy = ev.clientY;
     const hasN = dir.includes("n"), hasS = dir.includes("s");
     const hasE = dir.includes("e"), hasW = dir.includes("w");
-    // 180 keeps the top bar's minimum row intact: scroll arrows + one
-    // min-width tab + reduced drag grab area + window controls.
-    const minW = 180, minH = 80;
+    const minW = MIN_FRAME_W, minH = MIN_FRAME_H;
     const { vLines, hLines } = this._getSnapLines(spec.id);
     const move = (e) => {
       let x = start.x, y = start.y, w = start.w, h = start.h;
@@ -1596,7 +1648,7 @@ class MkuiWorkspace extends HTMLElement {
         y = start.y + (start.h - newH);
         h = newH;
       }
-      const snapped = snapResize({ x, y, w, h }, dir, vLines, hLines);
+      const snapped = e.shiftKey ? { x, y, w, h } : snapResize({ x, y, w, h }, dir, vLines, hLines);
       const clamped = clampToDock(snapped, ws);
       const frac = rectToFrac(clamped, ws);
       spec.x = frac.xFrac; spec.y = frac.yFrac;
