@@ -155,7 +155,7 @@ test("expandItems yields no entries when nothing is open or no workspace", () =>
 });
 
 test("expandItems replaces the frames marker with frame.show leaves, one per configured window", () => {
-  const ws = makeWorkspace([]);
+  const ws = makeWorkspace([{ id: "main", tree: tabs("a") }]);
   ws._app = { config: { frames: [
     { id: "main", layout: tabs("a") },
     { id: "desk", title: "Order Desk", open: false, layout: tabs("b") },
@@ -164,10 +164,10 @@ test("expandItems replaces the frames marker with frame.show leaves, one per con
   const mb = new MkuiMenubar();
   mb._app = { _element: { workspace: ws } };
   assert.deepEqual(mb._expandItems([{ frames: true }, { sep: true }]), [
-    { label: "main", action: "frame.show", args: "main" },
-    { label: "Order Desk", action: "frame.show", args: "desk" },
+    { label: "main", action: "frame.show", args: "main", checked: true },
+    { label: "Order Desk", action: "frame.show", args: "desk", checked: false },
     { sep: true },
-  ], "open or not, titled or by id");
+  ], "open or not (the open ones checked), titled or by id");
   mb._app = null;
   assert.deepEqual(mb._expandItems([{ frames: true }]), []);
 });

@@ -879,15 +879,64 @@ test("a frame with open = false is defined but not opened: not at startup, not b
   const ws = makeWorkspace([], { frames });
   assert.deepEqual(ws._configFrameSpecs(frames).map(f => f.id), ["main"]);
   assert.deepEqual(ws.configFrames(), [
-    { id: "main", title: null, open: true },
-    { id: "desk", title: "Desk", open: false },
+    { id: "main", title: null, open: true, shown: false },
+    { id: "desk", title: "Desk", open: false, shown: false },
   ], "what a { frames = true } menu lists");
   ws.resetLayout();
   assert.deepEqual(ws._frames.map(f => f.id), ["main"]);
   assert.equal(ws.showFrame("desk"), true);
   assert.deepEqual(ws._frames.map(f => f.id), ["main", "desk"]);
+  assert.deepEqual(ws.configFrames().map(f => f.shown), [true, true], "shown: on screen now");
   ws.resetLayout();
+  assert.deepEqual(ws.configFrames().map(f => f.shown), [true, false]);
   assert.deepEqual(ws._frames.map(f => f.id), ["main"], "a reset closes it again");
+});
+
+test("the Window menu ticks the configured windows open now, live across opens", () => {
+  const frames = [{ id: "main", title: "Main", ...rect, layout: tabs("a") }, deskDef];
+  const ws = makeWorkspace([], { frames });
+  ws.resetLayout();
+  const app = new App({ frames });
+  const fired = [];
+  app.registerAction("frame.show", (_, id) => { fired.push(id); ws.showFrame(id); });
+  app._element = { workspace: ws };
+  const mb = new MkuiMenubar();
+  mb._app = app;
+  const menu = [{ label: "Cascade", action: "window.cascade" }, { sep: true }, { frames: true }];
+  const build = () => mb._buildPopup(menu, 0);
+  const ticked = (popup) => popup._ch.filter(e => e.className === "mkui-menu-item")
+    .map(e => [e._ch.find(n => n.nodeType === 3).textContent, e.classList.contains("mkui-menu-item-checked"),
+      e._ch.some(n => n.className === "mkui-menu-check")]);
+
+  let popup = build();
+  assert.equal(popup.classList.contains("mkui-menu-popup-checks"), true, "a check gutter for the whole popup");
+  assert.deepEqual(ticked(popup), [
+    ["Cascade", false, false],
+    ["Main", true, true],
+    ["Desk", false, false],
+  ], "open = false: listed, not ticked; plain items share the gutter unticked");
+
+  // A ticked entry still acts: it raises its window.
+  const main = popup._ch.find(e => e._ch?.some(n => n.textContent === "Main"));
+  main.fire("mousedown", { button: 0 });
+  main.fire("mouseup", { button: 0 });
+  assert.deepEqual(fired, ["main"]);
+
+  ws.showFrame("desk");
+  assert.deepEqual(ticked(build()).slice(1).map(r => r[1]), [true, true], "the next open sees it");
+  ws.closeFrame("main");
+  assert.deepEqual(ticked(build()).slice(1).map(r => r[1]), [false, true], "a closed window loses its tick");
+});
+
+test("a popup with nothing checkable has no check gutter", () => {
+  const mb = new MkuiMenubar();
+  mb._app = new App({});
+  const popup = mb._buildPopup([{ label: "Cascade", action: "window.cascade" }, { windows: true }], 0);
+  assert.equal(popup.classList.contains("mkui-menu-popup-checks"), false);
+  assert.equal(popup._ch.some(e => e._ch?.some(n => n.className === "mkui-menu-check")), false);
+  // And a frames list over an app with no frames adds nothing either.
+  const empty = mb._buildPopup([{ label: "Cascade", action: "window.cascade" }, { frames: true }], 0);
+  assert.equal(empty.classList.contains("mkui-menu-popup-checks"), false);
 });
 
 test("the app's own startup path (layouts, or a login) keeps a closed frame closed too", async () => {

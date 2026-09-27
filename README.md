@@ -539,7 +539,7 @@ Static `pane.show` entries are still useful for reopening panes whose
 frame has been closed: a closed window comes back where and as it was.
 `frame.show` opens or raises a window the config's `frames` defines —
 one declared `"open": false` is closed until an item asks for it — and
-`{ "frames": true }` lists them all.
+`{ "frames": true }` lists them all, a checkmark on the ones open now.
 
 Tabs can be renamed in place: ctrl+click (or cmd+click on macOS) a tab,
 edit the title, and press Enter (Escape cancels). The new title is

@@ -772,3 +772,16 @@ test("the As of button reads as pressed while its bar is up", () => {
   assert.equal(declaration(".mkui-history-toggle.active", "border-color"), "var(--mkui-accent)");
   assert.ok(css.includes(".mkui-asof-close"), "the bar has a close of its own");
 });
+
+// The Window menu's frames list ticks the open windows. The check sits in a
+// gutter every item of that popup reserves, so ticked and unticked labels
+// (and the plain commands above them) start in one column; it is an icon in
+// currentColor, turning with the label on the hover highlight.
+test("a checkable menu popup reserves a check gutter for every item", () => {
+  assert.equal(declaration(".mkui-menu-popup-checks .mkui-menu-item", "padding-left"), "28px");
+  assert.equal(declaration(".mkui-menu-popup-checks .mkui-menu-item", "position"), "relative");
+  assert.equal(declaration(".mkui-menu-check", "position"), "absolute");
+  assert.equal(declaration(".mkui-menu-check", "left"), "10px");
+  assert.equal(declaration(".mkui-menu-check .mkui-icon", "width"), "12px");
+  assert.ok(!/\.mkui-menu-check[^{]*\{[^}]*\bcolor\s*:/.test(css), "no colour of its own: it follows the label");
+});

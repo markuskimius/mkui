@@ -121,6 +121,16 @@ mkui-menubar {
   color: var(--mkui-fg-mute);
 }
 .mkui-menu-item:hover .mkui-menu-shortcut { color: var(--mkui-accent-fg); }
+/* A popup listing checkable items (the Window menu's `{ frames = true }`,
+   open ones ticked) reserves a left gutter for the check on every item. */
+.mkui-menu-popup-checks .mkui-menu-item { position: relative; padding-left: 28px; }
+.mkui-menu-check {
+  position: absolute;
+  left: 10px;
+  display: flex;
+  align-items: center;
+}
+.mkui-menu-check .mkui-icon { width: 12px; height: 12px; }
 .mkui-menu-sep { height: 1px; background: var(--mkui-border); margin: 4px 0; }
 
 mkui-statusbar {

@@ -427,13 +427,13 @@ class MkuiWorkspace extends HTMLElement {
     };
   }
 
-  // The windows the config defines, in its order: `{ id, title, open }`,
-  // `open` false for one kept closed at startup. What a `{ frames = true }`
-  // menu item lists.
+  // The windows the config defines, in its order: `{ id, title, open,
+  // shown }`, `open` false for one kept closed at startup, `shown` true
+  // while it is on screen now. What a `{ frames = true }` menu item lists.
   configFrames() {
     return (this._app?.config?.frames ?? [])
       .filter(f => f && typeof f.id === "string" && f.id)
-      .map(f => ({ id: f.id, title: f.title ?? null, open: f.open !== false }));
+      .map(f => ({ id: f.id, title: f.title ?? null, open: f.open !== false, shown: this._frameEls.has(f.id) }));
   }
 
   getPaneSpec(id) { return this._panes.get(id); }

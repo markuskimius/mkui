@@ -25,7 +25,8 @@
 // An item of `{ windows = true }` expands into one `pane.show` leaf per
 // currently-open pane — popups are rebuilt on every open, so the list
 // always reflects the live workspace. `{ frames = true }` expands into one
-// `frame.show` leaf per window the config's `frames` defines, open or not.
+// `frame.show` leaf per window the config's `frames` defines, open or not;
+// the open ones carry a checkmark.
 
 import { icon } from "../lib/icons.js";
 
@@ -125,7 +126,7 @@ class MkuiMenubar extends HTMLElement {
         for (const p of panes) out.push({ label: p.title, action: "pane.show", args: p.id });
       } else if (item.frames) {
         const frames = this._app?._element?.workspace?.configFrames?.() ?? [];
-        for (const f of frames) out.push({ label: f.title ?? f.id, action: "frame.show", args: f.id });
+        for (const f of frames) out.push({ label: f.title ?? f.id, action: "frame.show", args: f.id, checked: f.shown });
       } else if (item.layouts) {
         out.push(this._layoutsSubmenu(item));
       } else {
@@ -156,7 +157,11 @@ class MkuiMenubar extends HTMLElement {
     const popup = document.createElement("div");
     popup.className = "mkui-menu-popup";
     popup._mkuiItems = [];   // [{ el, item, rec }] for `_refreshFlags`
-    for (const rec of visibleItems(this._expandItems(items), this._scope())) {
+    const recs = visibleItems(this._expandItems(items), this._scope());
+    // Any item that can be checked gives the whole popup a check gutter, so
+    // labels stay aligned whether or not theirs is ticked.
+    if (recs.some(r => "checked" in r.item)) popup.classList.add("mkui-menu-popup-checks");
+    for (const rec of recs) {
       const item = rec.item;
       if (item.sep) {
         const s = document.createElement("div");
@@ -172,6 +177,13 @@ class MkuiMenubar extends HTMLElement {
       if (rec.disabled) it.classList.add("mkui-menu-item-disabled");
       if (rec.title) it.title = rec.title;
       popup._mkuiItems.push({ el: it, item, rec });
+      if (item.checked) {
+        it.classList.add("mkui-menu-item-checked");
+        const ck = document.createElement("span");
+        ck.className = "mkui-menu-check";
+        ck.appendChild(icon("check"));
+        it.appendChild(ck);
+      }
       it.appendChild(document.createTextNode(item.label));
       if (hasSubmenu) {
         const arrow = document.createElement("span");
