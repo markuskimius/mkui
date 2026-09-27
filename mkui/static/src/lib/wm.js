@@ -17,7 +17,7 @@ export function isApple(nav = typeof navigator !== "undefined" ? navigator : nul
   return /Mac|iPhone|iPad|iPod/.test(nav?.platform || nav?.userAgent || "");
 }
 
-// Alt/Option keys: N front, P back; H/J/K/L or the arrows move the
+// Alt/Option keys: P front, N back; H/J/K/L or the arrows move the
 // virtual cursor (`point`), with shift the focused window (`move`).
 // Matched on `code`, the physical key: Option on a Mac turns H into "˙"
 // and N into a dead key. `{ op: "front" | "back" }`,
@@ -31,8 +31,8 @@ const DIRS = {
 export function wmKey(e) {
   if (!e?.altKey || e.ctrlKey || e.metaKey) return null;
   const code = e.code || (typeof e.key === "string" && e.key.startsWith("Arrow") ? e.key : "");
-  if (!e.shiftKey && code === "KeyN") return { op: "front" };
-  if (!e.shiftKey && code === "KeyP") return { op: "back" };
+  if (!e.shiftKey && code === "KeyP") return { op: "front" };
+  if (!e.shiftKey && code === "KeyN") return { op: "back" };
   const dir = DIRS[code];
   return dir ? { op: e.shiftKey ? "move" : "point", code, dir } : null;
 }

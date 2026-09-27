@@ -149,10 +149,10 @@ With sloppy focus on:
 | Alt/Option-click anywhere in the window | Brings it to the front, on release |
 | Shift+Alt/Option-click | Sends it to the back (a dialog that stays on top goes behind the other such dialogs, still over the ordinary windows; a modal one stays put) |
 | Alt/Option-drag anywhere in the window (Shift too, or not) | Moves it, as dragging its title bar does (snapping to other windows' edges; a tiled or maximized window returns to its own size) — without bringing it forward |
-| Alt/Option+N | Brings the focused window to the front |
-| Alt/Option+P | Sends it to the back; the focus goes to whatever is now under the pointer |
+| Alt/Option+P | Brings the focused window to the front |
+| Alt/Option+N | Sends it to the back; the focus goes to whatever is now under the pointer |
 | Alt/Option+H / J / K / L, or Alt/Option+arrows | Moves a **virtual mouse cursor** left / down / up / right (below) |
-| Alt/Option+Shift+H / J / K / L, or Alt/Option+Shift+arrows | Moves the focused window left / down / up / right. It doesn't snap; a tiled window becomes an ordinary one, a maximized one stays |
+| Alt/Option+Shift+H / J / K / L, or Alt/Option+Shift+arrows | Moves the focused window left / down / up / right, the virtual cursor (below) riding along on the same spot of the window — it appears if the real mouse had the part — while the focus stays with the window. It doesn't snap; a tiled window becomes an ordinary one, a maximized one stays |
 
 A page can't move the real mouse, so the movement keys drive a
 stand-in: the real cursor disappears and an arrow with a small accent

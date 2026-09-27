@@ -53,8 +53,8 @@ const { State } = await import("../mkui/static/src/core.js");
 // ── lib/wm.js ───────────────────────────────────────────────────────
 
 test("wmKey: alt/option moves the cursor, shift added the window; matched on the physical key", () => {
-  assert.deepEqual(wmKey({ altKey: true, code: "KeyN", key: "˜" }), { op: "front" }, "option+N is a dead key on a Mac");
-  assert.deepEqual(wmKey({ altKey: true, code: "KeyP", key: "π" }), { op: "back" });
+  assert.deepEqual(wmKey({ altKey: true, code: "KeyP", key: "π" }), { op: "front" });
+  assert.deepEqual(wmKey({ altKey: true, code: "KeyN", key: "˜" }), { op: "back" }, "option+N is a dead key on a Mac");
   for (const [code, dir] of [["KeyH", [-1, 0]], ["ArrowLeft", [-1, 0]], ["KeyJ", [0, 1]], ["ArrowDown", [0, 1]],
     ["KeyK", [0, -1]], ["ArrowUp", [0, -1]], ["KeyL", [1, 0]], ["ArrowRight", [1, 0]]]) {
     assert.deepEqual(wmKey({ altKey: true, code }), { op: "point", code, dir }, code);
@@ -448,19 +448,20 @@ const keyEv = (code, extra = {}) => ({ type: "keydown", altKey: true, code, key:
   preventDefault() { keyEv.prevented++; }, stopPropagation() {}, ...extra });
 keyEv.prevented = 0;
 
-test("keys: alt+N/P raise and lower; alt+shift+H/J/K/L and arrows move the focused frame", () => {
+test("keys: alt+P/N raise and lower; alt+shift+H/J/K/L and arrows move the focused frame", () => {
   const { ws, order } = makeWs();
   const key = (code, extra) => ws._onWmKey(keyEv(code, extra));
   const before = keyEv.prevented;
-  key("KeyP");
+  key("KeyN");
   assert.deepEqual(order(), ["a", "b", "c"], "off: nothing");
   assert.equal(keyEv.prevented, before);
   ws.setSloppyFocus(true);
   ws._focusFrame("a");
-  key("KeyN");
-  assert.deepEqual(order(), ["b", "c", "a"]);
+  ws._pointer = { x: 50, y: 50 };
   key("KeyP");
-  assert.deepEqual(order(), ["a", "b", "c"]);
+  assert.deepEqual(order(), ["b", "c", "a"], "P: to the front");
+  key("KeyN");
+  assert.deepEqual(order(), ["a", "b", "c"], "N: to the back");
   const spec = ws._frames.find((f) => f.id === "a");
   const x0 = spec.x * 1000, y0 = spec.y * 800;
   // Each a fresh press (released between): one 5 px step apiece.
@@ -475,7 +476,32 @@ test("keys: alt+N/P raise and lower; alt+shift+H/J/K/L and arrows move the focus
   assert.ok(Math.abs(spec.x * 1000 - (x0 + 15)) < 1e-9, "a repeat is not a step: the glide is");
   ws._onWmKeyUp({ altKey: false, code: "AltLeft", key: "Alt" });
   assert.equal(ws._mover.active, false, "alt let go ends it");
-  assert.equal(ws._vcOn, false, "a window move shows no cursor");
+  assert.equal(ws._vcOn, true, "a window move brings the virtual cursor");
+  assert.deepEqual(ws._pointer, { x: 65, y: 40 }, "which rode along: +15, -10, like the window");
+  ws._hideVCursor();
+});
+
+test("a window move carries the cursor as far as the window went, and keeps the focus", () => {
+  const { ws, el } = makeWs(["a", "b"]);
+  ws.setSloppyFocus(true);
+  ws._focusFrame("a");
+  const spec = ws._frames.find((f) => f.id === "a");
+  Object.assign(spec, { x: 0.002, y: 0.5, w: 0.3, h: 0.3 });        // 2 px off the left edge
+  ws._pointer = { x: 30, y: 500 };
+  // Whatever the cursor crosses, the window being moved keeps the focus.
+  document.elementFromPoint = () => ({ closest: () => el("b") });
+  ws._wmStep("move", { dx: -5, dy: 0 });
+  assert.equal(spec.x, 0, "the window stopped at the edge");
+  assert.deepEqual(ws._pointer, { x: 28, y: 500 }, "the cursor went only as far: 2 px");
+  assert.equal(ws._focusedId, "a", "the focus stays with the moving window");
+  ws._wmStep("move", { dx: -5, dy: 0 });
+  assert.deepEqual(ws._pointer, { x: 28, y: 500 }, "against the edge neither moves");
+  delete document.elementFromPoint;
+  ws._hideVCursor();
+  ws._maximized = { frameId: "a" };
+  ws._wmStep("move", { dx: 5, dy: 0 });
+  assert.equal(ws._vcOn, false, "a maximized window doesn't move, so no cursor appears");
+  assert.deepEqual(ws._pointer, { x: 28, y: 500 });
 });
 
 test("keys: text fields keep the arrows, and the letters on a Mac", (t) => {

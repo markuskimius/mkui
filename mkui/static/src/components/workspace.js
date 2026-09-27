@@ -697,9 +697,10 @@ class MkuiWorkspace extends HTMLElement {
   // raised by a still click on its title bar (pressed and released on the
   // same spot: a drag moves it where it is), a still `windowClick`-
   // modified click (shift added lowers; dragged, it moves the frame from
-  // anywhere in it) or Alt/Option+N (+P lowers). Alt/Option+H/J/K/L or
+  // anywhere in it) or Alt/Option+P (+N lowers). Alt/Option+H/J/K/L or
   // the arrows drive a virtual cursor that takes the pointer's part until
-  // the real mouse moves; with shift they move the focused frame.
+  // the real mouse moves; with shift they move the focused frame, the
+  // virtual cursor riding along.
   // lib/wm.js decides which, and how fast a held key goes.
 
   setSloppyFocus(on) {
@@ -910,9 +911,17 @@ class MkuiWorkspace extends HTMLElement {
   // A key's release can go unheard once the page loses focus.
   _onWmBlur = () => this._mover.clear();
 
+  // A cursor step moves the virtual cursor, focusing what it crosses. A
+  // window step carries the virtual cursor along — shown if the real one
+  // had the part — by as far as the window went, so it keeps its spot on
+  // the window; the focus stays with the window being moved.
   _wmStep(kind, { dx, dy }) {
-    if (kind === "point") this._moveVCursor(dx, dy);
-    else if (kind === "move") this.nudgeFrame(this._focusedId, dx, dy);
+    if (kind === "point") { this._moveVCursor(dx, dy); return; }
+    if (kind !== "move") return;
+    const went = this._nudge(this._focusedId, dx, dy);
+    if (!went) return;
+    this._showVCursor();
+    this._placeVCursor(this._pointer.x + went.dx, this._pointer.y + went.dy);
   }
 
   _runMover() {
@@ -941,10 +950,16 @@ class MkuiWorkspace extends HTMLElement {
   // a tiled frame leaves its tile state, a maximized one stays. True if
   // it could move.
   nudgeFrame(id, dx, dy) {
+    return this._nudge(id, dx, dy) != null;
+  }
+
+  // nudgeFrame's work: how far the frame went, `{ dx, dy }` — less than
+  // asked at a workspace edge — or null if it couldn't move.
+  _nudge(id, dx, dy) {
     const spec = this._frames.find((f) => f.id === id);
     const el = this._frameEls.get(id);
     const ws = { x: 0, y: 0, w: this.clientWidth, h: this.clientHeight };
-    if (!spec || !el || this.isMaximized(id) || !ws.w || !ws.h) return false;
+    if (!spec || !el || this.isMaximized(id) || !ws.w || !ws.h) return null;
     const r = fracToRect({ xFrac: spec.x, yFrac: spec.y, wFrac: spec.w, hFrac: spec.h }, ws);
     const clamped = clampToDock({ ...r, x: r.x + dx, y: r.y + dy }, ws);
     this._clearTileState(spec, el);
@@ -952,7 +967,7 @@ class MkuiWorkspace extends HTMLElement {
     spec.x = frac.xFrac; spec.y = frac.yFrac;
     spec.w = frac.wFrac; spec.h = frac.hFrac;
     applyFrameRect(el, clamped);
-    return true;
+    return { dx: clamped.x - r.x, dy: clamped.y - r.y };
   }
 
   closeFrame(id) {
