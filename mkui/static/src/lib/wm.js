@@ -209,6 +209,11 @@ export function installWm(app, ws, store, { auth = false } = {}) {
     const p = readWmPrefs(store, user());
     ws.setSloppyFocus(p.sloppyFocus ?? app.config?.app?.sloppyFocus === true);
     ws.setWindowClick(p.windowClick ?? "alt");
+    // The setters mirror into state only once the workspace has its app,
+    // which app.js hands it after this runs: a saved choice was in effect
+    // while `focus.sloppy` said nothing.
+    st.set("focus.sloppy", ws.sloppyFocus());
+    st.set("focus.windowClick", ws.windowClick());
   };
   load();
   if (auth) st.subscribe("auth.user", load);

@@ -666,6 +666,9 @@ test("installWm: the config's default until the user chooses; the actions choose
   ws = wsStub();
   installWm(app, ws, store);
   assert.equal(ws.on, true);
+  // in state from the start, though the workspace has no app yet to mirror through (the stub mirrors nothing)
+  assert.equal(app.state.get("focus.sloppy"), true);
+  assert.equal(app.state.get("focus.windowClick"), "alt");
   ({ app } = wmApp({}));
   ws = wsStub();
   installWm(app, ws, memStore());
@@ -683,6 +686,8 @@ test("installWm under a login: each user's own choice, re-read as the user chang
   app.state.set("auth.user", "ann");
   assert.equal(ws.on, true, "ann's");
   assert.equal(ws.mod, "ctrl+alt");
+  assert.equal(app.state.get("focus.sloppy"), true, "state follows the user too");
+  assert.equal(app.state.get("focus.windowClick"), "ctrl+alt");
   fire("focus.sloppy", false);
   assert.deepEqual(readWmPrefs(store, "ann"), { sloppyFocus: false, windowClick: "ctrl+alt" }, "saved under ann");
   assert.deepEqual(readWmPrefs(store, ""), {}, "not under the bare key");
