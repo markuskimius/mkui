@@ -1055,7 +1055,7 @@ the pane. Each surface supplies its own scope:
 | `rowStyle` | `row`, `state`, then the row's fields |
 | `enable.when` | `rows` (the rows the selection implies), `row` (the first), `cells`, `selection` (`count`, `rowCount`, `cellCount`, `unit`), `connected`, `state` |
 | menubar item `disabled`, `showWhen` | `state`, `app`, `pane` (`id`, `type`, `title`, `can`), `selection` (`count`, `focused`), `panes` — see [Menubar](#menubar) |
-| dialog `showWhen`, `compute`, `required`/`disabled`/`readonly`, `options`, field `value`, `label`, `title`, `footer.note`, … | the form's fields by name (number fields as numbers, blank → `NULL`), `form`, plus the opening context (`row`, `rows`, `cell`, `cells`, `selection`, `state`) |
+| dialog `showWhen`, `compute`, `required`/`disabled`/`readonly`, `options`, field `value`, `label`, `title`, `footer.note`, … | the form's fields by name (number fields as numbers, blank → `NULL`), `form`, plus the opening context (`row`, `rows`, `cell`, `cells`, `selection`, `state`). A field's name wins over the context's, so a field must not be named after one of those six if the dialog reads that name: a hidden `rows` holding the selection's ids makes `${LEN(rows)}` count the characters of the list. The dialog warns in the console, once, when one is |
 | action `data`, `dialogService.data`, `rowData` | `row`, `rows`, `cell`, `cells`, `selection`, `state` (raw row fields — never derived values) |
 | statusbar / text widget `text` | `state` — the widget re-renders when any `state.<path>` it reads changes |
 

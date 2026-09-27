@@ -2,7 +2,7 @@ import { resolveExpr, resolveObject, evalExpr, expr } from "../lib/expressions.j
 import { icon } from "../lib/icons.js";
 import { formatShortcut } from "../lib/shortcut.js";
 import { isRich, richText, renderRich } from "../lib/rich.js";
-import { statePaths } from "../lib/expressions.js";
+import { statePaths, compileExpr, compileTemplate } from "../lib/expressions.js";
 import { suppressSpec, suppressedAnswer, storeSuppressed, readSuppressed } from "../lib/dialogs.js";
 import { strptime, parseTime, inputToBound, boundToInput, inputTypeForKind, kindForFormat, detectTimeKind } from "../lib/timeparse.js";
 
@@ -120,6 +120,64 @@ export function specStatePaths(spec) {
   };
   walk(spec, null);
   return out;
+}
+
+// The names an opener hands a dialog — what it was opened on. The form's
+// fields shadow the context, by design, so a field named after one of them
+// takes the name from every expression in the dialog: a hidden `rows`
+// holding the selection's ids makes `${LEN(rows)}` in the title count the
+// characters of that list. Nothing fails — the value is merely another —
+// which is why it is said aloud.
+export const CONTEXT_NAMES = ["row", "rows", "cell", "cells", "selection", "state"];
+
+// Every name a spec's expressions read: `${…}` in any string, and the keys
+// that hold a bare expression. A lambda's parameters and LET's names are
+// its own, not the scope's.
+export function specNames(spec) {
+  const out = new Set();
+  const walk = (v, key) => {
+    if (typeof v === "string") {
+      const template = v.includes("${");
+      if (!template && !EXPR_KEYS.has(key)) return;
+      try {
+        for (const name of (template ? compileTemplate(v) : compileExpr(v)).fieldRefs) out.add(name);
+      } catch { /* a bad expression is reported where it is evaluated */ }
+    } else if (Array.isArray(v)) v.forEach((x) => walk(x, key));
+    else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, k);
+  };
+  walk(spec, null);
+  return out;
+}
+
+// The fields that take a context name away from expressions that read it:
+// named after one (`CONTEXT_NAMES`), in a spec that reads that name
+// somewhere. A form with a State field that never says `state` is left
+// alone; so is a custom key of the opener's own context.
+export function shadowedNames(spec) {
+  const named = new Set();
+  const walk = (items) => {
+    for (const item of items ?? []) {
+      if (!item || typeof item !== "object") continue;
+      if (Array.isArray(item.row)) walk(item.row);
+      if (Array.isArray(item.fields)) walk(item.fields);
+      if (typeof item.name === "string" && CONTEXT_NAMES.includes(item.name)) named.add(item.name);
+    }
+  };
+  walk(spec?.fields);
+  if (!named.size) return [];
+  const read = specNames(spec);
+  return CONTEXT_NAMES.filter((name) => named.has(name) && read.has(name));
+}
+
+const shadowWarned = new Set();
+function warnShadowed(spec) {
+  for (const name of shadowedNames(spec)) {
+    const key = `${spec.id ?? spec.title ?? ""}\u0000${name}`;
+    if (shadowWarned.has(key)) continue;
+    shadowWarned.add(key);
+    console.warn(`[mkui-dialog] ${JSON.stringify(String(spec.title ?? spec.id ?? "dialog"))}: the field "${name}" hides \`${name}\``
+      + ` — what the dialog was opened on — from every expression in it: \`${name}\` reads the field. Rename the field.`);
+  }
 }
 
 // `buttons = [{ id, label, kind, default, cancel, submit, op, copy, enable,
@@ -243,6 +301,7 @@ export function openDialog(spec, context, app, extra = {}) {
       }
     }
     flattenFields(spec.fields ?? []);
+    warnShadowed(spec);
 
     // Scope for every expression the form evaluates after it opens: the
     // fields at the root (shadowing the dialog context), plus `form`, the

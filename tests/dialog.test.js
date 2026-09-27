@@ -2124,3 +2124,75 @@ test("the checklist is a field type of its own, wired like a select", async () =
   }
   assert.match(css, /\.mkui-dialog-checkrow input\[type="checkbox"\] \{[^}]*width: auto/, "a dialog's inputs are full width: a tick box must not be");
 });
+
+/* ── A field named after what the dialog was opened on ─────────────── */
+
+import { CONTEXT_NAMES, shadowedNames, specNames } from "../mkui/static/src/widgets/mkui-dialog.js";
+
+// The dialog that showed it: a hidden field holding the selection's ids,
+// named `rows`, under a title that counts the selection.
+const SHADOWING = {
+  title: "Macro from ${IF(LEN(rows) > 1, CONCAT(LEN(rows), ' orders'), row.cl_ord_id)}",
+  fields: [
+    { name: "rows", type: "hidden", value: "${JOIN(MAP(rows, r -> r.id), ',')}" },
+    { name: "name", label: "Save as", value: "History of ${row.cl_ord_id}" },
+  ],
+};
+
+function warnings(fn) {
+  const orig = console.warn, warns = [];
+  console.warn = (...a) => warns.push(a.join(" "));
+  try { fn(); } finally { console.warn = orig; }
+  return warns;
+}
+
+test("specNames: the names a spec's expressions read, not the ones they bind", () => {
+  assert.deepEqual([...specNames(SHADOWING)].sort(), ["row", "rows"], "`r` is the lambda's own");
+  assert.deepEqual([...specNames({
+    title: "plain rows", message: "${LET(selection, 1, selection + n)}",
+    fields: [{ name: "f", showWhen: "state.ready and cells", label: "rows is no expression here", compute: "bad ((" }],
+    buttons: [{ label: "Go", enable: "typed == name" }],
+  })].sort(), ["cells", "n", "name", "state", "typed"]);
+  assert.deepEqual([...specNames(null)], []);
+});
+
+test("shadowedNames: a field named after the context, in a dialog that reads the name", () => {
+  assert.deepEqual(CONTEXT_NAMES, ["row", "rows", "cell", "cells", "selection", "state"]);
+  assert.deepEqual(shadowedNames(SHADOWING), ["rows"]);
+  // in a row, in a bounded section, and several at once — in the context's order
+  assert.deepEqual(shadowedNames({
+    title: "${state.user}: ${selection.count} of ${LEN(rows)}",
+    fields: [{ row: [{ name: "selection" }, { name: "qty" }] },
+             { group: "More", fields: [{ name: "state", label: "State" }] }, { name: "rows" }],
+  }), ["rows", "selection", "state"]);
+  // a State field in a form that never says `state` takes nothing from anyone
+  assert.deepEqual(shadowedNames({ title: "Ship to", fields: [{ name: "state", label: "State" }, { name: "zip" }] }), []);
+  // the name read is a lambda's parameter, not the context's
+  assert.deepEqual(shadowedNames({ title: "${JOIN(MAP(items, row -> row.id), ',')}", fields: [{ name: "row" }] }), []);
+  // the opener's own keys are its own business: only the names mkui hands out
+  assert.deepEqual(shadowedNames({ message: "Type ${name} to delete it.", fields: [{ name: "name" }] }), []);
+  assert.deepEqual(shadowedNames({ title: "No fields: ${LEN(rows)}" }), []);
+  assert.deepEqual(shadowedNames({}), []);
+});
+
+test("opening such a dialog says so, once, and changes nothing else", async () => {
+  const context = { row: { id: 3, cl_ord_id: "A3" }, rows: [{ id: 3, cl_ord_id: "A3" }, { id: 7, cl_ord_id: "A7" }] };
+  let d;
+  const first = warnings(() => { d = openForm({ ...SHADOWING, id: "shadow-once" }, context); });
+  assert.equal(first.length, 1);
+  assert.match(first[0], /^\[mkui-dialog\] "Macro from .*": the field "rows" hides `rows` — what the dialog was opened on — from every expression in it: `rows` reads the field\. Rename the field\.$/);
+  // the behaviour is the one it always had: the field's value is resolved against the context …
+  d.footer._ch.at(-1).fire("click");
+  const answer = await d.promise;
+  assert.equal(answer.rows, "3,7");
+  // … and the same dialog opened again does not repeat itself
+  assert.deepEqual(warnings(() => { openForm({ ...SHADOWING, id: "shadow-once" }, context); }), []);
+  // another dialog with the same mistake speaks for itself
+  assert.equal(warnings(() => { openForm({ ...SHADOWING, id: "shadow-other" }, context); }).length, 1);
+});
+
+test("a dialog that hides nothing says nothing", () => {
+  const renamed = { ...SHADOWING, id: "shadow-none",
+    fields: [{ ...SHADOWING.fields[0], name: "row_ids" }, SHADOWING.fields[1]] };
+  assert.deepEqual(warnings(() => { openForm(renamed, { row: { id: 3 }, rows: [{ id: 3 }] }); }), []);
+});
