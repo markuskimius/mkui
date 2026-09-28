@@ -190,6 +190,9 @@ test("needsClient: a submit service or an optionsFrom anywhere in the fields", (
   assert.equal(needsClient({ fields: [{ row: [{ name: "a" }, { name: "b", optionsFrom: { service: "s" } }] }] }), true);
   assert.equal(needsClient({ fields: [{ group: "G", fields: [{ name: "b", optionsFrom: { service: "s" } }] }] }), true);
   assert.equal(needsClient({ fields: [{ name: "a" }, { group: "G" }] }), false);
+  assert.equal(needsClient({ fields: [{ type: "grid", columns: [{ name: "leg", type: "select",
+    optionsFrom: { service: "instruments_list", value: "name" } }] }] }), true, "a grid column's options");
+  assert.equal(needsClient({ fields: [{ type: "grid", columns: [{ name: "symbol" }] }] }), false)
 });
 
 test("confirmSpec: modal unless it says otherwise; arm and enable ride OK; the rest passes through", () => {

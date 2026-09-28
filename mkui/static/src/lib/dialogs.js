@@ -197,7 +197,8 @@ export function aboutSpec(config, { version } = {}) {
 export function needsClient(spec) {
   if (spec?.submit?.service) return true;
   if ((Array.isArray(spec?.buttons) ? spec.buttons : []).some((b) => b?.submit?.service)) return true;
+  // A grid's columns are fields too: one fetching its options needs the server.
   const walk = (items) => (Array.isArray(items) ? items : []).some((i) =>
-    i?.optionsFrom || walk(i?.row) || walk(i?.fields));
+    i?.optionsFrom || walk(i?.row) || walk(i?.fields) || walk(i?.columns));
   return walk(spec?.fields);
 }

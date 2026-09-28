@@ -2196,3 +2196,45 @@ test("a dialog that hides nothing says nothing", () => {
     fields: [{ ...SHADOWING.fields[0], name: "row_ids" }, SHADOWING.fields[1]] };
   assert.deepEqual(warnings(() => { openForm(renamed, { row: { id: 3 }, rows: [{ id: 3 }] }); }), []);
 });
+
+test("a grid's value is its rows as JSON, blank rows left out, every cell a string", async () => {
+  const { gridColumns, gridParse, gridFormat } = await import("../mkui/static/src/widgets/mkui-dialog.js");
+  const columns = gridColumns({ columns: [{ name: "symbol" }, { name: "qty", type: "number" }, { label: "no name" }] });
+  assert.deepEqual(columns.map((c) => [c.name, c.type, c.label]), [["symbol", "text", "symbol"], ["qty", "number", "qty"]]);
+  assert.deepEqual(gridParse('[{"symbol":"IBM","qty":100}]'), [{ symbol: "IBM", qty: "100" }]);
+  assert.deepEqual(gridParse([{ symbol: "IBM", qty: null }]), [{ symbol: "IBM", qty: "" }], "an array is taken as it is");
+  assert.deepEqual(gridParse(""), []);
+  assert.deepEqual(gridParse("not json"), [], "what is not rows is no rows");
+  assert.deepEqual(gridParse('{"symbol":"IBM"}'), [], "one object is not a list of rows");
+  assert.deepEqual(gridParse('[1, "x", ["a"], {"symbol": "IBM"}]'), [{ symbol: "IBM" }]);
+  assert.equal(gridFormat([{ symbol: "IBM", qty: "100", extra: "x" }, { symbol: " ", qty: "" }], columns),
+    '[{"symbol":"IBM","qty":"100"}]', "the columns alone, and a row with nothing in it dropped");
+  assert.equal(gridFormat([], columns), "", "none is the empty string, so `required` means a row");
+  assert.equal(gridFormat([{ qty: "5" }], columns), '[{"symbol":"","qty":"5"}]', "every column, blank or not");
+});
+
+test("pasting lines or tabbed cells into a grid spreads them from the cell", async () => {
+  const { gridColumns, gridPaste } = await import("../mkui/static/src/widgets/mkui-dialog.js");
+  const columns = gridColumns({ columns: [{ name: "symbol" }, { name: "side" }, { name: "qty" }] });
+  assert.equal(gridPaste("IBM", columns, []), null, "one value is the cell's own paste");
+  assert.equal(gridPaste("IBM,buy,100", columns, []), null, "so is one line without a tab");
+  assert.deepEqual(gridPaste("IBM\tbuy\t100\r\nMSFT\tsell\t200\n", columns, []),
+    [{ symbol: "IBM", side: "buy", qty: "100" }, { symbol: "MSFT", side: "sell", qty: "200" }], "a spreadsheet's rows");
+  assert.deepEqual(gridPaste('IBM,buy,100\n"A, B",sell,"5"', columns, []),
+    [{ symbol: "IBM", side: "buy", qty: "100" }, { symbol: "A, B", side: "sell", qty: "5" }], "CSV, quotes and all");
+  const rows = [{ symbol: "ES", side: "buy", qty: "1" }];
+  assert.deepEqual(gridPaste("sell\t2\nbuy\t3", columns, rows, { row: 0, col: 1 }),
+    [{ symbol: "ES", side: "sell", qty: "2" }, { side: "buy", qty: "3" }], "from the cell pasted into, rows added");
+  assert.deepEqual(rows, [{ symbol: "ES", side: "buy", qty: "1" }], "the rows given are not changed");
+  assert.deepEqual(gridPaste("a\tb\tc\td\ne", columns, [], { row: 0, col: 2 }), [{ qty: "a" }, { qty: "e" }],
+    "cells past the last column are left out");
+});
+
+test("a grid select's pick fills its row, blank columns skipped", async () => {
+  const { gridFill } = await import("../mkui/static/src/widgets/mkui-dialog.js");
+  const row = { instrument: "ESZ6", symbol: "old", maturity: "202603" };
+  assert.deepEqual(gridFill(row, { symbol: "ES", maturity: "", strike: null }, { symbol: "symbol", maturity: "maturity",
+    strike_price: "strike" }), { instrument: "ESZ6", symbol: "ES", maturity: "202603" });
+  assert.deepEqual(row.symbol, "old", "a new row, not the old one changed");
+  assert.deepEqual(gridFill(row, null, { symbol: "symbol" }), row);
+});

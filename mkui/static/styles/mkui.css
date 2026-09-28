@@ -1748,6 +1748,50 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 .mkui-dialog-checkall { position: sticky; top: -2px; z-index: 1; background: var(--mkui-bg-alt); border-bottom: 1px solid var(--mkui-border); border-radius: 0; font-weight: 600; }
 .mkui-dialog-checknone { padding: 6px; color: var(--mkui-fg-mute); font-size: 12px; }
 
+/* `type = "grid"`: rows of cells under column heads, with row controls and Add row. */
+.mkui-dialog-grid {
+  box-sizing: border-box;
+  max-height: 320px;
+  overflow: auto;
+  padding: 2px;
+  background: var(--mkui-bg-alt);
+  border: 1px solid var(--mkui-border);
+  border-radius: 3px;
+}
+.mkui-dialog-grid:focus-within { border-color: var(--mkui-accent); }
+.mkui-dialog-field.mkui-dialog-invalid .mkui-dialog-grid { border-color: #c0392b; }
+.mkui-dialog-grid table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.mkui-dialog-grid th {
+  padding: 2px 4px;
+  color: var(--mkui-fg-mute);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mkui-dialog-grid th:last-child, .mkui-dialog-grid td.mkui-dialog-grid-ctl { width: 66px; }
+.mkui-dialog-grid td { padding: 1px 2px; }
+.mkui-dialog-field .mkui-dialog-grid input,
+.mkui-dialog-field .mkui-dialog-grid select { padding: 3px 5px; font-size: 12px; }
+.mkui-dialog-grid-ctl { white-space: nowrap; }
+.mkui-dialog-grid-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--mkui-fg-mute);
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.mkui-dialog-grid-btn:hover:not(:disabled) { background: var(--mkui-bg-hover, rgba(255, 255, 255, 0.06)); color: var(--mkui-fg); }
+.mkui-dialog-grid-btn:disabled { opacity: 0.3; cursor: default; }
+.mkui-dialog-grid-foot { display: flex; align-items: center; gap: 8px; padding: 4px 2px 2px; color: var(--mkui-fg-mute); font-size: 11px; }
+.mkui-dialog-grid-btn.mkui-dialog-grid-add { width: auto; height: auto; padding: 2px 8px; border: 1px solid var(--mkui-border); color: var(--mkui-fg); }
+
 /* A select with `size`: a list box, its rows scrolling inside the field. */
 .mkui-dialog-field select.mkui-dialog-listbox {
   height: auto;

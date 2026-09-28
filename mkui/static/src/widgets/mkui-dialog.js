@@ -365,6 +365,8 @@ export function openDialog(spec, context, app, extra = {}) {
         if (input) input.checked = next;
       } else if (field.type === "checklist") {
         next = input ? input._mkuiSet(v) : checklistFormat(checklistParse(v));
+      } else if (field.type === "grid") {
+        next = input ? input._mkuiSet(v) : gridFormat(v, gridColumns(field));
       } else if (field.type === "select") {
         if (input) {
           const want = v == null || v === "" ? "" : String(v);
@@ -546,6 +548,18 @@ export function openDialog(spec, context, app, extra = {}) {
           onFieldChange(field.name ?? null, []);
         }, () => resolveExpr(String(field.all), formScope()));
         wrapper.appendChild(input);
+      } else if (field.type === "grid") {
+        input = buildGrid(field, (value) => {
+          dirty.add(keyOf(field));
+          if (field.name) fieldState[field.name] = value;
+          onFieldChange(field.name ?? null, []);
+        }, async (of) => {
+          if (!extra.client?.request) return [];
+          const params = resolveObject(of.params ?? {}, { ...context, field: fieldState });
+          const resp = await extra.client.request(of.service, params);
+          return Array.isArray(resp) ? resp : resp?.rows ?? [];
+        });
+        wrapper.appendChild(input);
       } else if (field.type === "checkbox") {
         input = document.createElement("input");
         input.type = "checkbox";
@@ -598,6 +612,7 @@ export function openDialog(spec, context, app, extra = {}) {
       setFieldValue(field, defaultValue(field));
       if (field.type === "select") fetchOptionsFrom(input, field, extra);
       if (field.type === "checklist") fetchChecklist(input, field, extra);
+      if (field.type === "grid") input._mkuiLoad();
 
       return wrapper;
     }
@@ -1781,6 +1796,232 @@ function buildChecklist(field, onChange, allLabel) {
     return value();
   };
   box._mkuiValue = value;
+  render();
+  return box;
+}
+
+// -- grid --------------------------------------------------------------------
+// `type = "grid"`: rows of values under declared `columns` — the orders of a
+// list, the legs of a spread — added, deleted, moved and pasted. Like a
+// checklist its value is a string, so `required` (at least one row),
+// `remember`, a template's `fill` and the submit payload need nothing new:
+// the rows as a JSON array of objects keyed by column name, every cell a
+// string, rows with nothing in them left out, "" for none. A column is
+// `{ name, label, type = "text" | "number" | "select", options, optionsFrom,
+// fill, width, placeholder }`; a select column's `fill` copies the picked
+// row's columns into the same grid row's cells, as a select's does into the
+// form. Pasting two or more lines, or tab-separated cells, into a cell spreads
+// them over the rows and columns from there — tabs from a spreadsheet, else
+// commas (with "quoted, fields").
+
+export function gridColumns(field) {
+  return (Array.isArray(field?.columns) ? field.columns : [])
+    .filter((c) => c && c.name)
+    .map((c) => ({ ...c, type: c.type ?? "text", label: c.label ?? c.name }));
+}
+
+const gridCell = (v) => (v == null ? "" : String(v));
+
+export function gridParse(value) {
+  let rows = value;
+  if (typeof value === "string") {
+    if (value.trim() === "") return [];
+    try { rows = JSON.parse(value); } catch { return []; }
+  }
+  if (!Array.isArray(rows)) return [];
+  return rows.filter((r) => r && typeof r === "object" && !Array.isArray(r))
+    .map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, gridCell(v)])));
+}
+
+export function gridFormat(rows, columns = null) {
+  const names = columns ? columns.map((c) => c.name) : null;
+  const kept = gridParse(rows)
+    .map((r) => (names ? Object.fromEntries(names.map((n) => [n, gridCell(r[n])])) : r))
+    .filter((r) => Object.values(r).some((v) => v.trim() !== ""));
+  return kept.length ? JSON.stringify(kept) : "";
+}
+
+function splitCsv(line) {
+  const out = [];
+  let cell = "", quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"' && line[i + 1] === '"') { cell += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"' && cell.trim() === "") { cell = ""; quoted = true; }
+    else if (ch === ",") { out.push(cell.trim()); cell = ""; }
+    else cell += ch;
+  }
+  out.push(cell.trim());
+  return out;
+}
+
+// The rows after `text` is pasted at cell `at` ({ row, col }), or null when
+// the text is a plain value for the one cell: a single line with no tab.
+export function gridPaste(text, columns, rows, at = { row: 0, col: 0 }) {
+  const clean = String(text ?? "").replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+  if (!clean.includes("\n") && !clean.includes("\t")) return null;
+  const sep = clean.includes("\t") ? "\t" : ",";
+  const lines = clean.split("\n").filter((l) => l.trim() !== "");
+  const out = gridParse(rows).map((r) => ({ ...r }));
+  lines.forEach((line, n) => {
+    const cells = sep === "\t" ? line.split("\t").map((c) => c.trim()) : splitCsv(line);
+    const r = at.row + n;
+    while (out.length <= r) out.push({});
+    cells.forEach((v, k) => {
+      const col = columns[at.col + k];
+      if (col) out[r][col.name] = v;
+    });
+  });
+  return out;
+}
+
+// A select column's pick copied into its row: `fill = { cell: column }`,
+// blank columns skipped so the row keeps what they would clear.
+export function gridFill(row, pick, fill) {
+  const out = { ...row };
+  for (const [cell, column] of Object.entries(fill ?? {})) {
+    const v = pick?.[column];
+    if (v != null && v !== "") out[cell] = String(v);
+  }
+  return out;
+}
+
+function buildGrid(field, onChange, fetchRows) {
+  const columns = gridColumns(field);
+  const box = document.createElement("div");
+  box.className = "mkui-dialog-grid";
+  const minRows = Math.min(Math.max(Math.floor(Number(field.rows)) || 1, 1), 20);
+  const maxRows = Math.max(Math.floor(Number(field.max)) || 500, 1);
+  const options = {};                       // column name → [{ value, label }]
+  const picks = {};                         // column name → the rows optionsFrom returned
+  let rows = [];
+  for (const c of columns) if (c.type === "select" && !c.optionsFrom) options[c.name] = normalizeOptions(c.options);
+
+  const value = () => gridFormat(rows, columns);
+  const changed = () => onChange(value());
+  const shown = () => { while (rows.length < minRows) rows.push({}); return rows; };
+
+  function cellInput(c, r, i) {
+    let el;
+    if (c.type === "select") {
+      el = document.createElement("select");
+      const list = [{ value: "", label: c.optionsFrom ? emptyLabel({ optionsFrom: c.optionsFrom }) : "" },
+                    ...(options[c.name] ?? []).filter((o) => o.value !== "")];
+      for (const o of list) {
+        const opt = document.createElement("option");
+        opt.value = String(o.value);
+        opt.textContent = o.label ?? String(o.value);
+        el.appendChild(opt);
+      }
+      el.value = r[c.name] ?? "";
+      el.addEventListener("change", () => {
+        r[c.name] = el.value;
+        if (c.fill) {
+          const pick = (picks[c.name] ?? []).find((p) => String(p[c.optionsFrom?.value]) === el.value);
+          if (pick) { Object.assign(r, gridFill(r, pick, c.fill)); render(); }
+        }
+        changed();
+      });
+    } else {
+      el = document.createElement("input");
+      el.type = c.type === "number" ? "number" : "text";
+      if (c.placeholder) el.placeholder = c.placeholder;
+      el.value = r[c.name] ?? "";
+      el.addEventListener("input", () => { r[c.name] = el.value; changed(); });
+      el.addEventListener("paste", (e) => {
+        const text = e.clipboardData?.getData("text") ?? "";
+        const next = gridPaste(text, columns, rows, { row: i, col: columns.indexOf(c) });
+        if (!next) return;
+        e.preventDefault();
+        rows = next.slice(0, maxRows);
+        render();
+        changed();
+      });
+    }
+    el.setAttribute("aria-label", `${c.label} ${i + 1}`);
+    return el;
+  }
+
+  function button(text, title, onClick, disabled = false) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "mkui-dialog-grid-btn";
+    b.textContent = text;
+    b.title = title;
+    b.disabled = disabled;
+    b.addEventListener("click", onClick);
+    return b;
+  }
+
+  function render() {
+    const table = document.createElement("table");
+    const head = document.createElement("tr");
+    for (const c of columns) {
+      const th = document.createElement("th");
+      th.textContent = c.label;
+      if (c.width) th.style.width = typeof c.width === "number" ? `${c.width * 100}%` : c.width;
+      head.appendChild(th);
+    }
+    head.appendChild(document.createElement("th"));
+    const thead = document.createElement("thead");
+    thead.appendChild(head);
+    const tbody = document.createElement("tbody");
+    const list = shown();
+    list.forEach((r, i) => {
+      const tr = document.createElement("tr");
+      for (const c of columns) {
+        const td = document.createElement("td");
+        td.appendChild(cellInput(c, r, i));
+        tr.appendChild(td);
+      }
+      const ctl = document.createElement("td");
+      ctl.className = "mkui-dialog-grid-ctl";
+      const move = (to) => () => { const [row] = rows.splice(i, 1); rows.splice(to, 0, row); render(); changed(); };
+      ctl.append(
+        button("↑", "Move up", move(i - 1), i === 0),
+        button("↓", "Move down", move(i + 1), i === list.length - 1),
+        button("✕", "Delete row", () => { rows.splice(i, 1); render(); changed(); }),
+      );
+      tr.appendChild(ctl);
+      tbody.appendChild(tr);
+    });
+    table.append(thead, tbody);
+    const foot = document.createElement("div");
+    foot.className = "mkui-dialog-grid-foot";
+    const add = button("+ Add row", "Add a row", () => {
+      rows.push({});
+      render();
+      box.querySelector("tbody tr:last-child input, tbody tr:last-child select")?.focus();
+    }, rows.length >= maxRows);
+    add.classList.add("mkui-dialog-grid-add");
+    const count = document.createElement("span");
+    const n = gridParse(value()).length;
+    count.textContent = n ? `${n} row${n === 1 ? "" : "s"}` : (field.none ?? "");
+    foot.append(add, count);
+    box.replaceChildren(table, foot);
+  }
+
+  box._mkuiSet = (v) => { rows = gridParse(v).slice(0, maxRows); render(); return value(); };
+  box._mkuiValue = value;
+  box._mkuiLoad = async () => {
+    for (const c of columns) {
+      if (c.type !== "select" || !c.optionsFrom) continue;
+      try {
+        const list = await fetchRows(c.optionsFrom);
+        picks[c.name] = list;
+        options[c.name] = list.map((p) => ({
+          value: String(p[c.optionsFrom.value] ?? ""),
+          label: String(p[c.optionsFrom.label] ?? p[c.optionsFrom.value] ?? ""),
+        }));
+      } catch (e) {
+        console.error("[mkui-dialog] grid optionsFrom error:", e);
+      }
+    }
+    render();
+  };
   render();
   return box;
 }
