@@ -19,6 +19,16 @@ import {
 
 const AS_OF_TITLE = "Show the table as it stood at a moment";
 
+// A find pattern: plain text (escaped) or a regular expression, case-
+// insensitive unless asked. Shared by the find strip and the column picker.
+// { re, error }: both null for an empty query.
+function compilePattern(q, { regex = false, matchCase = false } = {}) {
+  if (q === "") return { re: null, error: null };
+  const src = regex ? q : q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  try { return { re: new RegExp(src, matchCase ? "" : "i"), error: null }; }
+  catch (e) { return { re: null, error: e.message }; }
+}
+
 function midnightRef() {
   const d = new Date();
   const m = new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -2400,12 +2410,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function compileFind() {
-    findRe = null; findError = null;
-    if (findQuery !== "") {
-      const src = findRegex ? findQuery : findQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      try { findRe = new RegExp(src, findCase ? "" : "i"); }
-      catch (e) { findError = e.message; }
-    }
+    ({ re: findRe, error: findError } = compilePattern(findQuery, { regex: findRegex, matchCase: findCase }));
     if (findInput) {
       findInput.classList.toggle("mkui-find-error", findError != null);
       findInput.title = findError ?? "";
@@ -4339,6 +4344,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const c = visCols[vi];
       const th = document.createElement("th");
       th.dataset.col = c;
+      th.title = `Column ${vi + 1} · ${label(c)}${label(c) !== c ? ` (${c})` : ""}`;
 
       const filterBtn = document.createElement("span");
       filterBtn.className = "mkui-filter-btn";
@@ -4747,28 +4753,82 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   /* ── Column picker ────────────────────────────────────────────────── */
 
   // The one place columns are chosen in bulk, opened from the Columns
-  // button. A checkbox per known column — tick to show (back at its
-  // place), untick to hide, applied at once — flat in `columns` order, or
+  // button. Two views on a switch at the top, kept while the table lives:
+  //
+  // All: a checkbox per known column — tick to show (back at its place),
+  // untick to hide, applied at once — flat in `columns` order, or
   // sectioned by group when groups are configured: each section has a
   // tri-state checkbox that shows or hides the whole group (bounded, its
   // size printed beside it, one more click reverses it) and collapses
-  // unless it holds a shown column. The actions row under the search
-  // mirrors the filter dropdown's: "Show all" / "Hide all" / "Reset" (to
-  // the configured list). While a query narrows the list the first two
-  // scope themselves to the matches ("Show N matching"). Unscoped "Show
-  // all" is two-step — click, then confirm within a few seconds — since on
-  // a wide table an accidental show-all is the one action that hurts;
-  // "Hide all" keeps the last column, and is where a user starts when
-  // picking a few columns out of hundreds. The picker survives the
-  // re-render each change causes — it lives in its own slot and re-syncs.
+  // unless it holds a shown column. A shown column carries its display
+  // position (the header tooltip's number).
+  //
+  // Order: the shown columns alone, numbered in display order, reordered
+  // by dragging a row's grip or Shift+↑/↓ (Shift+Home/End: to the top or
+  // bottom; Alt+arrows are the window manager's). Unticking hides.
+  //
+  // The search box finds (the default: every row stays, the matches tint,
+  // Enter / ↓ and Shift+Enter / ↑ step through them, wrapping, opening a
+  // folded group for the current one) or, with the funnel on, filters the
+  // list as before. Either way the pattern is the find strip's: plain text,
+  // or a regular expression with that toggle on, case-insensitive, against
+  // the label and the name (a group label match takes its whole group).
+  // Ctrl/Cmd+Enter goes to the current match in the table — showing it
+  // first if it is hidden — and closes the picker.
+  //
+  // The actions row under the search mirrors the filter dropdown's: "Show
+  // all" / "Hide all" / "Reset" (to the configured list). While a query
+  // is typed the first two scope themselves to the matches ("Show N
+  // matching"). Unscoped "Show all" is two-step — click, then confirm
+  // within a few seconds — since on a wide table an accidental show-all is
+  // the one action that hurts; "Hide all" keeps the last column, and is
+  // where a user starts when picking a few columns out of hundreds. The
+  // picker survives the re-render each change causes — it lives in its own
+  // slot and re-syncs.
   let picker = null;
   let pickerCleanup = null;
   const pickerExpanded = new Map(); // group label -> expanded, kept while the table lives
+  let pickerView = "all";           // "all" | "order"
+  let pickerFilters = false;        // the search filters the list (else it finds)
+  let pickerRegex = false;
   const SHOW_ALL_ARM_MS = 4000;
 
   function closePicker() {
     if (picker) { rememberListHeight(picker, "picker"); picker.remove(); picker = null; }
     if (pickerCleanup) { pickerCleanup(); pickerCleanup = null; }
+  }
+
+  // Move a shown column to just before `before` (null: the end) in the
+  // display order. Names held ahead of the data keep their places.
+  function moveColumnBefore(col, before) {
+    const cur = visible ?? visibleColumns();
+    const list = cur.filter((c) => c !== col);
+    const i = before == null ? list.length : list.indexOf(before);
+    if (i < 0 || !cur.includes(col)) return;
+    list.splice(i, 0, col);
+    if (sameList(list, cur)) return;
+    visible = list;
+    applyVisible();
+  }
+
+  // Put the table's cursor on a column (shown first if hidden), keeping
+  // its row and the selection, and scroll it into view.
+  function goToColumn(col) {
+    if (!visibleColumns().includes(col)) showColumn(col);
+    if (!visibleColumns().includes(col)) return false;
+    closePicker();
+    if (view.length) {
+      const idx = focusCell ? keyViewIdx(focusCell.key, focusCell.idx) : 0;
+      focusCell = { key: view[idx], col, idx };
+      broadcastRetracted = false;
+      refreshSelectionStyles();
+      scrollFocusIntoView();
+    } else {
+      const th = thead.querySelector?.(`th[data-col="${CSS.escape(col)}"]`);
+      if (th) scrollHeaderIntoView(th);
+    }
+    scrollHost.focus?.();
+    return true;
   }
 
   function openColumnsPicker(anchorEl) {
@@ -4781,15 +4841,59 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     dd.style.position = "fixed";
     dd.style.zIndex = "10001";
 
+    // All | Order — the filter dropdown's Values | Range tabs.
+    const views = document.createElement("div");
+    views.className = "mkui-filter-modes mkui-columns-views";
+    const viewTab = (v, text, tip) => {
+      const b = document.createElement("span");
+      b.className = "mkui-filter-mode";
+      b.dataset.view = v;
+      b.textContent = text;
+      b.title = tip;
+      b.addEventListener("click", () => {
+        if (pickerView === v) return;
+        pickerView = v;
+        sync();
+        search.focus?.();
+      });
+      return b;
+    };
+    const viewTabs = [
+      viewTab("all", "All", "Every column: tick to show"),
+      viewTab("order", "Order", "The shown columns in display order: drag, or Shift+↑/↓, to reorder"),
+    ];
+    views.append(...viewTabs);
+    dd.appendChild(views);
+
     const title = document.createElement("div");
     title.className = "mkui-columns-title";
     dd.appendChild(title);
 
+    const searchRow = document.createElement("div");
+    searchRow.className = "mkui-columns-searchrow";
     const search = document.createElement("input");
     search.type = "text";
     search.className = "mkui-filter-search";
-    search.placeholder = "Search columns…";
-    dd.appendChild(search);
+    const count = document.createElement("span");
+    count.className = "mkui-find-count mkui-columns-findcount";
+    const toggle = (name, tip, isOn, set) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "mkui-find-toggle";
+      b.title = tip;
+      b.appendChild(icon(name));
+      b.addEventListener("click", () => {
+        set(!isOn());
+        sync();
+        search.focus?.();
+      });
+      return b;
+    };
+    const regexBtn = toggle("regex", "Regular expression", () => pickerRegex, (v) => { pickerRegex = v; });
+    const filterBtn = toggle("funnel", "Filter the list to the matches (off: find, stepping with Enter)",
+      () => pickerFilters, (v) => { pickerFilters = v; });
+    searchRow.append(search, count, regexBtn, filterBtn);
+    dd.appendChild(searchRow);
 
     // Show all / Hide all / Reset — the filter dropdown's row, for columns.
     const actions = document.createElement("div");
@@ -4807,19 +4911,22 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
     const list = document.createElement("div");
     list.className = "mkui-filter-list";
-    const items = [];  // { col, cb, el }
+    const items = [];  // { col, cb, el, pos }
     const groups = []; // { label, columns, cb, head, body, caret, count }
     const makeItem = (c, parent) => {
       const lbl = document.createElement("label");
       lbl.className = "mkui-filter-item";
+      lbl.dataset.col = c;
       const cb = document.createElement("input");
       cb.type = "checkbox";
       cb.dataset.col = c;
+      const pos = document.createElement("span");
+      pos.className = "mkui-columns-pos";
       const txt = document.createElement("span");
       txt.textContent = label(c);
-      lbl.append(cb, txt);
+      lbl.append(cb, pos, txt);
       parent.appendChild(lbl);
-      items.push({ col: c, cb, el: lbl });
+      items.push({ col: c, cb, el: lbl, pos });
       cb.addEventListener("change", () => {
         if (cb.checked) showColumn(c); else hideColumn(c);
         sync(); // a refused hide (last column) snaps the box back
@@ -4841,15 +4948,15 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         const txt = document.createElement("span");
         txt.className = "mkui-columns-group-label";
         txt.textContent = g.label;
-        const count = document.createElement("span");
-        count.className = "mkui-columns-count";
-        head.append(caret, cb, txt, count);
+        const n = document.createElement("span");
+        n.className = "mkui-columns-count";
+        head.append(caret, cb, txt, n);
         const body = document.createElement("div");
         body.className = "mkui-columns-items";
         sec.append(head, body);
         list.appendChild(sec);
         for (const c of g.columns) makeItem(c, body);
-        const gr = { label: g.label, columns: g.columns, cb, head, body, caret, count, el: sec };
+        const gr = { label: g.label, columns: g.columns, cb, head, body, caret, count: n, el: sec };
         groups.push(gr);
         if (!pickerExpanded.has(g.label))
           pickerExpanded.set(g.label, g.columns.some((c) => visibleColumns().includes(c)));
@@ -4866,7 +4973,129 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     } else {
       for (const c of dataColumns()) makeItem(c, list);
     }
+    const allNodes = [...list.children];
     dd.appendChild(list);
+
+    // The Order view's rows, rebuilt on every sync from the display order.
+    let orderRows = []; // { col, el }
+    function buildOrder(vis, hit, q) {
+      orderRows = [];
+      for (let i = 0; i < vis.length; i++) {
+        const c = vis[i];
+        const row = document.createElement("div");
+        row.className = "mkui-columns-oitem";
+        row.dataset.col = c;
+        row.tabIndex = 0;
+        const grip = document.createElement("span");
+        grip.className = "mkui-columns-grip";
+        grip.title = "Drag to reorder";
+        grip.appendChild(icon("grip"));
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = true;
+        cb.dataset.col = c;
+        const pos = document.createElement("span");
+        pos.className = "mkui-columns-pos";
+        pos.textContent = String(i + 1);
+        const txt = document.createElement("span");
+        txt.textContent = label(c);
+        row.append(grip, cb, pos, txt);
+        cb.addEventListener("change", () => { hideColumn(c); sync(); });
+        grip.addEventListener("pointerdown", (e) => {
+          if (e.button !== 0) return;
+          e.preventDefault?.();
+          startRowDrag(c, e);
+        });
+        row.addEventListener("keydown", (e) => onRowKey(c, e));
+        const shown = pickerFilters ? hit.has(c) : true;
+        row.style.display = shown ? "" : "none";
+        row.classList.toggle("mkui-columns-match", !!q && hit.has(c));
+        row.classList.toggle("mkui-columns-current", !pickerFilters && !!q && c === findAt);
+        list.appendChild(row);
+        orderRows.push({ col: c, el: row });
+      }
+    }
+    const shownRows = () => orderRows.filter((r) => r.el.style.display !== "none");
+    // The column a drop before `r` (null: after the last shown row) lands before.
+    const beforeOf = (rows, i) => {
+      if (i < rows.length) return rows[i].col;
+      const vis = visibleColumns();
+      const last = rows.at(-1)?.col;
+      return last == null ? null : vis[vis.indexOf(last) + 1] ?? null;
+    };
+    function refocusRow(c) {
+      orderRows.find((r) => r.col === c)?.el.focus?.();
+    }
+    function onRowKey(c, e) {
+      const rows = shownRows();
+      const i = rows.findIndex((r) => r.col === c);
+      if (i < 0) return;
+      const meta = e.ctrlKey || e.metaKey;
+      let before;
+      if (e.key === "Enter" && meta) { e.preventDefault?.(); goToColumn(c); return; }
+      if (e.altKey || meta) return;
+      if (e.shiftKey && e.key === "ArrowUp") { if (i === 0) return; before = rows[i - 1].col; }
+      else if (e.shiftKey && e.key === "ArrowDown") { if (i === rows.length - 1) return; before = beforeOf(rows, i + 2); }
+      else if (e.shiftKey && e.key === "Home") before = visibleColumns()[0];
+      else if (e.shiftKey && e.key === "End") before = null;
+      else if (!e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        e.preventDefault?.();
+        rows[i + (e.key === "ArrowUp" ? -1 : 1)]?.el.focus?.();
+        if (e.key === "ArrowUp" && i === 0) search.focus?.();
+        return;
+      } else return;
+      e.preventDefault?.();
+      e.stopPropagation?.();
+      if (before !== c) moveColumnBefore(c, before);
+      sync();
+      refocusRow(c);
+    }
+    function startRowDrag(c, e) {
+      const pid = e.pointerId;
+      const startY = e.clientY;
+      let active = false, target = null;
+      const mark = (t) => {
+        for (const r of orderRows) r.el.classList.remove("mkui-columns-drop-before", "mkui-columns-drop-after");
+        if (!t) return;
+        if (t.after) t.row.el.classList.add("mkui-columns-drop-after");
+        else t.row.el.classList.add("mkui-columns-drop-before");
+      };
+      const onMove = (e2) => {
+        if (e2.pointerId !== pid) return;
+        if (!active) {
+          if (Math.abs(e2.clientY - startY) < 4) return;
+          active = true;
+          orderRows.find((r) => r.col === c)?.el.classList.add("mkui-columns-dragging");
+        }
+        const rows = shownRows();
+        let i = rows.findIndex((r) => {
+          const b = r.el.getBoundingClientRect();
+          return e2.clientY < (b.top + b.bottom) / 2;
+        });
+        if (i < 0) i = rows.length;
+        target = { i, rows, row: rows[Math.min(i, rows.length - 1)], after: i >= rows.length };
+        mark(target);
+      };
+      const cleanup = () => {
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", onUp);
+        document.removeEventListener("pointercancel", onCancel);
+      };
+      const onCancel = () => { cleanup(); mark(null); sync(); };
+      const onUp = (e2) => {
+        if (e2.pointerId !== pid) return;
+        cleanup();
+        mark(null);
+        if (active && target) {
+          const before = beforeOf(target.rows, target.i);
+          if (before !== c) moveColumnBefore(c, before);
+        }
+        sync();
+      };
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp);
+      document.addEventListener("pointercancel", onCancel);
+    }
 
     let armed = false, armTimer = null;
     const disarm = () => {
@@ -4875,23 +5104,52 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     };
     reset.addEventListener("click", () => { disarm(); resetVisible(); sync(); });
 
-    // The query narrows items; a group label match keeps its whole group.
-    const query = () => String(search.value ?? "").trim().toLowerCase();
-    const matches = (c, q) => !q || label(c).toLowerCase().includes(q) || c.toLowerCase().includes(q);
+    // The query narrows (or marks) items; a group label match keeps its
+    // whole group.
+    let re = null, reError = null, compiledFor = null;
+    const query = () => String(search.value ?? "").trim();
+    const compile = () => {
+      const key = `${pickerRegex ? "/" : "="}${query()}`;
+      if (key === compiledFor) return;
+      compiledFor = key;
+      ({ re, error: reError } = compilePattern(query(), { regex: pickerRegex }));
+      search.classList.toggle("mkui-find-error", reError != null);
+      search.title = reError ?? "";
+    };
+    const matches = (c) => re.test(label(c)) || re.test(c);
     const matching = () => {
-      const q = query();
-      if (!q) return items.map((it) => it.col);
+      compile();
+      if (!query()) return items.map((it) => it.col);
+      if (!re) return [];
       const out = [];
       if (groups.length) {
         for (const g of groups) {
-          const whole = g.label.toLowerCase().includes(q);
-          for (const c of g.columns) if (whole || matches(c, q)) out.push(c);
+          const whole = re.test(g.label);
+          for (const c of g.columns) if (whole || matches(c)) out.push(c);
         }
       } else {
-        for (const it of items) if (matches(it.col, q)) out.push(it.col);
+        for (const it of items) if (matches(it.col)) out.push(it.col);
       }
       return out;
     };
+    // Find: the current match (a column name), in the shown list's order.
+    let findAt = null;
+    const findOrder = () => {
+      const hit = new Set(matching());
+      return (pickerView === "order" ? visibleColumns() : items.map((it) => it.col)).filter((c) => hit.has(c));
+    };
+    function findGoTo(dir) {
+      const order = findOrder();
+      if (!order.length) { findAt = null; sync(); return; }
+      const i = order.indexOf(findAt);
+      findAt = i < 0 ? order[dir > 0 ? 0 : order.length - 1] : order[(i + dir + order.length) % order.length];
+      sync();
+      currentEl()?.scrollIntoView?.({ block: "nearest" });
+    }
+    const currentEl = () => findAt == null ? null
+      : (pickerView === "order" ? orderRows.find((r) => r.col === findAt)?.el
+                                : items.find((it) => it.col === findAt)?.el);
+
     showAll.addEventListener("click", () => {
       if (query()) { showColumns(matching()); sync(); return; } // scoped: bounded, one click
       if (!visible) return; // already showing everything
@@ -4906,27 +5164,65 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     });
     hideAll.addEventListener("click", () => { disarm(); hideColumns(matching()); sync(); });
 
+    let shownView = null;
     function sync() {
-      const vis = new Set(visibleColumns());
+      const visList = visibleColumns();
+      const vis = new Set(visList);
       const all = dataColumns();
       const q = query();
       const hit = new Set(matching());
+      const finding = !pickerFilters && !!q;
+      if (finding && findAt != null && !hit.has(findAt)) findAt = null;
+      if (!finding) findAt = null;
+      const order = pickerView === "order";
+      for (const b of viewTabs) b.classList.toggle("active", b.dataset.view === pickerView);
+      regexBtn.classList.toggle("active", pickerRegex);
+      filterBtn.classList.toggle("active", pickerFilters);
+      search.placeholder = pickerFilters ? "Filter columns…" : "Find a column…";
       title.textContent = `Columns · ${vis.size} of ${all.length} shown`;
-      for (const it of items) {
-        it.cb.checked = vis.has(it.col);
-        it.el.style.display = hit.has(it.col) ? "" : "none";
+
+      if (order) {
+        list.innerHTML = "";
+        buildOrder(visList, hit, q);
+      } else {
+        if (shownView !== "all") {
+          list.innerHTML = "";
+          orderRows = [];
+          for (const n of allNodes) list.appendChild(n);
+        }
+        for (const it of items) {
+          it.cb.checked = vis.has(it.col);
+          const at = visList.indexOf(it.col);
+          it.pos.textContent = at < 0 ? "" : String(at + 1);
+          it.el.style.display = pickerFilters && !hit.has(it.col) ? "none" : "";
+          it.el.classList.toggle("mkui-columns-match", !!q && hit.has(it.col));
+          it.el.classList.toggle("mkui-columns-current", finding && it.col === findAt);
+        }
+        for (const g of groups) {
+          const shown = g.columns.filter((c) => vis.has(c)).length;
+          g.cb.checked = shown === g.columns.length;
+          g.cb.indeterminate = shown > 0 && shown < g.columns.length;
+          g.count.textContent = `${shown} of ${g.columns.length}`;
+          const any = g.columns.some((c) => hit.has(c));
+          g.el.style.display = pickerFilters && !any ? "none" : "";
+          const open = pickerFilters && q ? true
+            : !!pickerExpanded.get(g.label) || (findAt != null && g.columns.includes(findAt));
+          g.body.hidden = !open;
+          g.caret.classList.toggle("open", open);
+        }
       }
-      for (const g of groups) {
-        const shown = g.columns.filter((c) => vis.has(c)).length;
-        g.cb.checked = shown === g.columns.length;
-        g.cb.indeterminate = shown > 0 && shown < g.columns.length;
-        g.count.textContent = `${shown} of ${g.columns.length}`;
-        const any = g.columns.some((c) => hit.has(c));
-        g.el.style.display = any ? "" : "none";
-        const open = q ? true : !!pickerExpanded.get(g.label);
-        g.body.hidden = !open;
-        g.caret.classList.toggle("open", open);
+      shownView = pickerView;
+
+      const n = findOrder().length;
+      count.hidden = !finding;
+      if (finding) {
+        const at = findAt == null ? -1 : findOrder().indexOf(findAt);
+        count.textContent = reError != null ? "Invalid pattern"
+          : !n ? "No matches"
+          : at >= 0 ? `${at + 1} of ${n}` : `${n} match${n === 1 ? "" : "es"}`;
+        count.classList.toggle("mkui-find-none", reError != null || n === 0);
       }
+
       const toShow = [...hit].filter((c) => !vis.has(c)).length;
       const toHide = [...hit].filter((c) => vis.has(c)).length;
       if (q) {
@@ -4945,7 +5241,29 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       reset.classList.toggle("mkui-filter-action-off", isDefaultVisible());
     }
     sync();
-    search.addEventListener("input", sync);
+    // Typing finds the first match (or keeps the current one if it still
+    // matches); filtering just narrows.
+    search.addEventListener("input", () => {
+      sync();
+      if (!pickerFilters && query() && findAt == null) findGoTo(1);
+    });
+    search.addEventListener("keydown", (e) => {
+      const meta = e.ctrlKey || e.metaKey;
+      if (e.key === "Enter" && meta) {
+        e.preventDefault?.();
+        const target = findAt ?? (query() ? findOrder()[0] : null);
+        if (target != null) goToColumn(target);
+        return;
+      }
+      if (pickerFilters || e.altKey || meta) {
+        if (e.key === "ArrowDown" && pickerView === "order") { e.preventDefault?.(); shownRows()[0]?.el.focus?.(); }
+        return;
+      }
+      if (e.key === "Enter" || e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault?.();
+        findGoTo(e.key === "ArrowUp" || (e.key === "Enter" && e.shiftKey) ? -1 : 1);
+      }
+    });
     dd.addEventListener("keydown", (e) => {
       if (e.key === "Escape") { closePicker(); e.stopPropagation(); }
     });

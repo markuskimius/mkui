@@ -5945,7 +5945,36 @@ function pickerOf(host) {
     showAll: () => act(showEl), showAllText: () => showEl.textContent, showAllOff: () => off(showEl),
     hideAll: () => act(hideEl), hideAllText: () => hideEl.textContent, hideAllOff: () => off(hideEl),
     showMatching: () => act(showEl), hideMatching: () => act(hideEl),
-    search: (q) => { const s = byClass(dd, "mkui-filter-search")[0]; s.value = q; s._ev.input[0](); },
+    // The search box finds by default; `search` narrows (the funnel on),
+    // `find` marks and steps.
+    input: byClass(dd, "mkui-filter-search")[0],
+    filterBtn: byClass(dd, "mkui-find-toggle").find(b => b.title.startsWith("Filter")),
+    regexBtn: byClass(dd, "mkui-find-toggle").find(b => b.title === "Regular expression"),
+    get filtering() { return this.filterBtn.classList.contains("active"); },
+    setFilter(on) { if (this.filtering !== on) this.filterBtn._ev.click[0](); },
+    type(q) { this.input.value = q; this.input._ev.input[0](); },
+    search(q) { this.setFilter(true); this.type(q); },
+    find(q) { this.setFilter(false); this.type(q); },
+    key(key, mods = {}) {
+      const e = { key, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, preventDefault() {}, stopPropagation() {}, ...mods };
+      for (const fn of this.input._ev.keydown ?? []) fn(e);
+    },
+    get count() { const c = byClass(dd, "mkui-find-count mkui-columns-findcount")[0]; return c.hidden ? null : c.textContent; },
+    // Rows marked as matches / the current one, by column (All or Order view).
+    marked: () => [...byClass(dd, "mkui-filter-item"), ...byClass(dd, "mkui-columns-oitem")]
+      .filter(e => e.classList.contains("mkui-columns-match")).map(e => e.dataset.col),
+    current: () => [...byClass(dd, "mkui-filter-item"), ...byClass(dd, "mkui-columns-oitem")]
+      .find(e => e.classList.contains("mkui-columns-current"))?.dataset.col ?? null,
+    positions: () => byClass(dd, "mkui-filter-item").map(l => [l.dataset.col, l._ch[1].textContent]),
+    view(v) { byClass(dd, "mkui-filter-mode").find(b => b.dataset.view === v)._ev.click[0](); },
+    get activeView() { return byClass(dd, "mkui-filter-mode").find(b => b.classList.contains("active"))?.dataset.view; },
+    orderRows: () => byClass(dd, "mkui-columns-oitem"),
+    order: () => byClass(dd, "mkui-columns-oitem").filter(r => r.style.display !== "none")
+      .map(r => [r._ch[2].textContent, r.dataset.col]),
+    rowKey(col, key, mods = {}) {
+      const r = byClass(dd, "mkui-columns-oitem").find(e => e.dataset.col === col);
+      r._ev.keydown[0]({ key, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, preventDefault() {}, stopPropagation() {}, ...mods });
+    },
   };
 }
 function colOps(host, col) {
@@ -6121,6 +6150,159 @@ test("search narrows the list and offers Show / Hide N matching, scoped to the m
   p.search("q");
   p.hideMatching();
   assert.deepEqual(headerCols(host), ["qty"], "hiding every visible column keeps the first");
+});
+
+test("headers and the picker number the shown columns in display order", async () => {
+  const host = await filteredTable({}, { labels: { qty: "Quantity" }, visible: ["qty", "name", "ts"] });
+  assert.deepEqual(getThs(host).map(th => th.title),
+    ["Column 1 · Quantity (qty)", "Column 2 · name", "Column 3 · ts"]);
+  columnsBtn(host).click();
+  const p = pickerOf(host);
+  assert.equal(p.activeView, "all");
+  assert.deepEqual(p.positions(), [["name", "2"], ["status", ""], ["qty", "1"], ["ts", "3"]],
+    "a hidden column has no number");
+  p.toggle("status"); // back after its config neighbour, name
+  assert.deepEqual(headerCols(host), ["qty", "name", "status", "ts"]);
+  assert.deepEqual(p.positions(), [["name", "2"], ["status", "3"], ["qty", "1"], ["ts", "4"]]);
+  assert.equal(getThs(host)[2].title, "Column 3 · status");
+});
+
+test("the picker's search finds by default: the list stays whole, Enter steps the matches", async () => {
+  const host = await filteredTable({}, { labels: { qty: "Quantity" }, visible: ["name"] });
+  columnsBtn(host).click();
+  const p = pickerOf(host);
+  assert.equal(p.filtering, false, "find is the default");
+  assert.equal(p.count, null, "no count without a query");
+  p.find("t");
+  assert.deepEqual(p.visibleItems(), ["name", "status", "qty", "ts"], "nothing is filtered out");
+  assert.deepEqual(p.marked(), ["status", "qty", "ts"]);
+  assert.equal(p.current(), "status", "typing lands on the first match");
+  assert.equal(p.count, "1 of 3");
+  assert.deepEqual(p.texts(), ["Show 3 matching", "Hide 0 matching", "Reset"], "actions stay scoped to the matches");
+  p.key("Enter");
+  assert.equal(p.current(), "qty");
+  p.key("ArrowDown");
+  p.key("Enter");
+  assert.equal(p.current(), "status", "wraps");
+  p.key("Enter", { shiftKey: true });
+  assert.equal(p.current(), "ts", "Shift+Enter goes back, wrapping");
+  p.key("ArrowUp");
+  assert.equal(p.current(), "qty");
+  p.find("ts");
+  assert.equal(p.current(), "ts", "the current match is dropped once it no longer matches");
+  p.find("zzz");
+  assert.equal(p.count, "No matches");
+  assert.equal(p.current(), null);
+  // Regex: plain text by default, a pattern with the toggle on.
+  p.find("^(name|ts)$");
+  assert.deepEqual(p.marked(), []);
+  p.regexBtn._ev.click[0]();
+  assert.deepEqual(p.marked(), ["name", "ts"]);
+  p.find("(");
+  assert.equal(p.count, "Invalid pattern");
+  assert.ok(p.input.classList.contains("mkui-find-error"));
+  // The funnel switches to filtering; the choice is kept while the table lives.
+  p.setFilter(true);
+  p.type("^s");
+  assert.deepEqual(p.visibleItems(), ["status"]);
+  assert.equal(p.count, null);
+  columnsBtn(host).click(); columnsBtn(host).click();
+  assert.equal(pickerOf(host).filtering, true);
+});
+
+test("find opens a folded group for the current match and folds it again after", async () => {
+  const host = await groupedTable({ visible: ["name"] });
+  columnsBtn(host).click();
+  const p = pickerOf(host);
+  assert.equal(p.group("Numbers").open, false);
+  p.find("qty");
+  assert.equal(p.current(), "qty");
+  assert.equal(p.group("Numbers").open, true, "opened for the current match");
+  assert.equal(p.group("Other").shown, true, "find hides no section");
+  p.find("");
+  assert.equal(p.group("Numbers").open, false, "folded again");
+});
+
+test("Ctrl/Cmd+Enter goes to the found column in the table, showing it if hidden", async () => {
+  const host = await filteredTable({}, { visible: ["name", "qty"] });
+  const tr = dataRows(host)[1];
+  pointerDown(tr, tr._ch.findIndex(td => td.dataset.col === "name"));
+  assert.equal(focusedCellOf(host)?.split(":")[1], "name");
+  const row = focusedCellOf(host).split(":")[0];
+  columnsBtn(host).click();
+  let p = pickerOf(host);
+  p.find("qty");
+  p.key("Enter", { ctrlKey: true });
+  assert.equal(pickerOf(host), null, "the picker closes");
+  assert.equal(focusedCellOf(host), `${row}:qty`, "same row, the found column");
+  columnsBtn(host).click();
+  p = pickerOf(host);
+  p.find("ts");
+  p.key("Enter", { metaKey: true });
+  assert.deepEqual(headerCols(host), ["name", "qty", "ts"], "a hidden match is shown first");
+  assert.equal(focusedCellOf(host), `${row}:ts`);
+});
+
+test("the Order view reorders the shown columns: Shift+arrows, Shift+Home/End, and dragging", async () => {
+  const host = await filteredTable({}, { visible: ["name", "status", "qty"] });
+  columnsBtn(host).click();
+  const p = pickerOf(host);
+  p.view("order");
+  assert.equal(p.activeView, "order");
+  assert.deepEqual(p.order(), [["1", "name"], ["2", "status"], ["3", "qty"]], "shown columns only, numbered");
+  p.rowKey("name", "ArrowDown", { shiftKey: true });
+  assert.deepEqual(headerCols(host), ["status", "name", "qty"]);
+  assert.deepEqual(p.order(), [["1", "status"], ["2", "name"], ["3", "qty"]]);
+  p.rowKey("qty", "ArrowUp", { shiftKey: true });
+  assert.deepEqual(headerCols(host), ["status", "qty", "name"]);
+  p.rowKey("name", "Home", { shiftKey: true });
+  assert.deepEqual(headerCols(host), ["name", "status", "qty"]);
+  p.rowKey("name", "End", { shiftKey: true });
+  assert.deepEqual(headerCols(host), ["status", "qty", "name"]);
+  p.rowKey("status", "ArrowUp", { altKey: true, shiftKey: true });
+  assert.deepEqual(headerCols(host), ["status", "qty", "name"], "Alt+arrows are the window manager's");
+  assert.deepEqual(host._paneEl._columns.get(), ["status", "qty", "name"], "a reorder is the visible list");
+
+  // Drag by the grip: past the middle of every row drops at the end.
+  const grip = (col) => p.orderRows().find(r => r.dataset.col === col)._ch[0];
+  const drag = (col, y) => {
+    grip(col)._ev.pointerdown[0]({ button: 0, pointerId: 1, clientY: 0, preventDefault() {} });
+    document._ev.pointermove.at(-1)({ pointerId: 1, clientY: y });
+    document._ev.pointerup.at(-1)({ pointerId: 1, clientY: y });
+  };
+  drag("status", 50);
+  assert.deepEqual(headerCols(host), ["qty", "name", "status"]);
+  drag("status", 5); // above the first row's middle
+  assert.deepEqual(headerCols(host), ["status", "qty", "name"]);
+  const moves = (document._ev.pointermove ?? []).length;
+  grip("name")._ev.pointerdown[0]({ button: 2, pointerId: 1, clientY: 0, preventDefault() {} });
+  assert.equal((document._ev.pointermove ?? []).length, moves, "only the primary button drags");
+
+  // Unticking hides; the view is kept while the table lives.
+  const cb = p.orderRows().find(r => r.dataset.col === "qty")._ch[1];
+  cb.checked = false; cb._ev.change[0]();
+  assert.deepEqual(headerCols(host), ["status", "name"]);
+  assert.deepEqual(p.order(), [["1", "status"], ["2", "name"]]);
+  columnsBtn(host).click(); columnsBtn(host).click();
+  assert.equal(pickerOf(host).activeView, "order");
+  pickerOf(host).view("all");
+  assert.equal(pickerOf(host).cbs.length, 4, "back to every column");
+});
+
+test("in the Order view the search finds or filters the shown columns", async () => {
+  const host = await filteredTable({}, { visible: ["name", "status", "qty", "ts"] });
+  columnsBtn(host).click();
+  const p = pickerOf(host);
+  p.view("order");
+  p.find("s");
+  assert.deepEqual(p.marked(), ["status", "ts"]);
+  assert.equal(p.current(), "status");
+  p.search("s");
+  assert.deepEqual(p.order(), [["2", "status"], ["4", "ts"]], "filtered rows keep their display numbers");
+  p.rowKey("ts", "ArrowUp", { shiftKey: true });
+  assert.deepEqual(headerCols(host), ["name", "ts", "status", "qty"], "moves past the shown neighbour");
+  p.rowKey("ts", "ArrowDown", { shiftKey: true });
+  assert.deepEqual(headerCols(host), ["name", "status", "ts", "qty"]);
 });
 
 test("Reset returns to the configured list; Hide all keeps one column; Show all takes a click and a confirm", async () => {

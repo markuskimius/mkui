@@ -895,6 +895,48 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   border-left: 2px solid color-mix(in srgb, var(--mkui-accent) 45%, var(--mkui-border));
 }
 .mkui-columns-items .mkui-filter-item { padding-left: 12px; }
+/* Search row: the box, the find count, and the find strip's toggles
+   (regular expression; the funnel = filter the list instead of finding). */
+.mkui-columns-searchrow { display: flex; align-items: center; gap: 2px; padding-right: 6px; }
+.mkui-columns-searchrow .mkui-filter-search { flex: 1; width: auto; min-width: 0; margin: 6px 4px 6px 8px; }
+.mkui-columns-searchrow .mkui-find-count { min-width: 0; margin: 0 2px; font-size: 11px; }
+.mkui-filter-search.mkui-find-error { border-color: #e05252; }
+/* A shown column's display position (the header tooltip's number); blank
+   for a hidden one, the width kept so labels line up. */
+.mkui-columns-pos {
+  min-width: 2.5ch;
+  text-align: right;
+  color: var(--mkui-fg-mute);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+/* Find marks: the label tinted as in the table's find; the current match
+   gets the cursor's accent ring. */
+.mkui-columns-match > span:last-child {
+  background: var(--mkui-match-bg);
+  border-radius: 2px;
+}
+.mkui-columns-current { box-shadow: inset 0 0 0 1px var(--mkui-accent); }
+/* Order view: one row per shown column, a grip to drag it; the drop
+   point is a 2px accent line on the row edge it lands at. */
+.mkui-columns-oitem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+  padding: 3px 8px 3px 4px;
+  outline: none;
+}
+.mkui-columns-oitem:hover, .mkui-columns-oitem:focus { background: var(--mkui-bg-hover); }
+.mkui-columns-oitem input[type="checkbox"] { margin: 0; accent-color: var(--mkui-accent); }
+.mkui-columns-oitem > span:last-child { white-space: nowrap; }
+.mkui-columns-grip { display: inline-flex; color: var(--mkui-fg-mute); cursor: grab; touch-action: none; }
+.mkui-columns-grip .mkui-icon { width: 12px; height: 12px; }
+.mkui-columns-dragging { opacity: 0.5; }
+.mkui-columns-drop-before { box-shadow: inset 0 2px 0 var(--mkui-accent); }
+.mkui-columns-drop-after { box-shadow: inset 0 -2px 0 var(--mkui-accent); }
 /* The first section starts right under the search/bulk row: no double rule. */
 .mkui-filter-list > .mkui-columns-group:first-child .mkui-columns-group-head { border-top: none; }
 /* The value / column list opens at its content height; mkio-table caps it

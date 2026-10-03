@@ -29,6 +29,8 @@ const OUTLINE = {
   // Find strip on tables (Lucide search / regex / case-sensitive).
   search: ["M11 3a8 8 0 1 1 0 16 8 8 0 0 1 0-16z", "m21 21-4.3-4.3"],
   regex: ["M17 3v10", "m12.67 5.5 8.66 5", "m12.67 10.5 8.66-5", "M9 17a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-2z"],
+  // Column picker: Find vs Filter (Lucide funnel).
+  funnel: ["M10 20a1 1 0 0 0 .55.9l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .52-1.34L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.74 1.67l7.23 7.99A2 2 0 0 1 10 14z"],
   "case-sensitive": ["m3 15 4-8 4 8", "M4 13h6", "M18 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6z", "M21 9v6"],
   // Sort group icon on the table toolbar chips (Lucide arrow-up-down).
   sort: ["m21 16-4 4-4-4", "M17 20V4", "m3 8 4-4 4 4", "M7 4v16"],
@@ -84,6 +86,10 @@ const FILLED = {
   // The keyboard's virtual mouse cursor (workspace, sloppy focus): an
   // arrow with its tip at (5, 2).
   pointer: ["M5 2v18.5l4.6-4.4 3.3 7.2 3.2-1.5-3.2-7H19.5z"],
+  // Drag handle (column picker's Order view): two columns of three dots.
+  grip: ["M9 4a1.6 1.6 0 1 1 0 3.2A1.6 1.6 0 0 1 9 4z", "M15 4a1.6 1.6 0 1 1 0 3.2A1.6 1.6 0 0 1 15 4z",
+         "M9 10.4a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2z", "M15 10.4a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2z",
+         "M9 16.8a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2z", "M15 16.8a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2z"],
   filter: ["M4.5 6h15v3h-15z", "M4.5 10.5h15v3h-15z", "M4.5 15h15v3h-15z"],
 };
 
