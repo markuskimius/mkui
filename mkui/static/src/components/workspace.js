@@ -53,6 +53,18 @@ function isEditable(t) {
 const PANE_COMMON_KEYS = new Set(["title", "type", "widgets", "content"]);
 const PANE_RUNTIME_KEYS = new Set(["titled", "baseTitle"]);
 
+// Layout state key → the pane hook that takes it, if the pane has it.
+const PANE_STATE_SETTERS = [
+  ["filters", (el) => el._filters && ((v) => el._filters.set(v))],
+  ["sort", (el) => el._sort && ((v) => el._sort.set(v))],
+  ["visible", (el) => el._columns && ((v) => el._columns.set(v))],
+  ["columnNumbers", (el) => el._columns?.setNumbers && ((v) => el._columns.setNumbers(v))],
+  ["widths", (el) => el._columns?.setWidths && ((v) => el._columns.setWidths(v))],
+  ["panelWidths", (el) => el._panel && ((v) => el._panel.set(v))],
+  ["link", (el) => el._link && ((v) => el._link.set(v))],
+  ["record", (el) => el._record && ((v) => el._record.follow(v))],
+];
+
 class MkuiWorkspace extends HTMLElement {
   constructor() {
     super();
@@ -421,6 +433,19 @@ class MkuiWorkspace extends HTMLElement {
     if (srcId == null || !el?._history) return false;
     if (keys && keys.length) this.selectPane(srcId, keys);
 
+    const id = this._historyPane(srcId);
+    this.showPane(id);
+    // An open pane re-reads the selection; a pane built just now reads it
+    // as it starts, and its factory may still be awaiting its client.
+    const hist = this._paneEls.get(id);
+    if (hist?._record) hist._record.refresh();
+    else hist?._ready?.then(() => hist._record?.refresh());
+    return true;
+  }
+
+  // A table's history pane: made the first time it is asked for, under an
+  // id derived from the table's.
+  _historyPane(srcId) {
     const id = `_history:${srcId}`;
     if (!this._panes.has(id)) {
       // Just "History": the record it lands on names the tab from there
@@ -429,13 +454,26 @@ class MkuiWorkspace extends HTMLElement {
       // the end of a crowded tab bar.
       this.registerPane(id, { type: "mkio-history", source: srcId, title: "History" });
     }
-    this.showPane(id);
-    // An open pane re-reads the selection; a pane built just now reads it
-    // as it starts, and its factory may still be awaiting its client.
-    const hist = this._paneEls.get(id);
-    if (hist?._record) hist._record.refresh();
-    else hist?._ready?.then(() => hist._record?.refresh());
-    return true;
+    return id;
+  }
+
+  // A layout saved with a history window in it — open, or closed and
+  // remembered — names a pane no config declares, which a restore at
+  // startup would drop as unknown. Make those it names whose table is
+  // still here and still has a history to read.
+  _adoptHistoryPanes(layout) {
+    const ids = new Set();
+    const walk = (n) => {
+      if (typeof n === "string") ids.add(n);
+      else if (n && Array.isArray(n.children)) n.children.forEach(walk);
+    };
+    if (Array.isArray(layout?.frames)) for (const f of layout.frames) walk(f?.layout);
+    if (layout?.panes && typeof layout.panes === "object") Object.keys(layout.panes).forEach((id) => ids.add(id));
+    for (const id of ids) {
+      if (!id.startsWith("_history:") || this._panes.has(id)) continue;
+      const src = id.slice("_history:".length);
+      if (this._panes.get(src)?.history) this._historyPane(src);
+    }
   }
 
   setApp(app) {
@@ -1133,8 +1171,11 @@ class MkuiWorkspace extends HTMLElement {
   }
 
   // A pane's view state through its hooks: what a layout carries for it.
+  // State a layout brought for a hook the pane does not have yet (a
+  // history pane's table, built with its first record) is still the
+  // pane's: carried on until it can be applied.
   _paneState(el) {
-    const st = {};
+    const st = { ...(el._pendingView ?? {}) };
     if (el._filters) st.filters = el._filters.get();
     if (el._sort) st.sort = el._sort.get();
     if (el._columns) st.visible = el._columns.get();
@@ -1153,21 +1194,30 @@ class MkuiWorkspace extends HTMLElement {
   // Saved view state onto a pane — once its hooks exist: a pane built just
   // now by an async factory (the startup restore, a first `showPane`) gets
   // them only when `_ready` resolves; a later application supersedes a
-  // pending one.
+  // pending one (`_panel` is not a sign of a built pane: a history pane
+  // has it before its factory's first await). What finds no hook to take it waits in `_pendingView`
+  // for `_applyPendingState`.
   _applyPaneState(el, st) {
-    const apply = () => {
-      if ("filters" in st) el._filters?.set(st.filters);
-      if ("sort" in st) el._sort?.set(st.sort);
-      if ("visible" in st) el._columns?.set(st.visible);
-      if ("columnNumbers" in st) el._columns?.setNumbers?.(st.columnNumbers);
-      if ("widths" in st) el._columns?.setWidths?.(st.widths);
-      if ("panelWidths" in st) el._panel?.set(st.panelWidths);
-      if ("link" in st) el._link?.set(st.link);
-      if ("record" in st) el._record?.follow(st.record);
-    };
     const gen = el._viewGen = (el._viewGen ?? 0) + 1;
-    if (el._filters || el._sort || el._columns || el._link || el._record || el._panel || !el._ready) apply();
+    el._pendingView = null;
+    const apply = () => {
+      const left = {};
+      for (const [key, set] of PANE_STATE_SETTERS) {
+        if (!(key in st)) continue;
+        const fn = set(el);
+        if (fn) fn(st[key]); else left[key] = st[key];
+      }
+      el._pendingView = Object.keys(left).length ? left : null;
+    };
+    if (el._filters || el._sort || el._columns || el._link || el._record || !el._ready) apply();
     else el._ready.then(() => { if (el._viewGen === gen) apply(); });
+  }
+
+  // A pane that has just grown hooks (a history pane, its table built)
+  // takes the saved state that was waiting for them.
+  _applyPendingState(el) {
+    const st = el?._pendingView;
+    if (st) this._applyPaneState(el, st);
   }
 
   // Remember a pane's window as it closes: the frame it sat in and the
@@ -1218,6 +1268,7 @@ class MkuiWorkspace extends HTMLElement {
   // `dropped` lists pane ids the app no longer has. A layout with no
   // frames is applied as such.
   setLayout(layout, opts = {}) {
+    this._adoptHistoryPanes(layout);
     const clean = sanitizeLayout(layout, this._panes);
     const reopen = opts.reopen === true;
     const before = this._openPaneIds();

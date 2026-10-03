@@ -791,7 +791,10 @@ A saved layout holds every dockable frame — position and size as
 workspace fractions, z-order, and its tab tree with the selected tabs —
 plus, for each table open in one, its filters, sort order, visible
 columns, and the column widths you chose (dragged, or fitted with a
-double-click; a history window's panel columns too). It never holds a paged table's position, and dialogs are never
+double-click; a history window's panel columns too). A table's history
+window is saved like any other and comes back at startup, waiting for a
+record; its versions table takes its saved sort, filters, columns and
+widths when the first record builds it. It never holds a paged table's position, and dialogs are never
 part of it.
 
 **Closed windows are remembered.** Closing a window doesn't throw its

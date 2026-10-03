@@ -28,25 +28,25 @@ Paths are under `mkui/static/src/` unless they start `mkui/`.
 - `components/frame.js` — frame chrome, internal tree rendering, splitter drag; defines `<mkui-pane>`
 - `components/app.js` — shell
 - `core.js` — `App`, `State` (reactive store), the registries, expression re-exports
-- `lib/expr.js` — mkio's expression language, vendored verbatim from `mkio/client/mkio-expr.mjs` (`tests/vendor-sync.test.js`); never edit: change mkio and re-copy
+- `lib/expr.js` — mkio's expression language, vendored from `mkio/client/mkio-expr.mjs` (`tests/vendor-sync.test.js`); never edit: re-copy
 - `lib/expressions.js` — mkui's wrapper over it (see Expressions)
 - `lib/rich.js` — the `rich` expression type, the `mkui` UI function library, `renderRich` (DOM), `richToHTML` (clipboard)
-- `lib/timeparse.js` — time parsing (`detectTimeKind`, `parseTime`, `refToDate`/`dateToRef`, `PRESETS`)
+- `lib/timeparse.js` — time parsing (`parseTime`, `refToDate`/`dateToRef`, `PRESETS`)
 - `lib/icons.js` — `icon(name)`: vendored SVG paths
-- `lib/copy.js` — clipboard grids: `gridToTSV` (CRLF, Excel quoting), `gridToHTML`
+- `lib/copy.js` — clipboard grids: `gridToTSV`, `gridToHTML`
 - `lib/history.js` — versioned tables (`__history`): capabilities, the `history` spec, the chain logic (`tests/history.test.js`)
 - `lib/subject.js` — which record a window is about (see Detail windows). `lib/subject-ui.js` — the detail panes' pin/chip strip; `lib/record-config.js` — the form behind its config button
 - `lib/chips.js` — `makeChip`/`makeGroup`/`armedClear`; `lib/styles.js` — `compileStyler`/`applyStyle`; shared by table and record panes
-- `widgets/mkio-record.js` — `mkio-record`: one record as a field list
+- `widgets/mkio-record.js` — one record as a field list
 - `widgets/mkio-table.js` — `mkio-table`: live tables over mkio services
 - `widgets/mkui-dialog.js` — `openDialog()`: live-updating forms and message boxes (see Dialogs)
 - `auth.js` — the login dialog (`showLogin()`)
 - `layouts.js` / `lib/layouts.js` — `LayoutManager`; the format, the stores (see Saved layouts)
-- `lib/links.js` — `LinkHub` (see Table linking)
-- `lib/verify.js` — why a server was rejected; the mkio floor (see mkio connection state)
-- `lib/connection.js` — the outage treatment
-- `lib/mkio-url.js` — `resolveMkioUrl`: `mkio.url` read against the page (`tests/mkio-url.test.js`)
-- `mkui/control.py` — the Control channel's server side
+- `lib/links.js` — `LinkHub`
+- `lib/verify.js` — why a server was rejected; the mkio floor
+- `lib/connection.js` — outage treatment
+- `lib/mkio-url.js` — `resolveMkioUrl`: `mkio.url` read against the page
+- `mkui/control.py` — Control channel, server side
 - `mkui/static/styles/mkui.css` — default theme, CSS properties
 
 ## Commands
@@ -190,7 +190,7 @@ Undo/redo: `history.undo` / `history.redo` (`{ service, op, label }`) put a butt
 
 Unknown pane keys (console error and a strip on the pane): `mkui/static/src/components/CLAUDE.md`.
 
-`[layouts]` enables it (`store` `"mkio"` when `mkio.url`, else `"local"`). `workspace.getLayout()` → `{ version, frames, focused, panes }`: docked frames in z-order (no noDock/stayOnTop); open panes' view state via the `_filters`/`_sort`/`_columns`/`_link`/`_panel` hooks (`_paneState`), never a paged table's position. `sanitizeLayout` throws on a non-layout and drops unknown panes; `LAYOUT_VERSION` per major. `setLayout(layout, { reopen })` diffs open panes: stayers move, leavers get `mkui-pane-close`, arrivals `mkui-pane-open` then saved state (`_applyPaneState`, waits on `el._ready`). `resetLayout()` = `frames`, `reopen: true`. **Closed windows**: `_closed` (paneId → `{ frame: { x, y, w, h, title }, …state }`) is written by `_rememberPane` as a dockable frame closes (`closeFrame`, `setLayout`'s leavers: state read before the close event), rides `panes[id]` in the layout (`frame` marks it; the sanitizer keeps known panes'), is overlaid by a restored layout's entries, consumed by `showPane` (opens at `frame`, applies the state after `mkui-pane-open`; else the cascade), cleared by `reopen` and `unregisterPane`. `LayoutManager`: owner = `auth.user` if authenticated, else `""`; `save` skips a `sameLayout` to the newest, prunes by `retained`; stores *resolve* with error envelopes. `_loadFrames`: `restoreLatest()` within `timeout`, else `frames` (not `open === false`).
+`[layouts]` enables it (`store` `"mkio"` when `mkio.url`, else `"local"`). `workspace.getLayout()` → `{ version, frames, focused, panes }`: docked frames in z-order (no noDock/stayOnTop); open panes' view state via the `_filters`/`_sort`/`_columns`/`_link`/`_panel` hooks (`_paneState`), never a paged table's position. `sanitizeLayout` throws on a non-layout and drops unknown panes; `LAYOUT_VERSION` per major. `setLayout(layout, { reopen })` diffs open panes: stayers move, leavers get `mkui-pane-close`, arrivals `mkui-pane-open` then saved state (`_applyPaneState`, waits on `el._ready`; hookless state waits in `el._pendingView`, still saved, for `_applyPendingState`: a history pane's table). `_adoptHistoryPanes` registers a layout's `_history:<src>` panes. `resetLayout()` = `frames`, `reopen: true`. **Closed windows**: `_closed` (paneId → `{ frame: { x, y, w, h, title }, …state }`) is written by `_rememberPane` as a dockable frame closes (`closeFrame`, `setLayout`'s leavers: state read before the close event), rides `panes[id]` in the layout (`frame` marks it; the sanitizer keeps known panes'), is overlaid by a restored layout's entries, consumed by `showPane` (opens at `frame`, applies the state after `mkui-pane-open`; else the cascade), cleared by `reopen` and `unregisterPane`. `LayoutManager`: owner = `auth.user` if authenticated, else `""`; `save` skips a `sameLayout` to the newest, prunes by `retained`; stores *resolve* with error envelopes. `_loadFrames`: `restoreLatest()` within `timeout`, else `frames` (not `open === false`).
 
 ## Dialogs
 

@@ -396,6 +396,8 @@ registerPaneType("mkio-history", async (spec, app, host) => {
       sort: MKIO_FIELDS.version,   // oldest first: the chain in the order it happened
       rowColumn: false,
     }, app, tableHost);
+    // A layout restored before the table existed left its state waiting.
+    getWs()?._applyPendingState?.(paneEl);
     watchTable();
     return true;
   }

@@ -417,6 +417,72 @@ test("chosen column widths ride the layout: a table's as widths, a history panel
   });
 });
 
+// A history pane's table is built with its first record: state a layout
+// brought for hooks that are not there yet waits, and is still the pane's.
+test("state for a hook the pane lacks waits in the layout until _applyPendingState finds the hook", () => {
+  const ws = makeWorkspace([{ id: "main", ...rect, layout: tabs("a", "b") }]);
+  const a = ws._paneEls.get("a");
+  a._panel = hook(null);
+  const saved = { panelWidths: { name: 150, diff: [null, null], blame: [null, null] }, sort: "-v", widths: { v: 90 }, visible: ["v"] };
+  ws.setLayout({ frames: ws.getLayout().frames, panes: { a: saved } });
+  assert.deepEqual(a._panel.sets, [saved.panelWidths], "what has a hook is applied");
+  assert.deepEqual(a._pendingView, { sort: "-v", widths: { v: 90 }, visible: ["v"] });
+  assert.deepEqual(ws.getLayout().panes.a, saved, "a save before the table exists keeps it");
+
+  a._sort = hook(null);
+  a._columns = hook(null);
+  a._columns.widthSets = [];
+  a._columns.getWidths = () => a._columns.widthSets.at(-1) ?? null;
+  a._columns.setWidths = (w) => a._columns.widthSets.push(w);
+  ws._applyPendingState(a);
+  assert.deepEqual(a._sort.sets, ["-v"]);
+  assert.deepEqual(a._columns.sets, [["v"]]);
+  assert.deepEqual(a._columns.widthSets, [{ v: 90 }]);
+  assert.deepEqual(a._panel.sets.length, 1, "applied once");
+  assert.equal(a._pendingView, null);
+  ws._applyPendingState(a);
+  assert.equal(a._sort.sets.length, 1, "nothing waiting, nothing done");
+  // a later layout supersedes what was waiting
+  delete a._sort;
+  ws.setLayout({ frames: ws.getLayout().frames, panes: { a: { sort: "v" } } });
+  ws.setLayout({ frames: ws.getLayout().frames, panes: { a: { visible: null } } });
+  assert.equal(a._pendingView, null);
+});
+
+test("a layout naming a table's history window makes the pane, so a restore at startup keeps it", () => {
+  const config = { panes: { a: { history: { feed: "a_history" } }, b: {}, c: {}, d: {} } };
+  const ws = makeWorkspace([{ id: "main", ...rect, layout: tabs("a") }], config);
+  const layout = {
+    version: LAYOUT_VERSION,
+    frames: [
+      { id: "main", ...rect, layout: tabs("a") },
+      { id: "h", ...rect, layout: tabs("_history:a") },
+      { id: "x", ...rect, layout: tabs("_history:b", "_history:gone") },
+    ],
+    panes: {
+      "_history:a": { widths: { v: 90 }, panelWidths: { name: 150, diff: [null, null], blame: [null, null] } },
+      "_history:c": { frame: { x: 0, y: 0, w: 0.2, h: 0.2 } },
+    },
+  };
+  assert.deepEqual(sanitizeLayout(layout, ws._panes).dropped.sort(), ["_history:a", "_history:b", "_history:c", "_history:gone"],
+    "unknown to the sanitizer on its own");
+  const clean = ws.setLayout(layout);
+  assert.deepEqual(ws.getPaneSpec("_history:a"), { type: "mkio-history", source: "a", title: "History" });
+  assert.ok(ws._openPaneIds().has("_history:a"), "the window is back");
+  assert.deepEqual(clean.panes["_history:a"], layout.panes["_history:a"]);
+  assert.deepEqual(clean.dropped.sort(), ["_history:b", "_history:c", "_history:gone"],
+    "a table without a history block, or one that is gone, has no history window");
+  assert.equal(ws.getPaneSpec("_history:b"), undefined);
+  assert.doesNotThrow(() => ws._adoptHistoryPanes(null));
+  assert.throws(() => ws.setLayout("junk"), /not an object/);
+
+  // a closed, remembered history window is adopted too
+  const ws2 = makeWorkspace([{ id: "main", ...rect, layout: tabs("a") }], config);
+  ws2.setLayout({ frames: [{ id: "main", ...rect, layout: tabs("a") }],
+    panes: { "_history:a": { frame: { x: 0.1, y: 0.1, w: 0.3, h: 0.3, title: null }, widths: { v: 90 } } } });
+  assert.ok(ws2._closed.has("_history:a"));
+});
+
 // ── closed windows ──────────────────────────────────────────────────
 
 test("closeFrame remembers each pane's window and state; getLayout carries them as closed panes", () => {

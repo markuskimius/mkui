@@ -805,6 +805,23 @@ test("the panel's widths go to a layout and come back through the _panel hook", 
   assert.deepEqual(api.get(), { name: 150, diff: [192, 133], blame: [80, 90] });
 });
 
+test("once its table is built the pane asks the workspace for the layout state that was waiting", async () => {
+  const seen = [];
+  const host = mockEl("div");
+  const paneEl = mockEl("mkui-pane");
+  paneEl.dataset.id = "history";
+  const ws = makeWorkspace({ rows: [liveRow()] });
+  ws._applyPendingState = (el) => seen.push([el, !!el._data]);
+  host._closest = (sel) => (sel === "mkui-workspace" ? ws : sel === "mkui-pane" ? paneEl : null);
+  replies = {}; requests = []; stub = null;
+  const app = { config: { mkio: { url: "ws://localhost:8080/ws" } }, state: makeState() };
+  await factory({ type: "mkio-history", source: "orders" }, app, host);
+  await flush();
+  assert.equal(seen.length, 1, "once, when the table is built");
+  assert.equal(seen[0][0], paneEl);
+  assert.equal(seen[0][1], true, "after the table's hooks are on the pane");
+});
+
 test("the grips drag every column, in pixels that stay put", async () => {
   const { host } = await makePane({ rows: [liveRow()] });
   const [g0, g1, g2] = grips(host);
