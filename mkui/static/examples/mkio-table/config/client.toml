@@ -77,6 +77,10 @@ items = [
   { label = "Order Tree: expand all", action = "table.expand", args = { pane = "order-tree", depth = "all" } },
   { label = "Order Tree: children only", action = "table.expand", args = { pane = "order-tree", depth = 1 } },
   { label = "Order Tree: collapse all", action = "table.expand", args = { pane = "order-tree" } },
+  # table.nest shows a tree pane flat — every row at one level — or nested
+  # again; no `nested` flips it. (By hand: shift-click the Columns button
+  # and tick Flatten.)
+  { label = "Order Tree: flat / nested", action = "table.nest", args = { pane = "order-tree" } },
 ]
 
 [[menubar]]
@@ -486,6 +490,10 @@ action = { type = "transaction", service = "orders", op = "cancel", data = { id 
 # A configured filter takes `scope` the same way, and a column takes an
 # array of them for several scopes.
 # Ctrl/Cmd+A and copy see exactly the expanded rows.
+# Shift-click the Columns button and tick Flatten for every order at one
+# level, sorted as one list (`tree.nested = false` would open that way).
+# A child order is an order too, so the default `flat = "all"` is right
+# here; `flat = "leaves"` is for parents that only group their children.
 [panes.order-tree]
 title = "Order Tree"
 type = "mkio-table"

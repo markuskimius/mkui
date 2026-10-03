@@ -7724,6 +7724,183 @@ test("tree: a saved layout round-trips a column's several scoped filters through
   assert.deepEqual(chipStrip(host).filter, ["qty: All but 1 values", "qty: All but 1 values (child)", "qty: ≥ 0 (branch)", "name: 3 values"]);
 });
 
+/* ── Tree: nested / flat ──────────────────────────────────────────────── */
+
+// A tree table can show its rows flat: every row at one level, sorted and
+// numbered as one list, the structure kept for the way back. The switch
+// is a "Flatten" box on the column picker's tab strip, there when the
+// Columns button is shift-clicked — and on any click while flat.
+function flatBox(host, shiftKey = true) {
+  if (pickerOf(host)) columnsBtn(host).btn._ev.click[0]({ stopPropagation() {} }); // toggles: close first
+  columnsBtn(host).btn._ev.click[0]({ stopPropagation() {}, shiftKey });
+  return byClass(pickerOf(host).dd, "mkui-columns-numbers mkui-columns-flatten")[0]?._ch[0];
+}
+function setFlatBox(host, on) {
+  const box = flatBox(host);
+  box.checked = on;
+  box._ev.change[0]();
+}
+
+test("tree flat: the picker's Flatten box shows every row at one level and brings the tree back as it was", async () => {
+  const host = await treeTable({ rowColumn: true });
+  clickToggle(host, "a");
+  assert.deepEqual(numbered(host), ["1 a", "1.1 a1", "1.2 a2", "2 b", "3 x1"]);
+  const box = flatBox(host);
+  assert.equal(box.checked, false);
+  assert.equal(box._parent._parent.className, "mkui-filter-modes mkui-columns-views", "on the tab strip, with Numbers");
+  setFlatBox(host, true);
+  assert.ok(pickerOf(host), "the picker stays open");
+  assert.deepEqual(numbered(host), ["1 a", "2 a1", "3 a2", "4 a21", "5 b", "6 b1", "7 x1"], "collapsed rows too, numbered 1..n");
+  assert.ok(liveRows(host).every(tr => !tr._ch.some(td => td.classList.contains("mkui-tree-cell"))), "no carets, no indent");
+  assert.equal(treeAll(host), undefined, "nothing to expand: the header caret goes");
+  assert.equal(host._paneEl._tree.getNested(), false);
+  assert.equal(flatBox(host).checked, true, "reopened, it reads the view");
+  setFlatBox(host, false);
+  assert.deepEqual(numbered(host), ["1 a", "1.1 a1", "1.2 a2", "2 b", "3 x1"], "the same rows open as before");
+  assert.ok(treeAll(host), "the header caret is back");
+});
+
+test("tree flat: the box takes a shift-click while nested, any click while flat; tree tables only", async () => {
+  const host = await treeTable();
+  assert.equal(flatBox(host, false), undefined, "a plain click keeps the everyday picker");
+  host._paneEl._tree.setNested(false);
+  assert.equal(flatBox(host, false).checked, true, "flat: a plain click shows the way back");
+  host._paneEl._tree.setNested(true);
+  assert.equal(flatBox(host, false), undefined);
+  const flat = (await createSelTable()).host;
+  assert.equal(flatBox(flat), undefined);
+});
+
+test("tree flat: sorting is across every row, and live changes take their sorted place", async () => {
+  const host = await treeTable();
+  host._paneEl._tree.setNested(false);
+  host._paneEl._sort.set("-qty");
+  assert.deepEqual(treeNames(host), ["b1", "a21", "a", "a2", "a1", "b", "x1"]);
+  const { onUpdate } = lastSubscribe().opts;
+  onUpdate("insert", { _mkio_row: "8", name: "b2", id: "B2", parent: "B", qty: 4 });
+  assert.deepEqual(treeNames(host), ["b1", "a21", "b2", "a", "a2", "a1", "b", "x1"]);
+  onUpdate("replace", { _mkio_row: "2", name: "a1", id: "A1", parent: "A", qty: 7 });
+  assert.deepEqual(treeNames(host), ["b1", "a1", "a21", "b2", "a", "a2", "b", "x1"]);
+  onUpdate("delete", { _mkio_row: "1" });
+  assert.deepEqual(treeNames(host), ["b1", "a1", "a21", "b2", "a2", "b", "x1"]);
+  host._paneEl._sort.set(null);
+  host._paneEl._tree.setNested(true);
+  host._paneEl._tree.expand("all");
+  assert.deepEqual(treeNames(host), ["a1", "a2", "a21", "b", "b1", "b2", "x1"], "the structure kept up while flat: a's children are roots now");
+});
+
+test("tree flat: a scoped filter judges every row, and keeps its scope for the tree", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", expand: "all" } });
+  host._paneEl._filters.set({ qty: [{ exclude: [1], scope: "roots" }] });
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "x1"], "nested: b (a root, qty 1) goes with its subtree; a1 is not a root");
+  host._paneEl._tree.setNested(false);
+  assert.deepEqual(treeNames(host), ["a", "a2", "a21", "b1", "x1"], "flat: a1 and b miss, b1 stands alone");
+  assert.deepEqual(host._paneEl._filters.get(), { qty: { exclude: ["1"], scope: "roots" } });
+  host._paneEl._tree.setNested(true);
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "x1"]);
+});
+
+test("tree flat: the selection survives, and the tree opens the way to it", async () => {
+  const host = await treeTable();
+  const pane = host._paneEl;
+  pane._tree.setNested(false);
+  assert.deepEqual(pane._select.set(["4"]), { ok: true, selected: ["4"], missing: [], hidden: [] });
+  pane._tree.setNested(true);
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "x1"], "a and a2 opened for a21");
+  assert.deepEqual(pane._select.get().keys, ["4"]);
+});
+
+test("tree flat: 'leaves' shows only the rows with no children, following live changes", async () => {
+  const host = await treeTable({ rowColumn: true, tree: { child: "parent", parent: "id", flat: "leaves", nested: false } });
+  assert.deepEqual(numbered(host), ["1 a1", "2 a21", "3 b1", "4 x1"], "configured flat; a, a2 and b only group");
+  const pane = host._paneEl;
+  assert.deepEqual(pane._select.set(["1", "2"]), { ok: false, selected: ["2"], missing: [], hidden: ["1"] }, "a grouping row is hidden");
+  const { onUpdate } = lastSubscribe().opts;
+  onUpdate("insert", { _mkio_row: "8", name: "a11", id: "A11", parent: "A1", qty: 4 });
+  assert.deepEqual(treeNames(host), ["a21", "b1", "x1", "a11"], "a1 became a parent and left");
+  onUpdate("delete", { _mkio_row: "8" });
+  assert.deepEqual(treeNames(host), ["a1", "a21", "b1", "x1"], "childless again, it is back");
+  onUpdate("replace", { _mkio_row: "1", name: "a", id: "A", parent: "", qty: 99 });
+  assert.deepEqual(treeNames(host), ["a1", "a21", "b1", "x1"], "an update to a grouping row does not bring it in");
+  onUpdate("insert", { _mkio_row: "9", name: "z", id: "Z", parent: "", qty: 0 });
+  assert.deepEqual(treeNames(host), ["a1", "a21", "b1", "x1"], "x1's parent arrives to adopt it: a group, never shown");
+  pane._tree.setNested(true);
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "z"], "nested, the groups are the roots; a opens for the selected a1");
+  for (const fn of pane._ev["mkui-pane-open"] ?? []) fn();
+  assert.equal(pane._tree.getNested(), false, "a reopened pane returns to the config's view");
+});
+
+test("tree flat: flattening to leaves drops a selected grouping row from the selection", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", flat: "leaves", expand: "all" } });
+  const pane = host._paneEl;
+  pane._select.set(["1", "2"]);
+  pane._tree.setNested(false);
+  assert.deepEqual(pane._select.get().keys, ["2"]);
+});
+
+test("tree flat: a bad tree.flat warns and shows every row", async () => {
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (m) => warns.push(String(m));
+  let host;
+  try { host = await treeTable({ tree: { child: "parent", parent: "id", flat: "kids", nested: false } }); }
+  finally { console.warn = orig; }
+  assert.ok(warns.some(w => w.includes("bad tree.flat 'kids'")));
+  assert.equal(treeNames(host).length, 7);
+});
+
+test("tree flat: a selected row broadcasts for itself, and for its subtree again once nested", async () => {
+  const hub = new LinkHub();
+  const { host } = await createTable({ columns: TREE_COLS, tree: { child: "parent", parent: "id" }, link: { broadcast: { node: "id" } } }, { hub, id: "nodes-flat" });
+  triggerVisible(ioCallbacks.at(-1));
+  const sub = lastSubscribe();
+  sub.opts.onSnapshot(treeRows());
+  const pane = host._paneEl;
+  pane._tree.setNested(false);
+  pane._select.set(["1"]);
+  assert.deepEqual(hub.current("node").values, ["A"], "flat: the row alone");
+  sub.opts.onUpdate("insert", { _mkio_row: "8", name: "a3", id: "A3", parent: "A", qty: 4 });
+  assert.deepEqual(hub.current("node").values, ["A"], "a live child does not join it");
+  pane._tree.setNested(true);
+  assert.deepEqual(hub.current("node").values, ["A", "A1", "A2", "A21", "A3"], "nested: the subtree");
+});
+
+test("tree flat: expanding while flat is remembered, not shown; the keys are inert", async () => {
+  const host = await treeTable();
+  const pane = host._paneEl;
+  pane._tree.setNested(false);
+  assert.equal(pane._tree.setNested(false), false, "already flat: nothing to do");
+  pane._tree.expand(1);
+  assert.equal(treeNames(host).length, 7, "still every row at one level");
+  pane._tree.setNested(true);
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "b1", "x1"], "the depth asked for while flat");
+  pane._tree.setNested(false);
+  pane._tree.toggle("3", true);
+  pane._tree.setNested(true);
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"], "a row opened while flat");
+});
+
+test("tree flat: find and copy reach every row; orphans = hide still hides", async () => {
+  const host = await treeTable({ tree: { child: "parent", parent: "id", orphans: "hide" } });
+  assert.deepEqual(treeNames(host), ["a", "b"]);
+  host._paneEl._tree.setNested(false);
+  assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1"], "x1's parent never arrived");
+  assert.deepEqual(host._paneEl._data.view().map(r => r.name), ["a", "a1", "a2", "a21", "b", "b1"]);
+  host._paneEl._editActions.selectAll();
+  assert.equal(copyText(host).split("\n").filter(Boolean).length, 7, "a header and six rows");
+});
+
+test("tree flat: a bad tree.nested warns and stays nested", async () => {
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (m) => warns.push(String(m));
+  let host;
+  try { host = await treeTable({ tree: { child: "parent", parent: "id", nested: "no" } }); }
+  finally { console.warn = orig; }
+  assert.ok(warns.some(w => w.includes("bad tree.nested 'no'")));
+  assert.equal(host._paneEl._tree.getNested(), true);
+});
+
 /* ── Find ─────────────────────────────────────────────────────────────── */
 
 const FIND_ROWS = [

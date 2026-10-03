@@ -115,6 +115,7 @@ export function sanitizeLayout(raw, known) {
       if ("sort" in st) out.sort = st.sort ?? null;
       if ("visible" in st) out.visible = st.visible ?? null;
       if ("columnNumbers" in st) out.columnNumbers = st.columnNumbers === true;
+      if ("nested" in st) out.nested = st.nested !== false;
       if ("widths" in st) out.widths = cleanWidths(st.widths);
       if ("panelWidths" in st) out.panelWidths = cleanPanelWidths(st.panelWidths);
       if ("link" in st) out.link = isObj(st.link) ? st.link : null;

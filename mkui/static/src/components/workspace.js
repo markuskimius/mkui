@@ -59,6 +59,7 @@ const PANE_STATE_SETTERS = [
   ["sort", (el) => el._sort && ((v) => el._sort.set(v))],
   ["visible", (el) => el._columns && ((v) => el._columns.set(v))],
   ["columnNumbers", (el) => el._columns?.setNumbers && ((v) => el._columns.setNumbers(v))],
+  ["nested", (el) => el._tree?.setNested && ((v) => el._tree.setNested(v))],
   ["widths", (el) => el._columns?.setWidths && ((v) => el._columns.setWidths(v))],
   ["panelWidths", (el) => el._panel && ((v) => el._panel.set(v))],
   ["link", (el) => el._link && ((v) => el._link.set(v))],
@@ -322,6 +323,20 @@ class MkuiWorkspace extends HTMLElement {
     if (!hook) return false;
     hook.expand(depth);
     return true;
+  }
+
+  // Tree tables: show the rows nested (`true`) or flat (`false`); no
+  // value flips it. Returns whether a pane took it.
+  setPaneNested(paneId, nested) {
+    const hook = this._paneHook(paneId, "_tree", true);
+    if (!hook?.setNested) return false;
+    hook.setNested(nested ?? !hook.getNested());
+    return true;
+  }
+
+  // Whether a tree table shows nested; null without a tree hook.
+  getPaneNested(paneId) {
+    return this._paneHook(paneId, "_tree", false)?.getNested?.() ?? null;
   }
 
   // Select rows by identity (`_mkio_row` / `_mkio_ref` / `_mkio_topic`),
@@ -1181,6 +1196,8 @@ class MkuiWorkspace extends HTMLElement {
     if (el._columns) st.visible = el._columns.get();
     if (el._columns?.getNumbers) st.columnNumbers = el._columns.getNumbers();
     if (el._columns?.getWidths) st.widths = el._columns.getWidths();
+    // A tree table shown flat (or nested): a view choice, like the above.
+    if (el._tree?.getNested) st.nested = el._tree.getNested();
     // A history pane's panel columns (its table's ride `widths`).
     if (el._panel) st.panelWidths = el._panel.get();
     if (el._link) st.link = el._link.get();

@@ -188,7 +188,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   colsBtn.append(icon("columns"), colsBadge);
   colsBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (picker) closePicker(); else openColumnsPicker(colsBtn);
+    if (picker) closePicker(); else openColumnsPicker(colsBtn, { advanced: e.shiftKey }); // shift: a tree's Flatten box
   });
   colsAnchor.appendChild(colsBtn);
   scrollArea.append(colsAnchor, table);
@@ -510,7 +510,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
           console.warn(`[mkio-table] bad tree.orphans '${orphans}': use root or hide`);
           orphans = "root";
         }
-        tree = { child, parent, expand, filterScope, orphans,
+        // What the flat view shows (see `setNested`): every row, or only
+        // the rows with no children — parents that exist just to group.
+        let flat = t.flat ?? "all";
+        if (flat !== "all" && flat !== "leaves") {
+          console.warn(`[mkio-table] bad tree.flat '${flat}': use all or leaves`);
+          flat = "all";
+        }
+        if (t.nested != null && typeof t.nested !== "boolean")
+          console.warn(`[mkio-table] bad tree.nested '${t.nested}': expected true or false`);
+        tree = { child, parent, expand, filterScope, orphans, flat, nested: t.nested !== false,
                  column: typeof t.column === "string" && t.column ? t.column : null };
       }
     }
@@ -1063,6 +1072,15 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // linked row has a key (or null for a root).
   const isLinked = (key) => parentOf.get(key) !== undefined;
 
+  // A tree table shows nested or flat (`setNested`). The structure above
+  // is kept either way; only what reads the *view* asks `nesting()`. Flat,
+  // every linked row is a row of its own at one level — or, under
+  // `tree.flat = "leaves"`, only the rows without children.
+  let nested = tree ? tree.nested : false;
+  const nesting = () => tree !== null && nested;
+  const flatKeeps = (key) => !tree || (isLinked(key) && (tree.flat !== "leaves" || !hasKids(key)));
+  const flatShown = (row) => matchesFilters(row) && flatKeeps(row[idKey]);
+
   function sortedKids(pk) {
     const a = kids.get(pk) ?? EMPTY;
     if (!sortKeys.length || a.length < 2) return a;
@@ -1082,7 +1100,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // it goes — so `subtreeOk` (rebuilt with the view whenever such a filter
   // is active, else null) holds the post-order verdict per row.
   let subtreeOk = null;
-  const allScopeActive = () => { if (!tree) return false; for (const [k, f] of filters) if (!f.off && k.endsWith("\0all")) return true; return false; };
+  const allScopeActive = () => { if (!nesting()) return false; for (const [k, f] of filters) if (!f.off && k.endsWith("\0all")) return true; return false; };
   const treeShown = (key) => matchesFilters(rows.get(key)) && (!subtreeOk || subtreeOk.get(key) === true);
 
   function buildSubtreeOk() {
@@ -1227,7 +1245,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function setExpanded(key, on) {
     if (!tree || expanded.has(key) === on) return false;
     if (on) expanded.add(key); else expanded.delete(key);
-    if (!hasKids(key)) return true; // remembered; nothing to show yet
+    if (!nested || !hasKids(key)) return true; // remembered; nothing to show yet
     const vi = viewDirty ? -1 : view.indexOf(key);
     if (vi >= 0) {
       if (on) {
@@ -1252,7 +1270,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // Expand a whole subtree (shift+click, `*`) or collapse it.
   function setExpandedDeep(key, on) {
     const walk = (k) => { if (on) expanded.add(k); else expanded.delete(k); for (const c of kids.get(k) ?? EMPTY) walk(c); };
-    if (on) { walk(key); setExpandedApplied(); return; }
+    if (on) { walk(key); if (nested) setExpandedApplied(); return; }
     // Collapse the top first (one incremental cut), then forget the rest.
     setExpanded(key, false);
     walk(key);
@@ -1263,7 +1281,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (!tree) return;
     expanded.clear();
     for (const [k, d] of depthOf) if (d < depth) expanded.add(k);
-    setExpandedApplied();
+    if (nested) setExpandedApplied(); // flat: remembered for the tree's return
   }
 
   // After bulk changes to `expanded`: rebuild, prune what left the view.
@@ -1286,6 +1304,33 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     render();
     refreshButtons();
     publishSelection();
+  }
+
+  // Show the tree nested, or flat: every row at one level (or, under
+  // `tree.flat = "leaves"`, the childless ones), sorted, numbered, found
+  // and copied as one list. Nothing is unmade: the structure, `expanded`
+  // and each filter's scope wait for the tree's return, which opens the
+  // way to whatever is selected so it comes back on screen. What the new
+  // view does not show leaves the selection, as with a collapse.
+  function setNested(on) {
+    on = on !== false;
+    if (!tree || nested === on) return false;
+    nested = on;
+    if (on) {
+      const keep = new Set(selectedKeys);
+      for (const r of cellRects) for (const k of r.keys ?? EMPTY) keep.add(k);
+      if (focusCell) keep.add(focusCell.key);
+      for (const key of keep)
+        for (let pk = parentOf.get(key); pk != null; pk = parentOf.get(pk)) expanded.add(pk);
+      rowNumDigits = 2; widthsDirty = true; // the label-width ratchet restarts
+    }
+    closeDropdown();
+    if (columns) renderHead(); // the header caret comes and goes
+    rebuildAllRows();          // as do the rows' carets and indents
+    setExpandedApplied();
+    if (focusCell) scrollFocusIntoView();
+    if (findRe) scanFind(false);
+    return true;
   }
 
   const anyExpanded = () => { for (const k of expanded) if (hasKids(k)) return true; return false; };
@@ -1337,7 +1382,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function onTreeKey(e) {
-    if (!tree || e.ctrlKey || e.metaKey || e.altKey) return false;
+    if (!nesting() || e.ctrlKey || e.metaKey || e.altKey) return false;
     if (e.key !== "Enter" && e.key !== "*") return false;
     if (!ensureFocusCell()) return false;
     const key = focusCell.key;
@@ -1363,7 +1408,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function rebuildView() {
     view = [];
-    if (tree) {
+    if (nesting()) {
       // Pre-order over the roots: a row shows when it passes the filters,
       // its children when it is expanded too (see "Tree rows").
       subtreeOk = null;
@@ -1378,7 +1423,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     for (const key of baseOrder) {
       const r = rows.get(key);
-      if (r && matchesFilters(r)) view.push(key);
+      if (r && flatShown(r)) view.push(key);
     }
     if (sortKeys.length) view.sort((a, b) => compareRows(rows.get(a), rows.get(b)));
     if (flatRanked()) flatRanks();
@@ -1399,7 +1444,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function viewIndexOf(row) {
     const key = row[idKey];
-    if (!sortKeys.length || tree) return view.indexOf(key); // a tree view is sorted per group, not globally
+    if (!sortKeys.length || nesting()) return view.indexOf(key); // a tree view is sorted per group, not globally
     // binary search to the start of the equal-compare range, then scan it
     let lo = 0, hi = view.length;
     while (lo < hi) {
@@ -1423,6 +1468,26 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     baseOrder.push(key);
     if (tree) {
       const rebuild = linkRow(row);
+      if (!nested) {
+        // Flat: the row takes its place by the sort like any other. Under
+        // "leaves" its parent stops being one with its first child, and
+        // goes; a row that arrives to adopt waiting orphans never shows.
+        bumpStats(row);
+        const pk = parentOf.get(key);
+        if (deferView) markViewDirty();
+        else {
+          if (tree.flat === "leaves" && pk != null && kids.get(pk).length === 1) {
+            const vi = viewIndexOf(rows.get(pk));
+            if (vi >= 0) view.splice(vi, 1);
+          }
+          if (flatShown(row)) {
+            if (sortKeys.length) view.splice(viewInsertPos(row), 0, key);
+            else view.push(key);
+          }
+        }
+        viewRev++;
+        return;
+      }
       bumpStats(row);
       // A "branch" filter can change an ancestor's verdict: rebuild.
       if (rebuild || deferView || allScopeActive()) markViewDirty();
@@ -1460,7 +1525,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function render() {
-    if (rowColumn && !tree) {
+    if (rowColumn && !nesting()) {
       const d = String(Math.max(1, rows.size)).length; // numbers span every row, filtered or not
       if (d !== rowNumDigits) {
         rowNumDigits = d;
@@ -1497,7 +1562,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     // it lands after it, not before — else each later row would be moved
     // ahead of it in turn, carrying it to the bottom while it fades.
     let cursor = topSpacer;
-    const labels = tree && rowColumn ? new Map() : null; // rowLabel memo for this slice
+    const labels = nesting() && rowColumn ? new Map() : null; // rowLabel memo for this slice
     let labelW = 0;
     for (let i = start; i < end; i++) {
       const key = view[i];
@@ -1907,7 +1972,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const toOpen = new Set();
     for (const key of want) {
       if (!rows.has(key)) { result.missing.push(key); continue; }
-      if (tree) {
+      if (nesting()) {
         // Every row on the chain must pass its filters, and the chain
         // must reach a root (a hidden orphan never does).
         let k = key, shown = true;
@@ -1915,7 +1980,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         if (!shown || parentOf.get(key) === undefined) { result.hidden.push(key); continue; }
         for (let pk = parentOf.get(key); pk != null; pk = parentOf.get(pk) ?? null)
           if (!expanded.has(pk)) toOpen.add(pk);
-      } else if (!matchesFilters(rows.get(key))) { result.hidden.push(key); continue; }
+      } else if (!flatShown(rows.get(key))) { result.hidden.push(key); continue; }
       result.selected.push(key);
     }
     result.ok = !result.missing.length && !result.hidden.length;
@@ -3474,10 +3539,13 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   function matchesFilters(row) {
-    const root = tree ? isRootKey(row[idKey]) : true;
+    // Scopes are levels: flat, there are none, and every filter judges
+    // every row (each keeps its scope for the tree's return).
+    const nest = nesting();
+    const root = nest ? isRootKey(row[idKey]) : true;
     for (const f of filters.values()) {
       if (f.off) continue; // switched off: kept, described, not applied
-      if (tree && f.scope) {
+      if (nest && f.scope) {
         // Scoped filters (tree tables): top and child filters judge only
         // their level; branch ones are judged by the subtree pass
         // (buildSubtreeOk), not here.
@@ -4159,7 +4227,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function getBroadcastRows() {
     if (broadcastRetracted) return [];
     const sel = getSelectedRows();
-    if (!tree || !sel.length) return sel;
+    if (!nesting() || !sel.length) return sel; // flat: a row speaks for itself
     const seen = new Set(), out = [];
     const add = (key) => {
       if (seen.has(key)) return;
@@ -4175,7 +4243,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // the selection, or sits under a selected row in a tree.
   function inBroadcast(key) {
     if (rowInSelection(key)) return true;
-    if (!tree) return false;
+    if (!nesting()) return false;
     for (let pk = parentOf.get(key); pk != null; pk = parentOf.get(pk))
       if (rowInSelection(pk)) return true;
     return false;
@@ -4614,7 +4682,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
       const inner = document.createElement("div");
       inner.className = "mkui-th-inner";
-      if (tree && c === treeCol()) {
+      if (nesting() && c === treeCol()) {
         // Expand / collapse all, ahead of the label like the row carets.
         const all = document.createElement("span");
         all.className = "mkui-tree-toggle mkui-tree-all";
@@ -5090,7 +5158,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return true;
   }
 
-  function openColumnsPicker(anchorEl) {
+  function openColumnsPicker(anchorEl, { advanced = false } = {}) {
     closeDropdown();
     closePicker();
     if (!columns) return;
@@ -5131,7 +5199,22 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     numbersCb.type = "checkbox";
     numbersCb.addEventListener("change", () => setColumnNumbers(numbersCb.checked));
     numbers.append(numbersCb, document.createTextNode("Numbers"));
-    views.append(...viewTabs, numbers);
+    // Flatten (tree tables): the other box about the table rather than a
+    // column, beside Numbers. Advanced — a shift-click on the button —
+    // until the table shows flat: then every open carries it, so the way
+    // back to the tree is never hidden.
+    let flatCb = null;
+    if (tree && (advanced || !nested)) {
+      const flat = document.createElement("label");
+      flat.className = "mkui-columns-numbers mkui-columns-flatten";
+      flat.title = tree.flat === "leaves" ? "List the rows without children, at one level"
+        : "List every row at one level";
+      flatCb = document.createElement("input");
+      flatCb.type = "checkbox";
+      flatCb.addEventListener("change", () => setNested(!flatCb.checked));
+      flat.append(flatCb, document.createTextNode("Flatten"));
+      views.append(...viewTabs, flat, numbers);
+    } else views.append(...viewTabs, numbers);
     dd.appendChild(views);
 
     const title = document.createElement("div");
@@ -5446,6 +5529,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const order = pickerView === "order";
       for (const b of viewTabs) b.classList.toggle("active", b.dataset.view === pickerView);
       numbersCb.checked = colNumbers;
+      if (flatCb) flatCb.checked = !nested;
       regexBtn.classList.toggle("active", pickerRegex);
       filterBtn.classList.toggle("active", pickerFilters);
       search.placeholder = pickerFilters ? "Filter columns…" : "Find a column…";
@@ -6058,7 +6142,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       td.className = "mkui-td-rownum";
       tr.appendChild(td);
     }
-    const tc = treeCol();
+    const tc = nested ? treeCol() : null; // flat: no carets, no indent
     for (const c of visibleColumns()) {
       const td = document.createElement("td");
       td.dataset.col = c;
@@ -6209,7 +6293,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const tr = rowEls.get(row[idKey]);
     if (tr) flash(tr, causeFlash(cause, "mkui-flash-in"));
     // A new child under a selected row joins its broadcast.
-    if (tree && hasBroadcast() && inBroadcast(row[idKey])) broadcastSelection();
+    if (nesting() && hasBroadcast() && inBroadcast(row[idKey])) broadcastSelection();
   }
 
   function applyDelete(row, cause = null) {
@@ -6222,8 +6306,15 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       // Its children re-home (orphans become roots or hide): rebuild. A
       // childless row just leaves its slot, its later siblings moving up.
       const pk = parentOf.get(key);
-      if (pk !== undefined) shiftRanks(pk, key, -1); // its later siblings move up, shown or not
-      if (unlinkRow(prev) || allScopeActive()) markViewDirty();
+      if (nested && pk !== undefined) shiftRanks(pk, key, -1); // its later siblings move up, shown or not
+      const rehomed = unlinkRow(prev);
+      if (!nested) {
+        // Flat: the row leaves its slot. Under "leaves" a parent that lost
+        // its last child shows again, and one that took over the row's
+        // children goes: rebuild.
+        if (vi >= 0) view.splice(vi, 1);
+        if (tree.flat === "leaves" && (rehomed || (pk != null && !hasKids(pk)))) markViewDirty();
+      } else if (rehomed || allScopeActive()) markViewDirty();
       else if (vi >= 0) view.splice(vi, 1);
       if (pk != null) syncToggle(pk); // may have lost its last child
     } else {
@@ -6286,8 +6377,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         if (sortKeys.some((k) => k.col === c)) sortChanged = true;
       }
     }
-    const wasVis = matchesFilters(prev) && passesAllScoped(prev);
-    const isVis = matchesFilters(row) && passesAllScoped(row);
+    const kept = nested || flatKeeps(key); // flat "leaves": a parent is never in the view
+    const wasVis = kept && matchesFilters(prev) && passesAllScoped(prev);
+    const isVis = kept && matchesFilters(row) && passesAllScoped(row);
     if (tree && (childVals(row) !== childVals(prev) || parentVals(row) !== parentVals(prev))) {
       // Its place in the tree changed: relink and rebuild (its subtree
       // moves with it; children that named the old values re-home).
@@ -6305,7 +6397,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (newPk != null && newPk !== oldPk) syncToggle(newPk);
       syncTreeAll();
     } else if (sortChanged || wasVis !== isVis) {
-      if (tree) {
+      if (nesting()) {
         // Sibling order or a subtree's visibility changed: rebuild.
         rows.set(key, row);
         sortedKidsCache.delete(parentOf.get(key) ?? null);
@@ -6852,12 +6944,15 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     };
     // Tree hook (tree tables only): `workspace.expandPane` and
     // `table.expand` open rows to a depth (a number, or "all"; 0 closes
-    // every row); `toggle(key)` flips one row by its identity.
+    // every row); `toggle(key)` flips one row by its identity;
+    // `setNested(on)` shows the tree nested or flat (`setPaneNested`,
+    // `table.nest`, layouts' `nested`).
     if (tree) {
       paneEl._tree = {
         expand: (depth) => setExpandDepth(depth === "all" ? Infinity : Math.max(0, Number(depth) || 0)),
         toggle: (key, on) => setExpanded(key, on ?? !expanded.has(key)),
         expanded: () => [...expanded].filter(hasKids),
+        setNested, getNested: () => nested,
       };
     }
     // Toolbar hook: where an embedding pane's controls go. `sync` after
@@ -6939,6 +7034,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       undoneAway.length = 0;
       columns = spec.columns ?? null;
       colNumbers = spec.columnNumbers === true;
+      nested = tree ? tree.nested : false;
       loadVisibleSpec(spec.visible);
       loadSortSpec(spec.sort);
       loadFilterSpecs(spec.filters);

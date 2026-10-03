@@ -989,7 +989,9 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 }
 .mkui-filter-mode:hover { color: var(--mkui-fg); }
 .mkui-filter-mode.active { color: var(--mkui-fg); border-bottom-color: var(--mkui-accent); }
-/* The column picker's Numbers box, at the tab strip's right end. */
+/* The column picker's Numbers box, at the tab strip's right end; a tree
+   table's Flatten box (shift-click on the Columns button, or any click
+   while flat) sits before it. */
 .mkui-columns-numbers {
   display: flex;
   align-items: center;

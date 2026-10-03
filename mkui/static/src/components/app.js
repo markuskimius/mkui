@@ -99,6 +99,9 @@ class MkuiApp extends HTMLElement {
     // Tree tables: `args = { pane, depth }` — a depth or "all"; no `depth`
     // collapses everything.
     this._app.registerAction("table.expand",    (app, a = {}) => ws.expandPane(a.pane ?? null, a.depth ?? 0));
+    // Tree tables, nested or flat: `args = { pane, nested }`; no `nested`
+    // flips it.
+    this._app.registerAction("table.nest",      (app, a = {}) => ws.setPaneNested(a.pane ?? null, a.nested));
     // Select rows by identity: `args = { pane, keys, focus }` — `keys` the
     // row ids (`_mkio_row` for a query table: the primary key value), an
     // empty list clears; `focus = false` selects without moving the cursor.

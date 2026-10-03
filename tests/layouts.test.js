@@ -143,14 +143,14 @@ test("sanitizeLayout validates frames, drops empty ones, and keeps state for ope
     // of filter objects passes through untouched.
     // `d` is a closed window: known, in no frame, remembered where it was.
     // `zz2` is one the app no longer has; `frame` is validated like a frame's rect.
-    panes: { a: { filters: { s: ["x"], q: [{ exclude: [1], scope: "roots" }, { from: 2, scope: "all" }] }, sort: "-s", visible: null, columnNumbers: true, link: { broadcast: { k: "s" }, listening: false }, record: { listen: { order_id: "id" } } }, d: { sort: "s", frame: { x: 0.3, y: "y", w: 0, h: 0.5, title: 7 } }, zz2: { sort: "s", frame: { x: 0, y: 0, w: 0.1, h: 0.1 } }, b: "junk", c: { extra: 1, columnNumbers: "yes", link: "junk", record: "junk" } },
+    panes: { a: { filters: { s: ["x"], q: [{ exclude: [1], scope: "roots" }, { from: 2, scope: "all" }] }, sort: "-s", visible: null, columnNumbers: true, nested: false, link: { broadcast: { k: "s" }, listening: false }, record: { listen: { order_id: "id" } } }, d: { sort: "s", frame: { x: 0.3, y: "y", w: 0, h: 0.5, title: 7 } }, zz2: { sort: "s", frame: { x: 0, y: 0, w: 0.1, h: 0.1 } }, b: "junk", c: { extra: 1, columnNumbers: "yes", link: "junk", record: "junk" } },
   }, known);
   assert.deepEqual(clean.frames, [
     { id: "main", title: null, x: 0.1, y: 0.1, w: 0.5, h: 0.5, layout: tabs("a", "b") },
     { id: null, title: null, x: 0.2, y: 0.2, w: 0.4, h: 0.4, layout: "c" },
   ]);
   assert.equal(clean.focused, "main");
-  assert.deepEqual(clean.panes, { a: { filters: { s: ["x"], q: [{ exclude: [1], scope: "roots" }, { from: 2, scope: "all" }] }, sort: "-s", visible: null, columnNumbers: true, link: { broadcast: { k: "s" }, listening: false }, record: { listen: { order_id: "id" } } }, c: { columnNumbers: false, link: null, record: null },
+  assert.deepEqual(clean.panes, { a: { filters: { s: ["x"], q: [{ exclude: [1], scope: "roots" }, { from: 2, scope: "all" }] }, sort: "-s", visible: null, columnNumbers: true, nested: false, link: { broadcast: { k: "s" }, listening: false }, record: { listen: { order_id: "id" } } }, c: { columnNumbers: false, link: null, record: null },
     d: { frame: { x: 0.3, y: 0.2, w: 0.4, h: 0.5, title: null }, sort: "s" } },
     "link and record configurations pass through; a malformed one becomes null (clears); a closed pane keeps its state and a clean reopen rect");
   assert.deepEqual(clean.dropped, ["zz", "zz2"]);
@@ -383,6 +383,27 @@ test("a table's column-number strip rides the layout beside visible and comes ba
   b._columns.set = () => {};
   assert.doesNotThrow(() => ws.setLayout({ frames: l.frames, panes: { b: { columnNumbers: true } } }),
     "a hook without setNumbers ignores it");
+});
+
+test("a tree table's nested / flat view rides the layout and comes back through setNested", () => {
+  const ws = makeWorkspace([{ id: "main", ...rect, layout: tabs("a", "b") }]);
+  const a = ws._paneEls.get("a"), b = ws._paneEls.get("b");
+  const sets = [];
+  let nested = false;
+  a._tree = { expand() {}, setNested: (v) => { sets.push(v); nested = v; }, getNested: () => nested };
+  b._tree = { expand() {} }; // a tree hook without the view switch (another pane type) carries no flag
+  const l = ws.getLayout();
+  assert.deepEqual(l.panes, { a: { nested: false } });
+  assert.deepEqual(sanitizeLayout(l, ws._panes).panes, l.panes, "round-trips through sanitizeLayout");
+  assert.deepEqual(sanitizeLayout({ ...l, panes: { a: { nested: "no" } } }, ws._panes).panes, { a: { nested: true } },
+    "anything but false is nested");
+  nested = true;
+  ws.setLayout(l);
+  assert.deepEqual(sets, [false], "restored");
+  ws.setLayout({ frames: l.frames, panes: { a: {} } });
+  assert.deepEqual(sets, [false], "a layout without the flag leaves it alone");
+  assert.doesNotThrow(() => ws.setLayout({ frames: l.frames, panes: { b: { nested: false } } }),
+    "a hook without setNested ignores it");
 });
 
 test("chosen column widths ride the layout: a table's as widths, a history panel's as panelWidths", () => {

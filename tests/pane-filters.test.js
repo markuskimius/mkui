@@ -171,6 +171,22 @@ test("table.expand action routes to the workspace", async () => {
   assert.match(src, /registerAction\("table\.expand",\s*\(app, a = \{\}\) => ws\.expandPane\(a\.pane \?\? null, a\.depth \?\? 0\)\)/);
 });
 
+// setPaneNested / getPaneNested reach the same hook; `table.nest` wraps it.
+test("setPaneNested sets or flips a tree table's view; panes without the hook decline", async () => {
+  const ws = makeWorkspace([]);
+  let on = true;
+  ws._paneEls.get("a")._tree = { setNested: (v) => { on = v; }, getNested: () => on };
+  assert.equal(ws.setPaneNested("a", false), true);
+  assert.equal(ws.getPaneNested("a"), false);
+  assert.equal(ws.setPaneNested("a"), true, "no value flips it");
+  assert.equal(ws.getPaneNested("a"), true);
+  assert.equal(ws.setPaneNested("plain", false), false);
+  assert.equal(ws.getPaneNested("plain"), null);
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../mkui/static/src/components/app.js", import.meta.url), "utf8");
+  assert.match(src, /registerAction\("table\.nest",\s*\(app, a = \{\}\) => ws\.setPaneNested\(a\.pane \?\? null, a\.nested\)\)/);
+});
+
 /* ── Selection routing ────────────────────────────────────────────────── */
 // selectPane reaches a table's `_select` hook and returns its result;
 // `table.select` wraps it.

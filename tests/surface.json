@@ -68,6 +68,7 @@
     "table.filter",
     "table.history",
     "table.link",
+    "table.nest",
     "table.record",
     "table.select",
     "table.sort",
