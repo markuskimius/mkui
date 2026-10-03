@@ -385,6 +385,38 @@ test("a table's column-number strip rides the layout beside visible and comes ba
     "a hook without setNumbers ignores it");
 });
 
+test("chosen column widths ride the layout: a table's as widths, a history panel's as panelWidths", () => {
+  const ws = makeWorkspace([{ id: "main", ...rect, layout: tabs("a", "b") }]);
+  const a = ws._paneEls.get("a"), b = ws._paneEls.get("b");
+  a._columns = hook(null);
+  a._columns.widths = { s: 140 }; a._columns.widthSets = [];
+  a._columns.getWidths = () => a._columns.widths;
+  a._columns.setWidths = (w) => { a._columns.widthSets.push(w); a._columns.widths = w; };
+  b._panel = hook({ name: 150, diff: [192, null], blame: [null, null] });
+  const l = ws.getLayout();
+  assert.deepEqual(l.panes, {
+    a: { visible: null, widths: { s: 140 } },
+    b: { panelWidths: { name: 150, diff: [192, null], blame: [null, null] } },
+  });
+  assert.deepEqual(sanitizeLayout(l, ws._panes).panes, l.panes, "round-trips through sanitizeLayout");
+  a._columns.widths = null; b._panel.value = null;
+  ws.setLayout(l);
+  assert.deepEqual(a._columns.widthSets, [{ s: 140 }]);
+  assert.deepEqual(b._panel.sets, [{ name: 150, diff: [192, null], blame: [null, null] }]);
+  ws.setLayout({ frames: l.frames, panes: { a: { visible: null }, b: {} } });
+  assert.equal(a._columns.widthSets.length, 1, "a layout saved before widths leaves them alone");
+  assert.equal(b._panel.sets.length, 1);
+  // junk is dropped, never applied
+  const clean = sanitizeLayout({ frames: l.frames, panes: {
+    a: { widths: { s: 140, t: "wide", u: -1, v: NaN } },
+    b: { widths: { t: 0 }, panelWidths: { name: "x", diff: [10], blame: "junk" } },
+  } }, ws._panes).panes;
+  assert.deepEqual(clean, {
+    a: { widths: { s: 140 } },
+    b: { widths: null, panelWidths: { name: null, diff: [10, null], blame: [null, null] } },
+  });
+});
+
 // ── closed windows ──────────────────────────────────────────────────
 
 test("closeFrame remembers each pane's window and state; getLayout carries them as closed panes", () => {

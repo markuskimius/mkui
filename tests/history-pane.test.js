@@ -792,6 +792,19 @@ test("the columns are fixed from the first render: content width, capped at a th
   assert.deepEqual(shares(host), FITTED);
 });
 
+test("the panel's widths go to a layout and come back through the _panel hook", async () => {
+  const { host, paneEl } = await makePane({ rows: [liveRow()] });
+  const api = paneEl._panel;
+  assert.ok(api, "installed on the pane");
+  assert.deepEqual(api.get(), { name: 133, diff: [133, 133], blame: [null, null] }, "blame's are not fitted until shown");
+  api.set({ name: 150, diff: [192, null], blame: [80, 90] });
+  assert.deepEqual(shares(host), { ...FITTED, "--mkui-hist-name": "150px", "--mkui-hist-mid": "192px" },
+    "a null column is fitted again");
+  showBlame(host);
+  assert.deepEqual(shares(host), { "--mkui-hist-name": "150px", "--mkui-hist-mid": "80px", "--mkui-hist-last": "90px" });
+  assert.deepEqual(api.get(), { name: 150, diff: [192, 133], blame: [80, 90] });
+});
+
 test("the grips drag every column, in pixels that stay put", async () => {
   const { host } = await makePane({ rows: [liveRow()] });
   const [g0, g1, g2] = grips(host);

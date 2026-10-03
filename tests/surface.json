@@ -139,6 +139,7 @@
     "_toolbar",
     "_record",
     "_history",
+    "_panel",
     "_ready"
   ],
   "layoutVersion": 1,

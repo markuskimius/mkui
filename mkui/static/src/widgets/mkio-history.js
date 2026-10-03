@@ -201,6 +201,24 @@ registerPaneType("mkio-history", async (spec, app, host) => {
       else panel.style.setProperty(v, `${Math.round(px)}px`);
     });
   }
+  // The widths as a saved layout carries them (`panes[id].panelWidths`):
+  // `set` takes the same shape, a `null` column going back to be fitted.
+  if (paneEl) {
+    const px = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null);
+    const pair = (v) => [px(Array.isArray(v) ? v[0] : null), px(Array.isArray(v) ? v[1] : null)];
+    const round = (v) => (v == null ? null : Math.round(v));
+    paneEl._panel = {
+      get: () => ({ name: round(widths.name), diff: widths.diff.map(round), blame: widths.blame.map(round) }),
+      set: (w) => {
+        widths.name = px(w?.name);
+        widths.diff = pair(w?.diff);
+        widths.blame = pair(w?.blame);
+        const found = headCells();
+        if (found) sizeColumns(...found); else applyColWidths();
+      },
+    };
+  }
+
   // Which of the head's cells a width index is: the last is the last
   // column, whichever that is in the view (the diff's fourth, blame's
   // third); a track is its cell, plus the line's padding for the first

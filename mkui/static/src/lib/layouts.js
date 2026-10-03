@@ -115,6 +115,8 @@ export function sanitizeLayout(raw, known) {
       if ("sort" in st) out.sort = st.sort ?? null;
       if ("visible" in st) out.visible = st.visible ?? null;
       if ("columnNumbers" in st) out.columnNumbers = st.columnNumbers === true;
+      if ("widths" in st) out.widths = cleanWidths(st.widths);
+      if ("panelWidths" in st) out.panelWidths = cleanPanelWidths(st.panelWidths);
       if ("link" in st) out.link = isObj(st.link) ? st.link : null;
       if ("record" in st) out.record = isObj(st.record) ? st.record : null;
       panes[id] = out;
@@ -123,6 +125,25 @@ export function sanitizeLayout(raw, known) {
   const focused = typeof raw.focused === "string" && frames.some(f => f.id === raw.focused)
     ? raw.focused : null;
   return { version: LAYOUT_VERSION, frames, focused, panes, dropped: [...new Set(dropped)] };
+}
+
+// Column widths are pixels: anything else is dropped, and a map left
+// empty is `null` (none chosen).
+const px = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null);
+
+function cleanWidths(raw) {
+  if (!isObj(raw)) return null;
+  const out = {};
+  for (const [c, w] of Object.entries(raw)) if (px(w) != null) out[c] = w;
+  return Object.keys(out).length ? out : null;
+}
+
+// A history panel's: the field column, then a pair per view (`null` = a
+// column still to be fitted).
+function cleanPanelWidths(raw) {
+  if (!isObj(raw)) return null;
+  const pair = (v) => [px(Array.isArray(v) ? v[0] : null), px(Array.isArray(v) ? v[1] : null)];
+  return { name: px(raw.name), diff: pair(raw.diff), blame: pair(raw.blame) };
 }
 
 function collectPanes(node, out) {

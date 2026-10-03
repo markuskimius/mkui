@@ -1139,6 +1139,9 @@ class MkuiWorkspace extends HTMLElement {
     if (el._sort) st.sort = el._sort.get();
     if (el._columns) st.visible = el._columns.get();
     if (el._columns?.getNumbers) st.columnNumbers = el._columns.getNumbers();
+    if (el._columns?.getWidths) st.widths = el._columns.getWidths();
+    // A history pane's panel columns (its table's ride `widths`).
+    if (el._panel) st.panelWidths = el._panel.get();
     if (el._link) st.link = el._link.get();
     // A detail window's subject configuration — where it gets its
     // records, and whether it is pinned. Never the record itself: that
@@ -1157,11 +1160,13 @@ class MkuiWorkspace extends HTMLElement {
       if ("sort" in st) el._sort?.set(st.sort);
       if ("visible" in st) el._columns?.set(st.visible);
       if ("columnNumbers" in st) el._columns?.setNumbers?.(st.columnNumbers);
+      if ("widths" in st) el._columns?.setWidths?.(st.widths);
+      if ("panelWidths" in st) el._panel?.set(st.panelWidths);
       if ("link" in st) el._link?.set(st.link);
       if ("record" in st) el._record?.follow(st.record);
     };
     const gen = el._viewGen = (el._viewGen ?? 0) + 1;
-    if (el._filters || el._sort || el._columns || el._link || el._record || !el._ready) apply();
+    if (el._filters || el._sort || el._columns || el._link || el._record || el._panel || !el._ready) apply();
     else el._ready.then(() => { if (el._viewGen === gen) apply(); });
   }
 

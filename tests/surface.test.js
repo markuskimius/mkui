@@ -65,7 +65,7 @@ const matches = (text, re) => { const out = []; for (const m of text.matchAll(re
 // rather than scraped — every `_x =` in the source is not a hook — and
 // checked to still be assigned somewhere.
 const PANE_HOOKS = ["_editActions", "_filters", "_sort", "_columns", "_link", "_select",
-  "_tree", "_source", "_data", "_toolbar", "_record", "_history", "_ready"];
+  "_tree", "_source", "_data", "_toolbar", "_record", "_history", "_panel", "_ready"];
 
 function collect() {
   const actions = uniq([...matches(allSrc, /registerAction\("([a-zA-Z.]+)"/g), "app.quit"]);

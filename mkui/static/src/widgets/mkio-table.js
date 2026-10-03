@@ -110,7 +110,7 @@ let _subCounter = 0;
 // (`expand` outside `tree`) is reported instead of ignored.
 const TABLE_KEYS = ["service", "protocol", "topic", "filter", "columns", "visible", "labels", "groups", "types",
   "tree", "values", "display", "styles", "rowStyle", "buttons", "history", "select", "live", "start",
-  "rowColumn", "columnNumbers", "maxcount", "filters", "sort", "link"];
+  "rowColumn", "columnNumbers", "widths", "maxcount", "filters", "sort", "link"];
 
 registerPaneType("mkio-table", async (spec, app, host) => {
   const wsUrl = app.config?.mkio?.url;
@@ -370,6 +370,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   let widthsInited = false;
   let widthsDirty = false;     // a ratchet grew a column — colgroup refresh pending
   const userSized = new Set(); // manually resized columns: auto-grow keeps hands off
+  const fitSized = new Set();  // double-click fitted: still grows, but a chosen width (getWidths)
   const headerMeasured = new Set(); // columns whose header width has been taken
   let dataSeen = false;        // some row has been measured since the last width reset
   let growSuspended = false;   // page load after first data: ratchet off, widths hold
@@ -4318,8 +4319,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (!th.dataset.col) continue; // filler cell
       const w = th.getBoundingClientRect().width;
       if (w > 0) {
-        colWidths.set(th.dataset.col,
-          Math.min(Math.max(w, colWidths.get(th.dataset.col) ?? 0, MIN_COL_W), maxW));
+        // a chosen width (a drag, a layout's, the config's) stands, even
+        // under its header's
+        if (!userSized.has(th.dataset.col))
+          colWidths.set(th.dataset.col,
+            Math.min(Math.max(w, colWidths.get(th.dataset.col) ?? 0, MIN_COL_W), maxW));
         headerMeasured.add(th.dataset.col);
         measured = true;
       }
@@ -4345,7 +4349,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (!c || !fresh.includes(c)) continue;
       const w = th.getBoundingClientRect().width;
       if (!(w > 0)) continue; // pane hidden — stays unmeasured for next time
-      colWidths.set(c, Math.min(Math.max(w, colWidths.get(c) ?? 0, MIN_COL_W), maxW));
+      if (!userSized.has(c))
+        colWidths.set(c, Math.min(Math.max(w, colWidths.get(c) ?? 0, MIN_COL_W), maxW));
       headerMeasured.add(c);
     }
     table.style.width = prevWidth;
@@ -4356,6 +4361,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   function resetColWidths() {
     colWidths.clear();
     userSized.clear();
+    fitSized.clear();
     headerMeasured.clear();
     dataSeen = false;
     growSuspended = false;
@@ -4373,7 +4379,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     for (const th of thead.querySelectorAll("th")) {
       if (!th.dataset.col) continue; // filler cell
       const w = th.getBoundingClientRect().width;
-      if (w > 0) colWidths.set(th.dataset.col, w);
+      if (w > 0 && !userSized.has(th.dataset.col)) colWidths.set(th.dataset.col, w);
     }
     widthsInited = true;
     renderColgroup();
@@ -4415,9 +4421,62 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     const sel = selectedColumns();
     for (const c of sel.has(col) ? sel : [col]) {
       userSized.delete(c); // fitted width tracks incoming data again
+      fitSized.add(c);
       colWidths.set(c, fitColWidth(c));
     }
     renderColgroup();
+  }
+
+  // Chosen widths — `widths = { col = px }` in config, `panes[id].widths`
+  // in a layout: the columns sized by hand, a drag or a double-click fit.
+  // The rest are sized from their data and are nobody's choice, so they
+  // are not carried. Throws on a bad spec; null, "" and {} mean none.
+  function widthsFromSpec(s) {
+    if (s == null || s === "") return new Map();
+    if (typeof s !== "object" || Array.isArray(s)) throw new Error("expected { column = pixels }");
+    const out = new Map();
+    for (const [c, w] of Object.entries(s)) {
+      if (typeof w !== "number" || !Number.isFinite(w) || w <= 0)
+        throw new Error(`'${c}': expected a width in pixels`);
+      out.set(c, Math.max(MIN_COL_W, w));
+    }
+    return out;
+  }
+
+  // Replaces the chosen widths: a named column is fixed at its width, as
+  // if dragged there (a fitted one too: it comes back as it was saved);
+  // one chosen before and not named goes back to fitting its content.
+  function loadWidthsSpec(s) {
+    let next;
+    try { next = widthsFromSpec(s); }
+    catch (e) { console.warn(`[mkio-table] bad widths: ${e.message}`); return false; }
+    for (const c of [...userSized, ...fitSized]) {
+      if (next.has(c)) continue;
+      userSized.delete(c);
+      fitSized.delete(c);
+      if (widthsInited) colWidths.set(c, Math.min(fitColWidth(c), maxColWidth()));
+      else colWidths.delete(c);
+    }
+    for (const [c, w] of next) {
+      colWidths.set(c, w);
+      userSized.add(c);
+      fitSized.delete(c);
+    }
+    return true;
+  }
+
+  function setWidths(s) {
+    if (loadWidthsSpec(s) && widthsInited) renderColgroup();
+  }
+
+  // null with none chosen, so set(get()) leaves an untouched table alone.
+  function getWidths() {
+    const out = {};
+    for (const c of [...userSized, ...fitSized]) {
+      const w = colWidths.get(c);
+      if (w > 0) out[c] = Math.round(w);
+    }
+    return Object.keys(out).length ? out : null;
   }
 
   function initColResize(col, e) {
@@ -4431,6 +4490,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     function onMove(e2) {
       if (e2.pointerId !== pid) return;
       userSized.add(col); // manual width — stop auto-growing this column
+      fitSized.delete(col);
       colWidths.set(col, Math.max(MIN_COL_W, startW + (e2.clientX - startX)));
       renderColgroup();
     }
@@ -5983,6 +6043,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // Which columns show is seeded before the header first renders.
   loadVisibleSpec(spec.visible);
   defaultVisible = visible;
+  loadWidthsSpec(spec.widths);
   if (columns) renderHead();
 
   /* ── Row building ─────────────────────────────────────────────────── */
@@ -6782,10 +6843,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     // Columns hook: `workspace.setPaneColumns` / `getPaneColumns` and
     // `table.columns` set which columns show.
     // `setNumbers`/`getNumbers`: the column-number strip, which a layout
-    // carries beside `visible`.
+    // carries beside `visible`; `setWidths`/`getWidths`: the chosen
+    // column widths, likewise.
     paneEl._columns = {
       set: setVisible, get: getVisible,
       setNumbers: setColumnNumbers, getNumbers: () => colNumbers,
+      setWidths, getWidths,
     };
     // Tree hook (tree tables only): `workspace.expandPane` and
     // `table.expand` open rows to a depth (a number, or "all"; 0 closes
@@ -6884,6 +6947,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       subscribeLinks();
       refreshLinkFilters();
       resetColWidths();
+      loadWidthsSpec(spec.widths);
       // A configured header re-renders for the configured column set (an
       // inferred one waits for data, as at first open).
       if (columns) renderHead(); else updateHeaderState();

@@ -2633,6 +2633,62 @@ test("dragging a resize grip changes that column's width", async () => {
   document._ev.pointerup.at(-1)({ pointerId: 7 });
 });
 
+// Chosen widths — a drag, a double-click fit — are what a saved layout
+// carries, through `_columns.getWidths`/`setWidths`; `widths` in config
+// seeds them.
+test("getWidths carries dragged and fitted columns only; setWidths restores them through a reopen", async () => {
+  const { host, io } = await createTable({ protocol: "query" });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(5));
+  const api = host._paneEl._columns;
+  assert.equal(api.getWidths(), null, "data-sized columns are nobody's choice");
+
+  getGrips(host)[0]._ev.pointerdown[0]({ button: 0, pointerId: 7, clientX: 100, stopPropagation() {}, preventDefault() {} });
+  document._ev.pointermove.at(-1)({ pointerId: 7, clientX: 140 });
+  document._ev.pointerup.at(-1)({ pointerId: 7 });
+  assert.deepEqual(api.getWidths(), { name: 140 });
+  getGrips(host)[1]._ev.dblclick[0]({ stopPropagation() {}, preventDefault() {} });
+  const fitted = getColgroup(host)._ch[1].style.width;
+  const saved = api.getWidths();
+  assert.deepEqual(saved, { name: 140, value: parseFloat(fitted) }, "a double-click fit is a chosen width too");
+
+  // A reopen starts over; the layout's widths go on after it, before any data.
+  for (const fn of host._paneEl._ev["mkui-pane-open"] ?? []) fn();
+  assert.equal(api.getWidths(), null);
+  api.setWidths(saved);
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(5));
+  assert.equal(getColgroup(host)._ch[0].style.width, "140px");
+  assert.equal(getColgroup(host)._ch[1].style.width, fitted, "narrower than its header, and kept");
+  lastSubscribe().opts.onUpdate("insert", { _mkio_row: "x", name: "x".repeat(40), value: 5 });
+  assert.equal(getColgroup(host)._ch[0].style.width, "140px", "a restored width does not grow");
+  assert.deepEqual(api.getWidths(), saved, "round-trips");
+
+  api.setWidths({ value: 90 });
+  assert.equal(getColgroup(host)._ch[1].style.width, "90px");
+  assert.notEqual(getColgroup(host)._ch[0].style.width, "140px", "a column no longer named fits its content again");
+  assert.deepEqual(api.getWidths(), { value: 90 });
+  api.setWidths(null);
+  assert.equal(api.getWidths(), null);
+});
+
+test("widths in config seed the columns; a bad spec warns and changes nothing", async () => {
+  const { host, io } = await createTable({ protocol: "query", widths: { name: 222 } });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot(makeRows(5));
+  assert.equal(getColgroup(host)._ch[0].style.width, "222px");
+  const api = host._paneEl._columns;
+  assert.deepEqual(api.getWidths(), { name: 222 });
+  const warns = [], warn = console.warn;
+  console.warn = (m) => warns.push(String(m));
+  try { api.setWidths({ name: "wide" }); api.setWidths([1]); } finally { console.warn = warn; }
+  assert.equal(warns.length, 2);
+  assert.match(warns[0], /bad widths/);
+  assert.deepEqual(api.getWidths(), { name: 222 });
+  for (const fn of host._paneEl._ev["mkui-pane-open"] ?? []) fn();
+  assert.deepEqual(api.getWidths(), { name: 222 }, "a reopen goes back to the config");
+});
+
 test("resize enforces a minimum column width", async () => {
   const { host, io } = await createTable({ protocol: "query" });
   triggerVisible(io);
