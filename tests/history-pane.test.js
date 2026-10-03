@@ -453,6 +453,32 @@ test("an empty string on the pane (TOML's null) takes none of the table's", asyn
     assert.equal(t[k], undefined, `${k} is not lent`);
 });
 
+test("the default view comes from the table too: mkio's columns, then its visible ones the history carries", async () => {
+  const { table } = await makePane({
+    rows: [liveRow()],
+    srcSpec: { columns: ["id", "qty", "status", "live_only"], visible: ["status", "live_only", "qty"] },
+  });
+  const t = table().spec;
+  const meta = t.columns.filter((c) => c.startsWith("_mkio_"));
+  assert.equal(meta.length, 4);
+  assert.deepEqual(t.visible, [...meta, "status", "live_only", "qty"].filter((c) => t.columns.includes(c)));
+  assert.ok(t.columns.includes("id") && !t.visible.includes("id"), "the rest stays in the picker");
+});
+
+test("the pane's own visible wins, and a table without one lends none", async () => {
+  const own = await makePane({
+    rows: [liveRow()], spec: { visible: ["qty"] },
+    srcSpec: { columns: ["id", "qty", "status"], visible: ["status"] },
+  });
+  assert.deepEqual(own.table().spec.visible.filter((c) => !c.startsWith("_mkio_")), ["qty"]);
+  const none = await makePane({ rows: [liveRow()], srcSpec: { columns: ["id", "qty"] } });
+  assert.equal(none.table().spec.visible, undefined);
+  const off = await makePane({
+    rows: [liveRow()], spec: { visible: "" }, srcSpec: { columns: ["id", "qty"], visible: ["qty"] },
+  });
+  assert.equal(off.table().spec.visible, undefined);
+});
+
 test("mkio's columns the table's groups already file stay where the config put them", async () => {
   const groups = [{ label: "Progress", columns: ["status", "_mkio_version"] }];
   const { table } = await makePane({ rows: [liveRow()], srcSpec: { groups } });

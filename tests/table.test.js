@@ -5242,7 +5242,7 @@ test("unchecking values excludes them — unseen values in live rows stay visibl
   const f = valueFilterCtl(host, "status");
   f.set("closed", false);
   assert.deepEqual(shownNames(host), ["a", "c"]);
-  assert.equal(filterTitle(host, "status"), "All but 1 values");
+  assert.equal(filterTitle(host, "status"), "not closed");
   const opts = lastSubscribe().opts;
   opts.onUpdate("insert", { _mkio_ref: streamRef(4), name: "d", status: "new" });
   opts.onUpdate("insert", { _mkio_ref: streamRef(5), name: "e", status: "closed" });
@@ -5261,7 +5261,7 @@ test("Clear then checking values includes only them — unseen values stay hidde
   f.set("open", true);
   f.set("held", true);
   assert.deepEqual(shownNames(host), ["a", "c"]);
-  assert.equal(filterTitle(host, "status"), "2 values");
+  assert.equal(filterTitle(host, "status"), "held, open");
   const opts = lastSubscribe().opts;
   opts.onUpdate("insert", { _mkio_ref: streamRef(4), name: "d", status: "new" });
   assert.deepEqual(shownNames(host), ["a", "c"], "a never-seen value fails an inclusion");
@@ -5329,10 +5329,10 @@ async function filteredTable(filters, extra = {}) {
 test("filters config: a value list includes, include/exclude record intent", async () => {
   let host = await filteredTable({ status: ["open", "new"] });
   assert.deepEqual(shownNames(host), ["a", "c"]);
-  assert.equal(filterTitle(host, "status"), "2 values");
+  assert.equal(filterTitle(host, "status"), "open, new");
   host = await filteredTable({ status: { exclude: ["closed"] } });
   assert.deepEqual(shownNames(host), ["a", "c"]);
-  assert.equal(filterTitle(host, "status"), "All but 1 values");
+  assert.equal(filterTitle(host, "status"), "not closed");
   lastSubscribe().opts.onUpdate("insert", { _mkio_row: "5", name: "e", status: "other" });
   assert.deepEqual(shownNames(host), ["a", "c", "e"], "an exclusion lets unseen values through");
   host = await filteredTable({ status: { include: ["open"] } });
@@ -5342,7 +5342,7 @@ test("filters config: a value list includes, include/exclude record intent", asy
 
 test("filters config is active before data and shows in the header and dropdown", async () => {
   const { host, io } = await createTable({ protocol: "query", columns: ["name", "status"], filters: { status: ["open"] } });
-  assert.equal(filterTitle(host, "status"), "1 values", "header rendered from `columns` shows the filter");
+  assert.equal(filterTitle(host, "status"), "open", "header rendered from `columns` shows the filter");
   assert.ok(getThs(host).find(t => t.dataset.col === "status").querySelector(".mkui-filter-btn").classList.contains("active"));
   triggerVisible(io);
   lastSubscribe().opts.onSnapshot(orderRows());
@@ -5615,8 +5615,8 @@ test("chips: no toolbar until something is active; chips name the state and go a
   assert.equal(s.groupIcon("mkui-chips-filter"), null);
   host._paneEl._filters.set({ status: { exclude: ["closed"] } });
   s = chipStrip(host);
-  assert.deepEqual(s.filter, ["Status: All but 1 values"], "the label and the header tooltip text");
-  assert.equal(byClass(s.chips, "mkui-chip mkui-chip-filter")[0].title, "Status: All but 1 values");
+  assert.deepEqual(s.filter, ["Status: not closed"], "the label and the header tooltip text");
+  assert.equal(byClass(s.chips, "mkui-chip mkui-chip-filter")[0].title, "Status: not closed");
   assert.equal(s.toolbar._ch[0], s.chips, "without buttons the chip cluster is the toolbar's only child");
   // Sort chips precede filter chips; each group's icon clears that group.
   assert.deepEqual(s.chips._ch.map(c => c.className), ["mkui-chip-group mkui-chips-sort", "mkui-chip-group mkui-chips-filter"]);
@@ -5657,7 +5657,7 @@ test("chips: sort chips flip on click, × drops a key, the group icon clears the
 test("chips: a filter chip opens its dropdown, × clears one filter, the group icon clears all", async () => {
   const host = await filteredTable({ status: ["open", "new"], qty: { from: 100 } });
   let s = chipStrip(host);
-  assert.deepEqual(s.filter, ["status: 2 values", "qty: ≥ 100"]);
+  assert.deepEqual(s.filter, ["status: open, new", "qty: ≥ 100"]);
   assert.deepEqual(shownNames(host), ["c"]);
   s.open("status");
   const dd = host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown"));
@@ -5670,7 +5670,7 @@ test("chips: a filter chip opens its dropdown, × clears one filter, the group i
   s.dropFilter("qty");
   assert.equal(host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).length, 0, "clearing the open column closes its dropdown");
   s = chipStrip(host);
-  assert.deepEqual(s.filter, ["status: 2 values"]);
+  assert.deepEqual(s.filter, ["status: open, new"]);
   assert.deepEqual(shownNames(host), ["a", "c"]);
   assert.equal(filterTitle(host, "qty"), "", "header button cleared too");
   host._paneEl._filters.set({ qty: { to: 100, empty: true } }, { merge: true });
@@ -5703,9 +5703,62 @@ test("chips: buttons keep the first toolbar slots and the toolbar stays when chi
 test("chips: a filter chip on a column with no header yet does nothing", async () => {
   const { host } = await createTable({ protocol: "query", filters: { status: ["open"] } });
   const s = chipStrip(host);
-  assert.deepEqual(s.filter, ["status: 1 values"], "configured filters show before data or header");
+  assert.deepEqual(s.filter, ["status: open"], "configured filters show before data or header");
   s.open("status");
   assert.equal(host._ch.filter(c => String(c.className).includes("mkui-filter-dropdown")).length, 0);
+});
+
+test("chips: a values filter names its values while they fit, and counts them past that", async () => {
+  const text = async (filters) => chipStrip((await createTable({ protocol: "query", filters })).host).filter[0];
+  assert.equal(await text({ status: { exclude: ["open"] } }), "status: not open");
+  assert.equal(await text({ status: ["open", null] }), "status: open, (empty)");
+  assert.equal(await text({ status: ["a", "b", "c", "d"] }), "status: 4 values", "more than three are counted");
+  assert.equal(await text({ status: { exclude: ["a value too long for a chip"] } }), "status: All but 1 value", "so is one too long to show");
+});
+
+test("chips: a filter on a boolean column reads as the column's name, or not it", async () => {
+  const text = async (filters, rows) => {
+    const { host, io } = await createTable({ protocol: "query", filters });
+    if (rows) {
+      triggerVisible(io);
+      lastSubscribe().opts.onSnapshot(rows);
+      flushRaf();
+      await Promise.resolve();
+    }
+    return chipStrip(host);
+  };
+  assert.deepEqual((await text({ done: [true] })).filter, ["done"], "keeping true says so before any data");
+  assert.deepEqual((await text({ done: [false] })).filter, ["not done"]);
+  assert.deepEqual((await text({ done: { include: [true], off: true } })).filterTitles, ["done (off)"]);
+  const bools = [{ _mkio_row: "1", done: true }, { _mkio_row: "2", done: false }];
+  assert.deepEqual((await text({ done: { exclude: [false] } })).filter, ["done: not false"], "dropping false waits to see the column");
+  assert.deepEqual((await text({ done: { exclude: [false] } }, bools)).filter, ["done"]);
+  assert.deepEqual((await text({ done: { exclude: [true] } }, bools)).filter, ["not done"]);
+  assert.deepEqual((await text({ done: { exclude: [false] } }, [...bools, { _mkio_row: "3", done: "maybe" }])).filter,
+    ["done: not false"], "a column holding anything else is not boolean");
+});
+
+test("chips: a boolean chip follows the column: a value that is neither spells the filter out again", async () => {
+  const { host, io } = await createTable({ protocol: "query", filters: { done: { exclude: [false] } } });
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", done: true }, { _mkio_row: "2", done: false }]);
+  flushRaf();
+  await Promise.resolve();
+  assert.deepEqual(chipStrip(host).filter, ["done"]);
+  assert.equal(filterTitle(host, "done"), "true", "the header tooltip, which has no name to lean on, says the value");
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", done: true }, { _mkio_row: "3", done: "n/a" }]);
+  flushRaf();
+  await Promise.resolve();
+  assert.deepEqual(chipStrip(host).filter, ["done: not false"]);
+  assert.equal(filterTitle(host, "done"), "not false");
+});
+
+test("chips: a boolean chip uses the column's label, reads text booleans, and leaves two values alone", async () => {
+  const text = async (spec) => chipStrip((await createTable({ protocol: "query", ...spec })).host).filter;
+  assert.deepEqual(await text({ labels: { done: "Done" }, filters: { done: [false] } }), ["not Done"]);
+  assert.deepEqual(await text({ filters: { done: ["True"] } }), ["done"], "a text column of True/False counts");
+  assert.deepEqual(await text({ filters: { done: [true, false] } }), ["done: true, false"]);
+  assert.deepEqual(await text({ filters: { done: [true, null] } }), ["done: true, (empty)"]);
 });
 
 /* ── Switched-off filters ────────────────────────────────────────────── */
@@ -5719,11 +5772,11 @@ test("off filters: a chip's checkbox suspends a filter and puts it back, values 
   chipStrip(host).toggleFilter("status", false);
   let s = chipStrip(host);
   assert.deepEqual(shownNames(host), ["b", "c"], "still filtered by qty ≥ 100");
-  assert.deepEqual(s.filter, ["status: 2 values", "qty: ≥ 100"], "the chip keeps its values");
-  assert.deepEqual(s.filterTitles, ["status: 2 values (off)", "qty: ≥ 100"], "the tooltip spells the state out");
+  assert.deepEqual(s.filter, ["status: open, new", "qty: ≥ 100"], "the chip keeps its values");
+  assert.deepEqual(s.filterTitles, ["status: open, new (off)", "qty: ≥ 100"], "the tooltip spells the state out");
   assert.deepEqual(s.filterOff(), [true, false], "only that chip dims");
   assert.equal(s.check("status").checked, false);
-  assert.equal(filterTitle(host, "status"), "2 values (off)");
+  assert.equal(filterTitle(host, "status"), "open, new (off)");
   const btn = getThs(host).find(t => t.dataset.col === "status").querySelector(".mkui-filter-btn");
   assert.ok(btn.classList.contains("active"), "still marked: there is a filter to turn back on");
   assert.ok(btn.classList.contains("mkui-filter-off"), "but drawn muted");
@@ -5740,7 +5793,7 @@ test("off filters: a chip's checkbox suspends a filter and puts it back, values 
 test("off filters: switching off is not clearing — × still drops the filter outright", async () => {
   const host = await filteredTable({ status: ["open"] });
   chipStrip(host).toggleFilter("status", false);
-  assert.deepEqual(chipStrip(host).filter, ["status: 1 values"], "still there");
+  assert.deepEqual(chipStrip(host).filter, ["status: open"], "still there");
   assert.deepEqual(chipStrip(host).filterOff(), [true]);
   chipStrip(host).dropFilter("status");
   assert.deepEqual(chipStrip(host).filter, [], "× removes it for good");
@@ -5795,7 +5848,7 @@ test("off filters: the dropdown's Applied box switches the open filter, and edit
   closed.checked = true;
   closed._ev.change[0]();
   assert.deepEqual(shownNames(host), ["a", "b", "c", "d"], "still off");
-  assert.deepEqual(chipStrip(host).filter, ["status: 3 values"], "but it took the edit");
+  assert.deepEqual(chipStrip(host).filter, ["status: closed, new, open"], "but it took the edit");
   assert.deepEqual(chipStrip(host).filterOff(), [true], "and is still off");
   chipStrip(host).toggleFilter("status", true);
   assert.deepEqual(shownNames(host), ["a", "b", "c", "d"], "on, and now every value passes");
@@ -5814,7 +5867,7 @@ test("off filters: no Applied box until the column has a filter to switch", asyn
 test("off filters: config can ship a filter set up but not applied", async () => {
   const host = await filteredTable({ status: { include: ["open"], off: true }, qty: { from: 100, off: true } });
   assert.deepEqual(shownNames(host), ["a", "b", "c", "d"], "nothing filtered yet");
-  assert.deepEqual(chipStrip(host).filterTitles, ["status: 1 values (off)", "qty: ≥ 100 (off)"], "both offered on the strip");
+  assert.deepEqual(chipStrip(host).filterTitles, ["status: open (off)", "qty: ≥ 100 (off)"], "both offered on the strip");
   assert.deepEqual(chipStrip(host).filterOff(), [true, true]);
   chipStrip(host).toggleFilter("status", true);
   assert.deepEqual(shownNames(host), ["a"], "one click arms it");
@@ -5873,7 +5926,7 @@ test("off filters: a tree column's header dims only once every scope is off", as
   chipStrip(host).toggleFilter("qty", false); // the first chip: the roots filter
   assert.deepEqual(chipStrip(host).filterOff(), [true, false]);
   assert.equal(btn().classList.contains("mkui-filter-off"), false, "one scope still applies");
-  assert.match(btn().title, /All but 1 values \(off\); All but 1 values \(child\)/);
+  assert.match(btn().title, /not 1 \(off\); not 9 \(child\)/);
   api.set({ qty: [{ exclude: ["1"], scope: "roots", off: true }, { exclude: ["9"], scope: "children", off: true }] });
   assert.deepEqual(chipStrip(host).filterOff(), [true, true]);
   assert.ok(btn().classList.contains("mkui-filter-off"), "both off: the column reads as not filtering");
@@ -6625,7 +6678,7 @@ test("Reset returns to the configured list; Hide all keeps one column; Show all 
 test("a filter chip on a hidden column shows it first", async () => {
   const host = await filteredTable({ status: ["open"] }, { visible: ["name", "qty"] });
   assert.deepEqual(shownNames(host), ["a"], "a filter on a hidden column still filters");
-  assert.deepEqual(chipStrip(host).filter, ["status: 1 values"]);
+  assert.deepEqual(chipStrip(host).filter, ["status: open"]);
   chipStrip(host).open("status");
   assert.deepEqual(headerCols(host), ["name", "status", "qty"], "status came back at its place");
   assert.equal(host._ch.filter(c => c.className === "mkui-filter-dropdown").length, 1, "…and its dropdown opened");
@@ -7108,7 +7161,7 @@ test("tree: filters judge roots, children, or all — a hidden row hides its sub
   const api = host._paneEl._filters;
   api.set({ name: { exclude: ["a1"], scope: "children" } });
   assert.deepEqual(treeNames(host), ["a", "a2", "a21", "b", "b1", "x1"]);
-  assert.equal(filterTitle(host, "name"), "All but 1 values (child)");
+  assert.equal(filterTitle(host, "name"), "not a1 (child)");
   assert.deepEqual(api.get(), { name: { exclude: ["a1"], scope: "children" } }, "scope round-trips");
   api.set({ qty: { include: ["3"], scope: "roots" } });
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21"], "roots must have qty 3; children pass untested");
@@ -7121,11 +7174,11 @@ test("tree: filters judge roots, children, or all — a hidden row hides its sub
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"], "default scope is the top level: a2 is a child");
   api.set({ name: { exclude: ["a"] } });
   assert.deepEqual(treeNames(host), ["b", "b1", "x1"], "a top-level match takes its subtree");
-  assert.equal(filterTitle(host, "name"), "All but 1 values", "the default scope isn't spelled out");
+  assert.equal(filterTitle(host, "name"), "not a", "the default scope isn't spelled out");
   assert.deepEqual(api.get(), { name: { exclude: ["a"], scope: "roots" } });
   api.set({ name: { exclude: ["a2"], scope: "all" } });
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "b1", "x1"], "all: a2 misses but a21 below it matches, so it stays");
-  assert.equal(filterTitle(host, "name"), "All but 1 values (branch)");
+  assert.equal(filterTitle(host, "name"), "not a2 (branch)");
   api.set({ name: { exclude: ["a21"], scope: "all" } });
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "b", "b1", "x1"], "a leaf that misses just goes");
   const [, warned] = await withWarnings(() => api.set({ name: { exclude: ["a2"], scope: "leaves" } }));
@@ -7181,7 +7234,7 @@ test("tree: a plain filter dropdown filters the top level; shift-click shows the
   cb1._ev.change[0]();
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "x1"], "b (qty 1) went with its child; a1 (qty 1) stayed");
   assert.equal(host._paneEl._filters.get().qty.scope, "roots");
-  assert.equal(filterTitle(host, "qty"), "All but 1 values");
+  assert.equal(filterTitle(host, "qty"), "not 1");
   dd = openDropdownAdvanced(host, "qty", { altKey: true });
   assert.equal(scopeRow(dd).scopes, null, "alt/option-click is a plain open");
   dd = openDropdownAdvanced(host, "qty", { metaKey: true });
@@ -7207,13 +7260,13 @@ test("tree: a plain filter dropdown filters the top level; shift-click shows the
   cb9.checked = false;
   cb9._ev.change[0]();
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "x1"], "b1 (qty 9) was already hidden under b");
-  assert.equal(filterTitle(host, "qty"), "All but 1 values; All but 1 values (child)", "both filters in the tooltip");
-  assert.deepEqual(chipStrip(host).filter, ["qty: All but 1 values", "qty: All but 1 values (child)"], "a chip each");
+  assert.equal(filterTitle(host, "qty"), "not 1; not 9 (child)", "both filters in the tooltip");
+  assert.deepEqual(chipStrip(host).filter, ["qty: not 1", "qty: not 9 (child)"], "a chip each");
   assert.deepEqual(host._paneEl._filters.get(), { qty: [{ exclude: ["1"], scope: "roots" }, { exclude: ["9"], scope: "children" }] }, "get(): an array per column with several scopes");
   // Clear the top filter by its chip: b returns, minus b1 (child filter).
   chipStrip(host).dropFilter("qty");
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21", "b", "x1"]);
-  assert.deepEqual(chipStrip(host).filter, ["qty: All but 1 values (child)"]);
+  assert.deepEqual(chipStrip(host).filter, ["qty: not 9 (child)"]);
   dd = reopenDropdown(host, "qty").dd;
   row = scopeRow(dd);
   assert.ok(row.scopes && row.btn("children").classList.contains("active"), "a column filtered only off the top opens on that tab, no alt needed");
@@ -7287,8 +7340,8 @@ test("tree: a column's filters config can be an array, one filter per scope", as
     { exclude: ["1"], scope: "roots" }, { exclude: ["9"], scope: "children" },
     { type: "number", from: 1, to: null, empty: false, scope: "all" },
   ] });
-  assert.equal(filterTitle(host, "qty"), "All but 1 values; All but 1 values (child); ≥ 1 (branch)");
-  assert.deepEqual(chipStrip(host).filter, ["qty: All but 1 values", "qty: All but 1 values (child)", "qty: ≥ 1 (branch)"]);
+  assert.equal(filterTitle(host, "qty"), "not 1; not 9 (child); ≥ 1 (branch)");
+  assert.deepEqual(chipStrip(host).filter, ["qty: not 1", "qty: not 9 (child)", "qty: ≥ 1 (branch)"]);
   api.set(got);
   assert.deepEqual(treeNames(host), ["a", "a1", "a2", "a21"], "round-trips");
   api.set({ qty: { include: ["1"], scope: "children" } }, { merge: true });
@@ -7721,7 +7774,7 @@ test("tree: a saved layout round-trips a column's several scoped filters through
   api.set(saved);
   assert.deepEqual(numbered(host), ["1 a", "1.1 a1", "1.2 a2", "1.2.1 a21", "3 x1"], "restored exactly");
   assert.deepEqual(api.get(), saved);
-  assert.deepEqual(chipStrip(host).filter, ["qty: All but 1 values", "qty: All but 1 values (child)", "qty: ≥ 0 (branch)", "name: 3 values"]);
+  assert.deepEqual(chipStrip(host).filter, ["qty: not 1", "qty: not 9 (child)", "qty: ≥ 0 (branch)", "name: a, x1, b"]);
 });
 
 /* ── Tree: nested / flat ──────────────────────────────────────────────── */
@@ -8387,12 +8440,12 @@ test("links: a listener filters its column by the broadcast, marks the filter li
   pointerDown(dataRows(src.host)[0], 0); // select A
   assert.deepEqual(ids(dst.host), ["B", "C"], "rows whose parent is A");
   let s = chipStrip(dst.host);
-  assert.deepEqual(s.filter, ["parent: 1 values (linked: order)"]);
+  assert.deepEqual(s.filter, ["parent: A (linked: order)"]);
   const th = getThs(dst.host).find(t => t.dataset.col === "parent");
   assert.ok(th.querySelector(".mkui-filter-btn").classList.contains("mkui-filter-linked"), "the header's icon says linked");
   pointerDown(dataRows(src.host)[1], 0); // select B: replaced in place
   assert.deepEqual(ids(dst.host), ["D"]);
-  assert.deepEqual(chipStrip(dst.host).filter, ["parent: 1 values (linked: order)"], "one filter, not two");
+  assert.deepEqual(chipStrip(dst.host).filter, ["parent: B (linked: order)"], "one filter, not two");
   src.host._paneEl._editActions.selectAll();
   assert.deepEqual(ids(dst.host), ["B", "C", "D"], "every parent value selected");
   pointerDown(dataRows(src.host)[0], 0);
@@ -8412,7 +8465,7 @@ test("links: a linked filter displaces the column's own filter and restores it w
   src.sub.opts.onSnapshot(linkRows()); // a fresh snapshot drops the source's cursor: nothing selected
   assert.equal(hub.current("order"), null);
   assert.deepEqual(ids(dst.host), ["B", "C"], "the config's parent filter is back");
-  assert.deepEqual(chipStrip(dst.host).filter, ["parent: All but 1 values", "qty: ≥ 2"]);
+  assert.deepEqual(chipStrip(dst.host).filter, ["parent: not B", "qty: ≥ 2"]);
 });
 
 test("links: a user's own edit of the linked column takes it over; the next broadcast re-links", async () => {
@@ -8427,7 +8480,7 @@ test("links: a user's own edit of the linked column takes it over; the next broa
   assert.deepEqual(ids(dst.host), ["D"], "a retract leaves a filter the user owns alone");
   pointerDown(dataRows(src.host)[1], 0); // B
   assert.deepEqual(ids(dst.host), ["D"]);
-  assert.deepEqual(chipStrip(dst.host).filter, ["parent: 1 values (linked: order)"], "re-linked");
+  assert.deepEqual(chipStrip(dst.host).filter, ["parent: B (linked: order)"], "re-linked");
 });
 
 test("links: setFilters in replace mode keeps linked filters; naming their column replaces them", async () => {
@@ -8474,7 +8527,7 @@ test("links: a listener opened after the selection catches up from the hub; reop
   lastSubscribe().opts.onSnapshot(linkRows());
   pointerDown(dataRows(src.host)[0], 0);
   const dst = await createTable({ columns: LINK_COLS, link: { listen: { order: "parent" } } }, { hub, id: "execs" });
-  assert.deepEqual(chipStrip(dst.host).filter, ["parent: 1 values (linked: order)"], "linked before any data");
+  assert.deepEqual(chipStrip(dst.host).filter, ["parent: A (linked: order)"], "linked before any data");
   triggerVisible(dst.io);
   lastSubscribe().opts.onSnapshot(linkRows());
   assert.deepEqual(ids(dst.host), ["B", "C"]);
@@ -8482,7 +8535,7 @@ test("links: a listener opened after the selection catches up from the hub; reop
   for (const fn of paneEl._ev["mkui-pane-close"]) fn();
   pointerDown(dataRows(src.host)[1], 0); // B while execs is closed
   for (const fn of paneEl._ev["mkui-pane-open"]) fn();
-  assert.deepEqual(chipStrip(dst.host).filter, ["parent: 1 values (linked: order)"]);
+  assert.deepEqual(chipStrip(dst.host).filter, ["parent: B (linked: order)"]);
   triggerVisible(dst.io);
   lastSubscribe().opts.onSnapshot(linkRows());
   assert.deepEqual(ids(dst.host), ["D"], "reopened on the current broadcast");
@@ -8568,14 +8621,14 @@ test("links: a linked filter can be switched off, and stays out of the filter sp
   const { src, dst } = await linkedPair(hub);
   pointerDown(dataRows(src.host)[0], 0);
   assert.deepEqual(ids(dst.host), ["B", "C"], "A's children");
-  assert.deepEqual(chipStrip(dst.host).filterTitles, ["parent: 1 values (linked: order)"]);
+  assert.deepEqual(chipStrip(dst.host).filterTitles, ["parent: A (linked: order)"]);
   chipStrip(dst.host).toggleFilter("parent", false);
   assert.deepEqual(ids(dst.host), ["A", "B", "C", "D"], "off: the link's filter applies nothing");
   assert.deepEqual(chipStrip(dst.host).filterOff(), [true]);
   assert.deepEqual(dst.host._paneEl._filters.get(), {}, "a link's filter is never in the filter spec");
   // The link is untouched: a new broadcast still lands in the same filter.
   pointerDown(dataRows(src.host)[1], 0);
-  assert.deepEqual(chipStrip(dst.host).filterTitles, ["parent: 1 values (linked: order)"]);
+  assert.deepEqual(chipStrip(dst.host).filterTitles, ["parent: B (linked: order)"]);
   chipStrip(dst.host).toggleFilter("parent", true);
   assert.deepEqual(ids(dst.host), ["D"], "back on, filtering by the newer selection (B)");
 });

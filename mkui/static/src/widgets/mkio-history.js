@@ -64,7 +64,7 @@ const META_GROUP = "History";
 // The config keys a history window reads (beside `title`/`type`), for the
 // workspace's unknown-key check.
 const HISTORY_KEYS = ["source", "history", "record", "labels", "display", "groups",
-  "types", "values", "styles", "rowStyle"];
+  "visible", "types", "values", "styles", "rowStyle"];
 
 registerPaneType("mkio-history", async (spec, app, host) => {
   const wsUrl = app.config?.mkio?.url;
@@ -387,6 +387,17 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     return [...meta, ...src.filter((c) => !meta.includes(c) && !unversionedCols.includes(c))];
   }
 
+  // The default view follows the table's as well (`visible`, the pane's own
+  // winning): mkio's columns, then the table's default ones the history
+  // carries, the rest a click away in the picker. A table showing every
+  // column has a history showing every one.
+  function historyVisible(cols) {
+    const vis = lent("visible", false);
+    if (!Array.isArray(vis) || !cols) return vis;
+    const meta = [MKIO_FIELDS.version, MKIO_FIELDS.op, MKIO_FIELDS.user, MKIO_FIELDS.ref];
+    return [...meta, ...vis.filter((c) => !meta.includes(c) && cols.includes(c))];
+  }
+
   // The column picker's sections follow the table too (the pane's own
   // `groups` wins), with mkio's columns under a section of their own at the
   // top, where they sit in the table, rather than trailing in "Other". A
@@ -418,12 +429,14 @@ registerPaneType("mkio-history", async (spec, app, host) => {
   async function buildTable(h, key) {
     const factory = getPaneType("mkio-table");
     if (!factory) return false;
+    const columns = historyColumns(h);
     await factory({
       type: "mkio-table",
       service: h.feed,
       protocol: "query",
       filter: recordFilter(key),
-      columns: historyColumns(h),
+      columns,
+      visible: historyVisible(columns),
       labels: { ...labels },
       display: displaySpecs,
       groups: historyGroups(),

@@ -787,6 +787,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // `temporal`/`timeKind` ratchet the same way for time columns (see
   // lib/timeparse.js), and `min`/`max` track the value range of numeric and
   // temporal columns for the range filter's placeholders.
+  const BOOL_TEXT = new Set(["true", "false"]);
   const colStats = new Map(); // col -> { numeric, maxFrac, maxIntW, maxTextW, temporal, timeKind, min, max }
 
   // Canvas text measurement in the table font — lets ingestion grow column
@@ -863,8 +864,15 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (v == null || v === "") continue;
       let st = colStats.get(k);
       if (!st) {
-        st = { numeric: true, maxFrac: 0, maxIntW: 0, maxTextW: 0, temporal: true, timeKind: null, min: null, max: null };
+        st = { numeric: true, maxFrac: 0, maxIntW: 0, maxTextW: 0, temporal: true, timeKind: null, min: null, max: null, bool: null };
         colStats.set(k, st);
+      }
+      // A boolean column holds true and false and nothing else; its filter
+      // chip reads `done` / `not done`, so a change of mind redraws it.
+      if (st.bool !== false) {
+        const was = st.bool;
+        st.bool = BOOL_TEXT.has(String(v).toLowerCase());
+        if (st.bool !== was && colFilters(k).length) queueMicrotask(updateHeaderState);
       }
       // Widths and decimal padding measure what's shown (the display text,
       // plus the boxes icons and bars occupy); whether the column is numeric
@@ -3651,9 +3659,43 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // draws its own off state (an unticked box, dimmed and dashed) and has a
   // width to spend, so it asks for the summary without the `(off)` word;
   // the tooltips, which are all the header button has, keep it.
-  function describeFilter(f, { state = true } = {}) {
-    let s = f.kind === "range" ? describeRange(f)
-      : f.mode === "exclude" ? `All but ${f.values.size} values` : `${f.values.size} values`;
+  // A values filter names its values while they are few and short enough to
+  // fit a chip (`done: true`, `side: not Buy`), and counts them past that.
+  function describeValues(f) {
+    const sense = boolSense(f);
+    if (sense !== null) return String(sense);
+    const n = f.values.size, not = f.mode === "exclude";
+    const names = [...f.values].map((v) => v === "" ? "(empty)" : String(v)).join(", ");
+    if (n && n <= 3 && names.length <= 20) return not ? `not ${names}` : names;
+    const count = `${n} value${n === 1 ? "" : "s"}`;
+    return not ? `All but ${count}` : count;
+  }
+
+  // What a filter on one boolean value comes to: true, false, or null when
+  // it is not that. Keeping `true` says so whatever the column holds;
+  // dropping `false` only does in a column of nothing but booleans.
+  function boolSense(f) {
+    if (f.kind !== "values" || f.values.size !== 1) return null;
+    const v = String([...f.values][0]).toLowerCase();
+    if (!BOOL_TEXT.has(v)) return null;
+    if (f.mode !== "exclude") return v === "true";
+    return colStats.get(f.col)?.bool ? v !== "true" : null;
+  }
+
+  // A chip leads with the column: `Status: open, new`, and for a boolean
+  // the name alone says it: `Done`, `not Done`.
+  function chipText(f, opts) {
+    const sense = boolSense(f), name = label(f.col);
+    if (sense === null) return `${name}: ${describeFilter(f, opts)}`;
+    return (sense ? name : `not ${name}`) + filterNotes(f, opts);
+  }
+
+  function describeFilter(f, opts) {
+    return (f.kind === "range" ? describeRange(f) : describeValues(f)) + filterNotes(f, opts);
+  }
+
+  function filterNotes(f, { state = true } = {}) {
+    let s = "";
     if (f.link) s += ` (linked: ${f.link})`;
     if (tree && f.scope && f.scope !== "roots") s += ` (${f.scope === "children" ? "child" : "branch"})`;
     // Last, so a reader who stops early still learns what the filter says.
@@ -4897,8 +4939,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (filters.size) {
       const chips = [...filters].map(([key, f]) => {
         const col = f.col;
-        const text = `${label(col)}: ${describeFilter(f, { state: false })}`;
-        const title = `${label(col)}: ${describeFilter(f)}`;
+        const text = chipText(f, { state: false });
+        const title = chipText(f);
         const { chip } = makeChip("mkui-chip-filter", col, text, title,
           (e) => {
             if (dropdownCol === col && dropdownScope === (f.scope ?? null)) { closeDropdown(); return; }
