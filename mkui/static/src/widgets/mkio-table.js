@@ -127,6 +127,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // Column-number strip above the labels: off by default, toggled from the
   // column picker, restored from a layout, back to config on reopen.
   let colNumbers = spec.columnNumbers === true;
+  let colNumKey = ""; // what the strip's marks were last drawn for (syncColNums)
   const getStartRef = () => isPaged && (spec.start ?? "today") === "today" ? midnightRef() : null;
   const startLive = isPaged && spec.live === true;
 
@@ -1470,6 +1471,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (widthsInited) renderColgroup();
     }
     if (viewDirty) rebuildView();
+    syncColNums(); // a filter or live change can complete or break a selected column
     // A data change under an open find strip: rescan after a pause.
     if (findRe && findScanRev !== viewRev) scheduleFindRescan();
     const total = view.length;
@@ -1774,7 +1776,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (tr._viewIdx == null) continue;
       styleRowSelection(tr, key, tr._viewIdx);
     }
-    syncColNumCursor();
+    syncColNums();
     refreshButtons();
     publishSelection();
   }
@@ -1967,6 +1969,142 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       selectedAnchor = key;
     }
     refreshSelectionStyles();
+  }
+
+  // How much of each shown column the cell rects cover, over the rows in
+  // view: "full" (every row, nothing toggled off) or "part"; absent = none.
+  // Off rectBounds' runs, so it never walks the rows.
+  function colCoverage() {
+    const out = new Map();
+    const bs = rectBounds();
+    if (!bs.length || !view.length) return out;
+    const off = new Set();
+    for (const k of cellOff) off.add(k.slice(k.indexOf("\0") + 1));
+    const cols = visibleColumns();
+    const sorted = [...bs].sort((x, y) => x.r1 - y.r1);
+    for (let ci = 0; ci < cols.length; ci++) {
+      let reach = -1, any = false, gap = false;
+      for (const b of sorted) {
+        if (ci < b.c1 || ci > b.c2) continue;
+        any = true;
+        if (b.r1 > reach + 1) gap = true;
+        reach = Math.max(reach, b.r2);
+      }
+      if (!any) continue;
+      out.set(cols[ci], !gap && reach >= view.length - 1 && !off.has(cols[ci]) ? "full" : "part");
+    }
+    return out;
+  }
+
+  // Column-number clicks (the columnNumbers strip): the row-number column's
+  // gestures turned sideways. A column is a cell rect over every row in
+  // view (its keys snapshotted like any rect: live inserts don't join).
+  // Plain selects one, shift extends from the anchor column, ctrl/cmd adds
+  // a column or, when it is wholly selected, takes it out; a drag along the
+  // strip extends. The cursor moves to the column on its own row.
+  let colAnchor = null;
+  function columnRect(aCol, fCol) {
+    const r = { aKey: view[0], aCol, aIdx: 0, fKey: view[view.length - 1], fCol, fIdx: view.length - 1, column: true };
+    snapRectKeys(r);
+    return r;
+  }
+
+  // Take a column out of every rect, splitting a rect that spans it.
+  function unselectColumn(col) {
+    const cols = visibleColumns();
+    const ci = cols.indexOf(col);
+    const out = [];
+    for (const r of cellRects) {
+      const ca = cols.indexOf(r.aCol), cf = cols.indexOf(r.fCol);
+      const lo = Math.min(ca, cf), hi = Math.max(ca, cf);
+      if (ca < 0 || cf < 0 || ci < lo || ci > hi) { out.push(r); continue; }
+      if (lo < ci) out.push({ ...r, aCol: cols[lo], fCol: cols[ci - 1] });
+      if (ci < hi) out.push({ ...r, aCol: cols[ci + 1], fCol: cols[hi] });
+    }
+    cellRects = out;
+  }
+
+  function handleColNumPointerDown(col, e) {
+    // Alt means nothing here; touch scrolls the strip like the header.
+    if (e.button !== 0 || e.altKey || e.pointerType === "touch") return;
+    if (!view.length || colIndex(col) < 0) return;
+    e.preventDefault?.();
+    broadcastRetracted = false; // a click speaks again
+    scrollHost.focus?.({ preventScroll: true });
+    const meta = e.ctrlKey || e.metaKey;
+    selectedKeys.clear(); // cell mode is exclusive with row mode
+    selectedAnchor = null;
+    let rect = null;
+    if (e.shiftKey) {
+      const a = colAnchor != null && colIndex(colAnchor) >= 0 ? colAnchor
+        : focusCell?.col != null && colIndex(focusCell.col) >= 0 ? focusCell.col : col;
+      if (!meta) clearCellSelection();
+      else if (cellRects.at(-1)?.column) cellRects.pop();
+      rect = columnRect(a, col);
+      cellRects.push(rect);
+    } else if (meta && colCoverage().get(col) === "full") {
+      unselectColumn(col);
+      colAnchor = col;
+    } else {
+      if (!meta) clearCellSelection();
+      else {
+        // As a ctrl+cell-click: a plain-clicked focus cell is implicitly
+        // selected, so it stays selected beside the new column.
+        if (!cellRects.length && focusCell && rows.has(focusCell.key) && focusCell.col !== col) {
+          const fi = keyViewIdx(focusCell.key, focusCell.idx);
+          cellRects.push({ aKey: focusCell.key, aCol: focusCell.col, aIdx: fi,
+                           fKey: focusCell.key, fCol: focusCell.col, fIdx: fi,
+                           keys: new Set([focusCell.key]) });
+        }
+        for (const k of [...cellOff]) if (k.endsWith("\0" + col)) cellOff.delete(k);
+      }
+      rect = columnRect(col, col);
+      cellRects.push(rect);
+      colAnchor = col;
+    }
+    const idx = focusCell ? keyViewIdx(focusCell.key, focusCell.idx) : 0;
+    focusCell = { key: view[idx], col, idx };
+    refreshSelectionStyles();
+    const th = thead.querySelector?.(`th[data-col="${CSS.escape(col)}"]`);
+    if (th) scrollHeaderIntoView(th);
+    if (rect) startColNumDrag(e, rect);
+  }
+
+  // Drag along the strip: the rect's far column follows the pointer, the
+  // pane scrolling sideways while the pointer is past either edge.
+  function startColNumDrag(e, rect) {
+    const pid = e.pointerId;
+    let raf = 0, lastX = e.clientX, done = false;
+    const step = () => {
+      raf = 0;
+      if (done) return;
+      const hr = scrollHost.getBoundingClientRect?.();
+      let scrolled = false;
+      if (hr && lastX < hr.left) { scrollHost.scrollLeft -= Math.min(40, hr.left - lastX); scrolled = true; }
+      else if (hr && lastX > hr.right) { scrollHost.scrollLeft += Math.min(40, lastX - hr.right); scrolled = true; }
+      const col = cellFromPoint(lastX, hr?.top ?? 0)?.col;
+      if (col != null && col !== rect.fCol) {
+        rect.fCol = col;
+        if (focusCell) focusCell = { ...focusCell, col };
+        refreshSelectionStyles();
+      }
+      if (scrolled) { render(); raf = requestAnimationFrame(step); }
+    };
+    const onMove = (ev) => {
+      if (ev.pointerId !== pid) return;
+      lastX = ev.clientX;
+      if (!raf) raf = requestAnimationFrame(step);
+    };
+    const onUp = (ev) => {
+      if (ev.pointerId !== pid) return;
+      done = true;
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
   }
 
   function handleCellPointerDown(key, col, e) {
@@ -4330,10 +4468,10 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   }
 
   // The column-number strip: display positions, 1..n — the numbers the
-  // header tooltips and the picker give. Display only: no data-col, so
-  // every header walk (widths, find marks, hit-testing) passes it by, and
-  // its cells are inert. Its fixed height (--mkui-colnum-h) is the label
-  // row's sticky offset.
+  // header tooltips and the picker give. No data-col, so every header walk
+  // (widths, find marks, hit-testing) passes it by; a number selects its
+  // column (handleColNumPointerDown). Its fixed height (--mkui-colnum-h)
+  // is the label row's sticky offset.
   function renderNumRow(visCols) {
     const nr = document.createElement("tr");
     nr.className = "mkui-th-numrow";
@@ -4345,17 +4483,35 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       return th;
     };
     if (rowColumn) cell("mkui-th-colnum-corner", "");
-    for (let vi = 0; vi < visCols.length; vi++) cell("", String(vi + 1)).dataset.colnum = visCols[vi];
+    for (let vi = 0; vi < visCols.length; vi++) {
+      const th = cell("", String(vi + 1));
+      th.dataset.colnum = visCols[vi];
+      th.title = `Select column ${vi + 1} (shift: extend, Ctrl/Cmd: add or remove)`;
+      th.addEventListener("pointerdown", (e) => handleColNumPointerDown(visCols[vi], e));
+    }
     cell("mkui-th-colnum-filler", "");
+    colNumKey = "";
     return nr;
   }
 
-  // The cursor's column number lights up, as its row's number does.
-  function syncColNumCursor() {
+  // The strip's marks: the cursor's column lights up, as its row's number
+  // does; a column whose every row is selected is `-sel`, one with some
+  // selected cells `-part`. Cached per view/selection revision, since
+  // render() calls it too (a filter can complete or break a column).
+  function syncColNums() {
     if (!colNumbers || !thead.querySelectorAll) return;
     const col = focusCell?.col;
-    for (const th of thead.querySelectorAll(".mkui-th-colnum"))
-      if (th.dataset.colnum != null) th.classList.toggle("mkui-th-colnum-cursor", th.dataset.colnum === col);
+    const key = `${viewRev}:${selRev}:${col}`;
+    if (key === colNumKey) return;
+    colNumKey = key;
+    const cover = colCoverage();
+    for (const th of thead.querySelectorAll(".mkui-th-colnum")) {
+      const c = th.dataset.colnum;
+      if (c == null) continue;
+      th.classList.toggle("mkui-th-colnum-cursor", c === col);
+      th.classList.toggle("mkui-th-colnum-sel", cover.get(c) === "full");
+      th.classList.toggle("mkui-th-colnum-part", cover.get(c) === "part");
+    }
   }
 
   function setColumnNumbers(on) {
@@ -4480,7 +4636,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     maybeInitWidths();
     updateHeaderState(); // sort/filter marks on the new cells, and the chips
     syncTreeAll();
-    syncColNumCursor();
+    syncColNums();
   }
 
   function updateHeaderState() {

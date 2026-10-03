@@ -6265,6 +6265,128 @@ test("columnNumbers: the picker opens with the box reflecting the table", async 
   assert.equal(cb.checked, true);
 });
 
+// A column number selects its column: a cell rect over every row in view.
+// Shift extends from the anchor column, ctrl/cmd adds one or takes a wholly
+// selected one out, a drag along the strip extends; the strip marks whole
+// (-sel) and partly (-part) selected columns.
+async function colNumTable(extra = {}) {
+  const t = await createTable({ protocol: "query", rowColumn: true, columnNumbers: true, columns: ["a", "b", "c", "d"], ...extra });
+  triggerVisible(t.io);
+  t.sub = lastSubscribe();
+  t.sub.opts.onSnapshot([1, 2, 3].map(i => ({ _mkio_row: String(i), a: `a${i}`, b: `b${i}`, c: `c${i}`, d: `d${i}` })));
+  return t;
+}
+const numCell = (host, col) => numRow(host)._ch.find(th => th.dataset.colnum === col);
+function numDown(host, col, mods = {}, { release = true } = {}) {
+  const e = { button: 0, pointerType: "mouse", pointerId: 3, clientX: 0,
+    ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, preventDefault() {}, ...mods };
+  numCell(host, col)._ev.pointerdown[0](e);
+  if (release) for (const fn of [...(document._ev.pointerup ?? [])]) fn({ pointerId: e.pointerId });
+  return e;
+}
+const selCols = (host) => dataRows(host).map(tr =>
+  tr._ch.filter(td => td.dataset.col && td.classList.contains("mkui-cell-sel")).map(td => td.dataset.col));
+const numMarks = (host) => Object.fromEntries(numRow(host)._ch.filter(th => th.dataset.colnum)
+  .map(th => [th.dataset.colnum, ["sel", "part", "cursor"].filter(m => th.classList.contains(`mkui-th-colnum-${m}`)).join(" ")]));
+
+test("column numbers: a click selects the column, moves the cursor there, and copies it", async () => {
+  const { host } = await colNumTable();
+  pointerDown(dataRows(host)[1], 1); // cursor on row 2, column a
+  numDown(host, "b");
+  assert.deepEqual(selCols(host), [["b"], ["b"], ["b"]]);
+  assert.deepEqual(numMarks(host), { a: "", b: "sel cursor", c: "", d: "" });
+  const focus = dataRows(host).flatMap(tr => tr._ch.filter(td => td.classList.contains("mkui-cell-focus")));
+  assert.deepEqual(focus.map(td => [td.dataset.col, td.textContent]), [["b", "b2"]], "the cursor keeps its row");
+  let written = null;
+  globalThis.navigator = { clipboard: { writeText: (s) => { written = s; } } };
+  try { host._paneEl._editActions.copy(); }
+  finally { delete globalThis.navigator; }
+  assert.equal(written, "b1\r\nb2\r\nb3");
+  numDown(host, "c");
+  assert.deepEqual(selCols(host), [["c"], ["c"], ["c"]], "a plain click replaces");
+});
+
+test("column numbers: shift extends from the anchor column; ctrl/cmd adds, and takes a whole column out", async () => {
+  const { host } = await colNumTable();
+  numDown(host, "b");
+  numDown(host, "d", { shiftKey: true });
+  assert.deepEqual(selCols(host), [["b", "c", "d"], ["b", "c", "d"], ["b", "c", "d"]]);
+  assert.deepEqual(numMarks(host), { a: "", b: "sel", c: "sel", d: "sel cursor" });
+  numDown(host, "c", { ctrlKey: true }); // wholly selected: out, splitting the range
+  assert.deepEqual(selCols(host), [["b", "d"], ["b", "d"], ["b", "d"]]);
+  numDown(host, "a", { metaKey: true });
+  assert.deepEqual(selCols(host), [["a", "b", "d"], ["a", "b", "d"], ["a", "b", "d"]]);
+  assert.deepEqual(numMarks(host), { a: "sel cursor", b: "sel", c: "", d: "sel" });
+  numDown(host, "c", { shiftKey: true, ctrlKey: true }); // extends from a, replacing the last column rect
+  assert.deepEqual(selCols(host)[0], ["a", "b", "c", "d"]);
+});
+
+test("column numbers: ctrl/cmd keeps a clicked cell; partial columns mark -part; a row click ends it", async () => {
+  const { host, sub } = await colNumTable();
+  pointerDown(dataRows(host)[0], 1); // cursor at a1: the implicit selection
+  numDown(host, "c", { ctrlKey: true });
+  assert.deepEqual(selCols(host), [["a", "c"], ["c"], ["c"]]);
+  assert.deepEqual(numMarks(host), { a: "part", b: "", c: "sel cursor", d: "" });
+  sub.opts.onUpdate("insert", { _mkio_row: "4", a: "a4", b: "b4", c: "c4", d: "d4" });
+  assert.deepEqual(selCols(host).at(-1), [], "a live insert doesn't join, as with any rect");
+  assert.equal(numMarks(host).c, "part cursor");
+  pointerDown(dataRows(host)[1], 0); // row mode is exclusive
+  assert.deepEqual(selCols(host), [[], [], [], []]);
+  assert.deepEqual(numMarks(host), { a: "cursor", b: "", c: "", d: "" });
+});
+
+test("column numbers: a cell toggled off breaks the column; ctrl/cmd on the number takes the column back whole", async () => {
+  const { host } = await colNumTable();
+  numDown(host, "b");
+  pointerDown(dataRows(host)[1], 2, { ctrlKey: true }); // b2 off
+  assert.deepEqual(selCols(host), [["b"], [], ["b"]]);
+  assert.equal(numMarks(host).b, "part cursor");
+  numDown(host, "b", { ctrlKey: true }); // not whole: ctrl adds it back, whole
+  assert.deepEqual(selCols(host), [["b"], ["b"], ["b"]]);
+  assert.equal(numMarks(host).b, "sel cursor");
+});
+
+test("column numbers: whole means every row in view; a filter's hidden rows don't count, and come back selected", async () => {
+  const { host } = await colNumTable();
+  numDown(host, "c");
+  host._paneEl._filters.set({ a: { exclude: ["a2"] } });
+  assert.deepEqual(selCols(host), [["c"], ["c"]]);
+  assert.equal(numMarks(host).c, "sel cursor");
+  host._paneEl._filters.set({});
+  assert.deepEqual(selCols(host), [["c"], ["c"], ["c"]], "the column's rows are the records it was made over");
+  assert.equal(numMarks(host).c, "sel cursor");
+});
+
+test("column numbers: right button, alt and touch are inert; an empty table selects nothing", async () => {
+  const { host } = await colNumTable();
+  for (const mods of [{ button: 2 }, { altKey: true }, { pointerType: "touch" }]) {
+    numDown(host, "b", mods);
+    assert.deepEqual(selCols(host), [[], [], []], JSON.stringify(mods));
+  }
+  const empty = await createTable({ protocol: "query", columnNumbers: true, columns: ["a", "b"] });
+  triggerVisible(empty.io);
+  lastSubscribe().opts.onSnapshot([]);
+  assert.doesNotThrow(() => numDown(empty.host, "a"));
+});
+
+test("column numbers: a drag along the strip extends the selection", async () => {
+  const { host } = await colNumTable();
+  sh(host).getBoundingClientRect = () => ({ left: 0, right: 1000, top: 0, bottom: 500, width: 1000, height: 500 });
+  getThs(host).forEach((th, i) => {
+    th.getBoundingClientRect = () => ({ left: i * 100, right: (i + 1) * 100, top: 16, bottom: 36, width: 100, height: 20 });
+  });
+  rafQueue.length = 0;
+  numDown(host, "a", { pointerId: 9, clientX: 50 }, { release: false });
+  document._ev.pointermove.at(-1)({ pointerId: 9, clientX: 250 });
+  flushRaf();
+  assert.deepEqual(selCols(host)[0], ["a", "b", "c"]);
+  document._ev.pointermove.at(-1)({ pointerId: 9, clientX: 150 });
+  flushRaf();
+  assert.deepEqual(selCols(host)[0], ["a", "b"], "and shrinks back");
+  assert.equal(numMarks(host).b, "sel cursor");
+  document._ev.pointerup.at(-1)({ pointerId: 9 });
+});
+
 test("the picker's search finds by default: the list stays whole, Enter steps the matches", async () => {
   const host = await filteredTable({}, { labels: { qty: "Quantity" }, visible: ["name"] });
   columnsBtn(host).click();

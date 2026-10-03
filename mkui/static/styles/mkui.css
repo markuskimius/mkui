@@ -1368,7 +1368,7 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 /* Column-number strip (columnNumbers): a row of display positions above
    the labels. Its cells have a fixed height and no bottom border, so the
    row is exactly --mkui-colnum-h tall and the label row can stick just
-   below it. Inert: no pointer, no sort, no drag. */
+   below it. A number selects its column; no sort, no reorder. */
 .mkui-table-colnums { --mkui-colnum-h: 16px; }
 .mkui-table th.mkui-th-colnum {
   height: var(--mkui-colnum-h);
@@ -1377,9 +1377,12 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   border-bottom: none;
   font-size: 10px;
   text-align: center;
-  cursor: default;
+  cursor: pointer;
   touch-action: auto;
 }
+.mkui-table th.mkui-th-colnum:hover { color: var(--mkui-fg); }
+.mkui-table th.mkui-th-colnum-corner,
+.mkui-table th.mkui-th-colnum-filler { cursor: default; }
 .mkui-table-colnums thead tr:not(.mkui-th-numrow) th { top: var(--mkui-colnum-h); }
 .mkui-table th.mkui-th-colnum-corner {
   position: sticky;
@@ -1388,8 +1391,15 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   border-right: 1px solid var(--mkui-border);
 }
 .mkui-table th.mkui-th-colnum-filler { border-right: none; }
+/* The same tints as the row-number cells: some cells selected, the
+   cursor's column, the whole column selected. */
+.mkui-table th.mkui-th-colnum-part,
 .mkui-table th.mkui-th-colnum-cursor {
   background: color-mix(in srgb, var(--mkui-bg-alt) 88%, var(--mkui-accent));
+  color: var(--mkui-fg);
+}
+.mkui-table th.mkui-th-colnum-sel {
+  background: color-mix(in srgb, var(--mkui-bg-alt) 60%, var(--mkui-accent));
   color: var(--mkui-fg);
 }
 .mkui-table td.mkui-td-rownum { z-index: 1; }

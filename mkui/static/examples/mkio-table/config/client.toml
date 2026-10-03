@@ -304,6 +304,11 @@ groups = [
   { label = "Pricing", columns = ["qty", "price", "notional"] },
   { label = "Execution", columns = ["tif", "note"] },
 ]
+# Number the shown columns in a strip above the labels (the picker's
+# "Numbers" box toggles it). Click a number to select its column —
+# shift-click or drag along the strip for several, ctrl/cmd-click to add
+# or remove one — then Ctrl/Cmd+C copies it.
+columnNumbers = true
 # Mirror the current row into app state; the order-detail pane follows it.
 select = { state = "selected_order" }
 # Table linking: broadcast the selected rows' `id` as "order_id" and their
