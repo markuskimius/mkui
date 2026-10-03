@@ -521,8 +521,36 @@ class MkuiWorkspace extends HTMLElement {
     if (spec) {
       this._reportUnknownPaneKeys(id, spec);
       el._ready = this._buildPaneContent(el.contentEl, spec);
+      const problem = this._paneProblems?.get(id);
+      if (problem) this._showPaneProblem(el, problem);
     } else el.contentEl.textContent = `[mkui] unknown pane: ${id}`;
     return el;
+  }
+
+  // A config mistake shown where it bites: a strip across the top of the
+  // pane, above its content, until dismissed (the console has it too).
+  _showPaneProblem(el, text) {
+    if (el._problem) return;
+    const strip = document.createElement("div");
+    strip.className = "mkui-pane-problem";
+    strip.setAttribute("role", "alert");
+    strip.title = text;
+    const msg = document.createElement("span");
+    msg.textContent = text;
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "mkui-pane-problem-close";
+    close.textContent = "×";
+    close.title = "Dismiss";
+    close.addEventListener("click", () => {
+      strip.remove();
+      el._problem = null;
+      el.classList.remove("mkui-pane-has-problem");
+    });
+    strip.append(msg, close);
+    el.insertBefore(strip, el.firstChild);
+    el.classList.add("mkui-pane-has-problem");
+    el._problem = strip;
   }
 
   _parkPane(el) {
@@ -546,8 +574,12 @@ class MkuiWorkspace extends HTMLElement {
     if (unknown.length) {
       const known = [...new Set([...PANE_COMMON_KEYS, ...own])].sort().join(", ");
       const what = spec.type ? `pane type ${spec.type}` : "a widgets pane";
-      console.error(`[mkui] pane "${id}": unknown key${unknown.length > 1 ? "s" : ""} ` +
-        `${unknown.map(k => `"${k}"`).join(", ")} — ${what} takes ${known}`);
+      const text = `pane "${id}": unknown key${unknown.length > 1 ? "s" : ""} ` +
+        `${unknown.map(k => `"${k}"`).join(", ")} — ${what} takes ${known}`;
+      console.error(`[mkui] ${text}`);
+      (this._paneProblems ??= new Map()).set(id, `Config: ${text}`);
+      const built = this._paneEls?.get(id);
+      if (built) this._showPaneProblem(built, `Config: ${text}`);
     }
     return unknown;
   }

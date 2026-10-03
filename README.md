@@ -241,8 +241,9 @@ Frame positions (`x`, `y`, `w`, `h`) are fractions of the workspace rect.
 
 A pane key its type does not read is a mistake nobody would otherwise
 see — mkui reads the keys it knows and leaves the rest — so it is
-reported on the browser console as an error, once per pane, naming the
-keys the type does take:
+reported once per pane, naming the keys the type does take: on the
+browser console as an error, and in a strip across the top of the pane
+itself (dismissed with its ×):
 
 ```
 [mkui] pane "orders": unknown key "expand" — pane type mkio-table takes buttons, columns, …

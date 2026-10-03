@@ -377,6 +377,37 @@ mkui-pane {
   overflow: auto;
   line-height: 1.45;
 }
+/* A config mistake, shown across the top of the pane it is in. */
+.mkui-pane-problem {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: var(--mkui-pane-problem-h, 1.9em);
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0 0.25em 0 0.6em;
+  box-sizing: border-box;
+  background: var(--mkui-warn);
+  color: var(--mkui-warn-fg);
+  font-size: 0.85em;
+  z-index: 2;
+}
+.mkui-pane-problem > span {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.mkui-pane-problem-close {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 1.2em;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.3em;
+}
+.mkui-pane-has-problem > .mkui-pane-content { top: var(--mkui-pane-problem-h, 1.9em); }
 
 .mkui-tabbar {
   display: flex;

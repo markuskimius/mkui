@@ -21,6 +21,17 @@ class FakePane {
     this.contentEl = {};
     this.parentElement = null;
     this.events = [];
+    this.children = [];
+    const classes = new Set();
+    this.classList = { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c) };
+  }
+  get firstChild() { return this.children[0] ?? null; }
+  insertBefore(n, ref) {
+    const at = ref ? this.children.indexOf(ref) : -1;
+    this.children.splice(at < 0 ? this.children.length : at, 0, n);
+    n.parentElement = this;
+    n.remove = () => { this.children = this.children.filter((c) => c !== n); n.parentElement = null; };
+    return n;
   }
   _build() {}
   setAttribute() {}
@@ -65,8 +76,10 @@ globalThis.document = {
       tagName: tag.toUpperCase(), className: "", textContent: "", style: {}, _ev: {}, _ch: [],
       classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c),
         toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) },
-      setAttribute() {},
+      setAttribute(k, v) { el["attr:" + k] = v; },
+      getAttribute(k) { return el["attr:" + k]; },
       appendChild(n) { el._ch.push(n); n.parentElement = el; return n; },
+      append(...ns) { for (const n of ns) el.appendChild(n); },
       addEventListener(name, fn) { (el._ev[name] ??= []).push(fn); },
       fire(name, ev = {}) { ev.stopPropagation ??= () => {}; for (const fn of el._ev[name] ?? []) fn(ev); },
     };
@@ -1054,3 +1067,41 @@ test("a pane key its type does not read is reported once on the console, against
     assert.equal(errors.at(-1), '[mkui] pane "later": unknown key "nope" — pane type late-kind takes content, title, type, widgets, yes');
   } finally { console.error = error; }
 });
+
+test("a pane with a config mistake shows it in a strip across its top, until dismissed", async () => {
+  const { registerPaneType } = await import("../mkui/static/src/core.js");
+  registerPaneType("strip-kind", () => {}, ["service"]);
+  const error = console.error; console.error = () => {};
+  try {
+    const ws = makeWorkspace([]);
+    ws.setApp(new App({ frames: [], panes: {
+      bad: { title: "Bad", type: "strip-kind", service: "s", colums: ["a"] },
+      good: { title: "Good", type: "strip-kind", service: "s" },
+    } }));
+    const bad = ws._ensurePaneEl("bad");
+    const strip = bad._problem;
+    assert.ok(strip && strip.className === "mkui-pane-problem", "the mistake found at setApp is shown when the pane is built");
+    assert.equal(strip._ch[0].textContent,
+      'Config: pane "bad": unknown key "colums" — pane type strip-kind takes content, service, title, type, widgets');
+    assert.equal(strip.getAttribute("role"), "alert");
+    assert.ok(bad.classList.contains("mkui-pane-has-problem"), "the content moves down under it");
+    assert.equal(bad.firstChild, strip, "above the content");
+    ws._ensurePaneEl("bad");
+    assert.equal(bad.children.filter((c) => c.className === "mkui-pane-problem").length, 1, "one strip");
+    strip._ch[1].fire("click");
+    assert.equal(bad._problem, null, "dismissed");
+    assert.equal(bad.children.includes(strip), false);
+    assert.ok(!bad.classList.contains("mkui-pane-has-problem"));
+    const good = ws._ensurePaneEl("good");
+    assert.ok(!good._problem, "a pane without mistakes has none");
+    // A pane built before its type was registered: the strip comes with the check.
+    ws._panes.set("early", { title: "E", type: "late-strip-kind", nope: 1 });
+    const early = ws._ensurePaneEl("early");
+    assert.ok(!early._problem);
+    registerPaneType("late-strip-kind", () => {}, ["yes"]);
+    ws._keysReported.delete("early");
+    ws._reportUnknownPaneKeys("early", ws._panes.get("early"));
+    assert.ok(early._problem, "checked later, shown on the built pane");
+  } finally { console.error = error; }
+});
+
