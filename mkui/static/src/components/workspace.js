@@ -1138,6 +1138,7 @@ class MkuiWorkspace extends HTMLElement {
     if (el._filters) st.filters = el._filters.get();
     if (el._sort) st.sort = el._sort.get();
     if (el._columns) st.visible = el._columns.get();
+    if (el._columns?.getNumbers) st.columnNumbers = el._columns.getNumbers();
     if (el._link) st.link = el._link.get();
     // A detail window's subject configuration — where it gets its
     // records, and whether it is pinned. Never the record itself: that
@@ -1155,6 +1156,7 @@ class MkuiWorkspace extends HTMLElement {
       if ("filters" in st) el._filters?.set(st.filters);
       if ("sort" in st) el._sort?.set(st.sort);
       if ("visible" in st) el._columns?.set(st.visible);
+      if ("columnNumbers" in st) el._columns?.setNumbers?.(st.columnNumbers);
       if ("link" in st) el._link?.set(st.link);
       if ("record" in st) el._record?.follow(st.record);
     };

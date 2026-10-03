@@ -989,6 +989,18 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
 }
 .mkui-filter-mode:hover { color: var(--mkui-fg); }
 .mkui-filter-mode.active { color: var(--mkui-fg); border-bottom-color: var(--mkui-accent); }
+/* The column picker's Numbers box, at the tab strip's right end. */
+.mkui-columns-numbers {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 8px 0 4px;
+  color: var(--mkui-fg-mute);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.mkui-columns-numbers:hover { color: var(--mkui-fg); }
+.mkui-columns-numbers input { margin: 0; }
 
 /* Range panel: relative presets (time columns), From/To bounds, include-
    empty toggle. Bounds use the table's mono font like the value list. */
@@ -1353,6 +1365,33 @@ mkui-frame[data-focused] .mkui-tabbar:not(.mkui-tabbar-focused) .mkui-tab.active
   touch-action: none;
 }
 .mkui-table th.mkui-th-rownum { z-index: 2; }
+/* Column-number strip (columnNumbers): a row of display positions above
+   the labels. Its cells have a fixed height and no bottom border, so the
+   row is exactly --mkui-colnum-h tall and the label row can stick just
+   below it. Inert: no pointer, no sort, no drag. */
+.mkui-table-colnums { --mkui-colnum-h: 16px; }
+.mkui-table th.mkui-th-colnum {
+  height: var(--mkui-colnum-h);
+  padding: 0 4px;
+  line-height: var(--mkui-colnum-h);
+  border-bottom: none;
+  font-size: 10px;
+  text-align: center;
+  cursor: default;
+  touch-action: auto;
+}
+.mkui-table-colnums thead tr:not(.mkui-th-numrow) th { top: var(--mkui-colnum-h); }
+.mkui-table th.mkui-th-colnum-corner {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  border-right: 1px solid var(--mkui-border);
+}
+.mkui-table th.mkui-th-colnum-filler { border-right: none; }
+.mkui-table th.mkui-th-colnum-cursor {
+  background: color-mix(in srgb, var(--mkui-bg-alt) 88%, var(--mkui-accent));
+  color: var(--mkui-fg);
+}
 .mkui-table td.mkui-td-rownum { z-index: 1; }
 /* The rownum cell is opaque (sticky cells must be — rows scroll beneath
    them), so the tr's selection tint can't show through: tint explicitly. */

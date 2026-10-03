@@ -114,6 +114,7 @@ export function sanitizeLayout(raw, known) {
       if ("filters" in st) out.filters = isObj(st.filters) ? st.filters : {};
       if ("sort" in st) out.sort = st.sort ?? null;
       if ("visible" in st) out.visible = st.visible ?? null;
+      if ("columnNumbers" in st) out.columnNumbers = st.columnNumbers === true;
       if ("link" in st) out.link = isObj(st.link) ? st.link : null;
       if ("record" in st) out.record = isObj(st.record) ? st.record : null;
       panes[id] = out;

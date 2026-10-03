@@ -110,7 +110,7 @@ let _subCounter = 0;
 // (`expand` outside `tree`) is reported instead of ignored.
 const TABLE_KEYS = ["service", "protocol", "topic", "filter", "columns", "visible", "labels", "groups", "types",
   "tree", "values", "display", "styles", "rowStyle", "buttons", "history", "select", "live", "start",
-  "rowColumn", "maxcount", "filters", "sort", "link"];
+  "rowColumn", "columnNumbers", "maxcount", "filters", "sort", "link"];
 
 registerPaneType("mkio-table", async (spec, app, host) => {
   const wsUrl = app.config?.mkio?.url;
@@ -124,6 +124,9 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   const maxcount = spec.maxcount !== undefined ? spec.maxcount : 200;
   const isPaged = protocol === "stream" && maxcount > 0;
   const rowColumn = spec.rowColumn !== false; // row-number column, on by default
+  // Column-number strip above the labels: off by default, toggled from the
+  // column picker, restored from a layout, back to config on reopen.
+  let colNumbers = spec.columnNumbers === true;
   const getStartRef = () => isPaged && (spec.start ?? "today") === "today" ? midnightRef() : null;
   const startLive = isPaged && spec.live === true;
 
@@ -1771,6 +1774,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (tr._viewIdx == null) continue;
       styleRowSelection(tr, key, tr._viewIdx);
     }
+    syncColNumCursor();
     refreshButtons();
     publishSelection();
   }
@@ -4325,10 +4329,48 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     return r;
   }
 
+  // The column-number strip: display positions, 1..n — the numbers the
+  // header tooltips and the picker give. Display only: no data-col, so
+  // every header walk (widths, find marks, hit-testing) passes it by, and
+  // its cells are inert. Its fixed height (--mkui-colnum-h) is the label
+  // row's sticky offset.
+  function renderNumRow(visCols) {
+    const nr = document.createElement("tr");
+    nr.className = "mkui-th-numrow";
+    const cell = (cls, text) => {
+      const th = document.createElement("th");
+      th.className = `mkui-th-colnum ${cls}`.trim();
+      th.textContent = text;
+      nr.appendChild(th);
+      return th;
+    };
+    if (rowColumn) cell("mkui-th-colnum-corner", "");
+    for (let vi = 0; vi < visCols.length; vi++) cell("", String(vi + 1)).dataset.colnum = visCols[vi];
+    cell("mkui-th-colnum-filler", "");
+    return nr;
+  }
+
+  // The cursor's column number lights up, as its row's number does.
+  function syncColNumCursor() {
+    if (!colNumbers || !thead.querySelectorAll) return;
+    const col = focusCell?.col;
+    for (const th of thead.querySelectorAll(".mkui-th-colnum"))
+      if (th.dataset.colnum != null) th.classList.toggle("mkui-th-colnum-cursor", th.dataset.colnum === col);
+  }
+
+  function setColumnNumbers(on) {
+    on = on === true;
+    if (on === colNumbers) return;
+    colNumbers = on;
+    if (columns) renderHead();
+  }
+
   function renderHead() {
     thead.innerHTML = "";
     const tr = document.createElement("tr");
     const visCols = visibleColumns();
+    table.classList.toggle("mkui-table-colnums", colNumbers);
+    if (colNumbers) thead.appendChild(renderNumRow(visCols));
     if (rowColumn) {
       // Top-left corner cell of the row-number column: click selects all.
       const th = document.createElement("th");
@@ -4438,6 +4480,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     maybeInitWidths();
     updateHeaderState(); // sort/filter marks on the new cells, and the chips
     syncTreeAll();
+    syncColNumCursor();
   }
 
   function updateHeaderState() {
@@ -4862,7 +4905,17 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       viewTab("all", "All", "Every column: tick to show"),
       viewTab("order", "Order", "The shown columns in display order: drag, or Shift+↑/↓, to reorder"),
     ];
-    views.append(...viewTabs);
+    // Numbers: the column-number strip. About the table, not a set of
+    // columns, so it rides the tab strip, the one row whose controls act on
+    // no column, and stays put across views.
+    const numbers = document.createElement("label");
+    numbers.className = "mkui-columns-numbers";
+    numbers.title = "Number the columns above their headers";
+    const numbersCb = document.createElement("input");
+    numbersCb.type = "checkbox";
+    numbersCb.addEventListener("change", () => setColumnNumbers(numbersCb.checked));
+    numbers.append(numbersCb, document.createTextNode("Numbers"));
+    views.append(...viewTabs, numbers);
     dd.appendChild(views);
 
     const title = document.createElement("div");
@@ -5176,6 +5229,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       if (!finding) findAt = null;
       const order = pickerView === "order";
       for (const b of viewTabs) b.classList.toggle("active", b.dataset.view === pickerView);
+      numbersCb.checked = colNumbers;
       regexBtn.classList.toggle("active", pickerRegex);
       filterBtn.classList.toggle("active", pickerFilters);
       search.placeholder = pickerFilters ? "Filter columns…" : "Find a column…";
@@ -6571,7 +6625,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     paneEl._sort = { set: setSort, get: getSort };
     // Columns hook: `workspace.setPaneColumns` / `getPaneColumns` and
     // `table.columns` set which columns show.
-    paneEl._columns = { set: setVisible, get: getVisible };
+    // `setNumbers`/`getNumbers`: the column-number strip, which a layout
+    // carries beside `visible`.
+    paneEl._columns = {
+      set: setVisible, get: getVisible,
+      setNumbers: setColumnNumbers, getNumbers: () => colNumbers,
+    };
     // Tree hook (tree tables only): `workspace.expandPane` and
     // `table.expand` open rows to a depth (a number, or "all"; 0 closes
     // every row); `toggle(key)` flips one row by its identity.
@@ -6660,6 +6719,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       undoneHere.clear();
       undoneAway.length = 0;
       columns = spec.columns ?? null;
+      colNumbers = spec.columnNumbers === true;
       loadVisibleSpec(spec.visible);
       loadSortSpec(spec.sort);
       loadFilterSpecs(spec.filters);

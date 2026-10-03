@@ -2560,15 +2560,19 @@ function getColgroup(host) {
   return getTable(host)?._ch.find(c => c.tagName === "COLGROUP") ?? null;
 }
 
+// The label row: the first header row, after the column-number strip
+// when one is shown.
+const labelRow = (host) => getThead(host)?._ch.find(tr => tr.className !== "mkui-th-numrow");
+
 function getThs(host) {
-  return (getThead(host)?._ch[0]?._ch ?? []).filter(th => th.dataset?.col);
+  return (labelRow(host)?._ch ?? []).filter(th => th.dataset?.col);
 }
 
 // Grips straddle dividers: column N's grip is on the left edge of cell
 // N+1 (the filler carries the last column's grip). getGrips(host)[i]
 // resizes column i.
 function getGrips(host) {
-  const tr = getThead(host)?._ch[0];
+  const tr = labelRow(host);
   if (!tr) return [];
   return tr._ch.flatMap(th =>
     th._ch.filter(c => String(c.className).includes("mkui-col-resizer")));
@@ -6165,6 +6169,100 @@ test("headers and the picker number the shown columns in display order", async (
   assert.deepEqual(headerCols(host), ["qty", "name", "status", "ts"]);
   assert.deepEqual(p.positions(), [["name", "2"], ["status", "3"], ["qty", "1"], ["ts", "4"]]);
   assert.equal(getThs(host)[2].title, "Column 3 · status");
+});
+
+// `columnNumbers = true` adds a strip of display positions above the
+// labels (off by default): the numbers the tooltips and the picker give,
+// renumbering as columns move, toggled by the picker's Numbers box.
+const numRow = (host) => getThead(host)?._ch.find(tr => tr.className === "mkui-th-numrow") ?? null;
+const colNums = (host) => numRow(host)?._ch.filter(th => th.dataset.colnum != null)
+  .map(th => [th.dataset.colnum, th.textContent]) ?? null;
+
+test("columnNumbers: a strip of display positions above the labels, off by default", async () => {
+  let host = await filteredTable({});
+  assert.equal(numRow(host), null, "off by default");
+  assert.equal(getTable(host).classList.contains("mkui-table-colnums"), false);
+  assert.equal(host._paneEl._columns.getNumbers(), false);
+
+  host = await filteredTable({}, { columnNumbers: true, rowColumn: true, visible: ["qty", "name", "ts"] });
+  assert.equal(getThead(host)._ch[0], numRow(host), "the strip sits above the labels");
+  assert.ok(getTable(host).classList.contains("mkui-table-colnums"));
+  assert.deepEqual(colNums(host), [["qty", "1"], ["name", "2"], ["ts", "3"]]);
+  const cls = numRow(host)._ch.map(th => th.className);
+  assert.equal(cls[0], "mkui-th-colnum mkui-th-colnum-corner", "a corner over the row-number column");
+  assert.equal(cls.at(-1), "mkui-th-colnum mkui-th-colnum-filler");
+  assert.deepEqual(headerCols(host), ["qty", "name", "ts"], "the labels are untouched");
+  assert.deepEqual(getThs(host).map(th => th.title.split(" · ")[0]), ["Column 1", "Column 2", "Column 3"],
+    "the same numbers as the tooltips");
+
+  host._paneEl._columns.set(["ts", "status", "qty"]);
+  assert.deepEqual(colNums(host), [["ts", "1"], ["status", "2"], ["qty", "3"]], "renumbered with the order");
+});
+
+test("columnNumbers: the picker's Numbers box toggles the strip; the hook and a reopen agree", async () => {
+  const host = await filteredTable({});
+  columnsBtn(host).click();
+  const box = byClass(pickerOf(host).dd, "mkui-columns-numbers")[0];
+  assert.equal(box._parent.className, "mkui-filter-modes mkui-columns-views", "on the tab strip");
+  const cb = box._ch[0];
+  assert.equal(cb.checked, false);
+  cb.checked = true; cb._ev.change[0]();
+  assert.deepEqual(colNums(host).map(([, n]) => n), ["1", "2", "3", "4"]);
+  assert.equal(host._paneEl._columns.getNumbers(), true);
+  assert.ok(pickerOf(host), "the picker stays open");
+  cb.checked = false; cb._ev.change[0]();
+  assert.equal(numRow(host), null);
+
+  host._paneEl._columns.setNumbers(true);
+  assert.ok(numRow(host));
+  for (const fn of host._paneEl._ev["mkui-pane-open"] ?? []) fn();
+  assert.equal(host._paneEl._columns.getNumbers(), false, "a reopen goes back to the config");
+  assert.equal(numRow(host), null);
+});
+
+test("columnNumbers: the cursor's column number lights up", async () => {
+  const host = await filteredTable({}, { columnNumbers: true });
+  const lit = () => numRow(host)._ch.filter(th => th.classList.contains("mkui-th-colnum-cursor")).map(th => th.dataset.colnum);
+  assert.deepEqual(lit(), []);
+  keyDown(sh(host), "ArrowDown"); // the first key places the cursor
+  assert.deepEqual(lit(), ["name"]);
+  keyDown(sh(host), "ArrowRight");
+  assert.deepEqual(lit(), ["status"]);
+});
+
+test("columnNumbers: hiding renumbers; no row-number column, no corner; widths and header walks ignore the strip", async () => {
+  const host = await filteredTable({}, { columnNumbers: true, rowColumn: false });
+  const cls = numRow(host)._ch.map(th => th.className);
+  assert.equal(cls[0], "mkui-th-colnum", "no corner without a row-number column");
+  assert.equal(numRow(host)._ch.length, labelRow(host)._ch.length, "one cell per label-row cell, filler included");
+  host._paneEl._columns.set(["name", "status", "qty", "ts"]);
+  columnsBtn(host).click();
+  pickerOf(host).toggle("status");
+  assert.deepEqual(colNums(host), [["name", "1"], ["qty", "2"], ["ts", "3"]], "a hidden column takes its number with it");
+  assert.ok(numRow(host)._ch.every(th => th.dataset.col == null), "no data-col: widths, find and hit-tests pass it by");
+  assert.deepEqual(headerCols(host), ["name", "qty", "ts"]);
+});
+
+test("columnNumbers: only true turns it on; setNumbers coerces, and is a no-op when unchanged", async () => {
+  let host = await filteredTable({}, { columnNumbers: "yes" });
+  assert.equal(numRow(host), null, "a truthy non-boolean is not on");
+  host = await filteredTable({}, { columnNumbers: true });
+  const before = numRow(host);
+  host._paneEl._columns.setNumbers(true);
+  assert.equal(numRow(host), before, "unchanged: the header isn't rebuilt");
+  host._paneEl._columns.setNumbers(1);
+  assert.equal(host._paneEl._columns.getNumbers(), false, "anything but true is off");
+  assert.equal(numRow(host), null);
+  assert.equal(getTable(host).classList.contains("mkui-table-colnums"), false);
+});
+
+test("columnNumbers: the picker opens with the box reflecting the table", async () => {
+  const host = await filteredTable({}, { columnNumbers: true });
+  columnsBtn(host).click();
+  const cb = byClass(pickerOf(host).dd, "mkui-columns-numbers")[0]._ch[0];
+  assert.equal(cb.checked, true);
+  pickerOf(host).toggle("qty"); // a re-sync keeps it
+  assert.equal(cb.checked, true);
 });
 
 test("the picker's search finds by default: the list stays whole, Enter steps the matches", async () => {
