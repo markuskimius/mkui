@@ -88,6 +88,16 @@ protocol = "query"
 # in the detail window but has no column in the history pane.
 columns = ["id", "_mkio_version", "side", "symbol", "qty", "price", "status", "note"]
 labels = { id = "ID" }
+# Sections for the column picker. The history window's versions table
+# takes them too, with mkio's own columns under a "History" section.
+groups = [
+  { label = "Instruction", columns = ["id", "side", "symbol", "qty", "price"] },
+  { label = "Progress", columns = ["status", "_mkio_version", "note"] },
+]
+# A cancelled order reads struck through — here and, because the history
+# window borrows `styles`, `rowStyle`, `values` and `types` as well, on
+# every version recorded while it was cancelled.
+rowStyle = [{ when = "status == 'cancelled'", strike = true }]
 # The audit tape publishes the id of the change you click; this table
 # narrows to that record. The chip on the toolbar shows the link and
 # takes it off again.

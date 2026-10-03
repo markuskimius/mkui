@@ -390,6 +390,99 @@ test("labels and display templates come from the table the pane follows", async 
   assert.deepEqual(fields(host), [["State", "PENDING", "FILLED"]]);
 });
 
+test("the column picker's groups come from the table too, mkio's columns in a section of their own", async () => {
+  const groups = [{ label: "Execution", columns: ["qty", "status"] }];
+  const { table } = await makePane({ rows: [liveRow()], srcSpec: { groups } });
+  assert.deepEqual(table().spec.groups, [
+    { label: "History", columns: ["_mkio_version", "_mkio_op", "_mkio_user", "_mkio_ref"] },
+    ...groups,
+  ]);
+});
+
+test("the pane's own groups win, and a config that files mkio's columns itself is left as written", async () => {
+  const own = [{ label: "Audit", columns: ["_mkio_user", "_mkio_ref"] }, { label: "History", columns: ["_mkio_version", "_mkio_op"] }];
+  const { table } = await makePane({
+    rows: [liveRow()], spec: { groups: own },
+    srcSpec: { groups: [{ label: "Execution", columns: ["qty"] }] },
+  });
+  assert.deepEqual(table().spec.groups, own);
+});
+
+test("the versions table reads a version as the table reads its row: types, values, styles", async () => {
+  const srcSpec = {
+    types: { ts: { type: "time", format: "%H:%M:%S", zone: "local" } },
+    values: { notional: "qty * price" },
+    styles: { status: [{ when: "value == 'filled'", color: "green" }] },
+    rowStyle: { italic: true },
+  };
+  const { table } = await makePane({ rows: [liveRow()], srcSpec });
+  const t = table().spec;
+  assert.deepEqual(t.types, srcSpec.types);
+  assert.deepEqual(t.values, srcSpec.values);
+  assert.deepEqual(t.styles, srcSpec.styles);
+  assert.deepEqual(t.rowStyle, srcSpec.rowStyle);
+});
+
+test("the pane's own types, values and styles go over the table's, entry by entry", async () => {
+  const { table } = await makePane({
+    rows: [liveRow()],
+    srcSpec: {
+      values: { notional: "qty * price", side: "UPPER(value)" },
+      styles: { status: { bold: true } }, rowStyle: { italic: true },
+    },
+    spec: { values: { notional: "qty" }, styles: { qty: { color: "red" } }, rowStyle: [{ when: "qty > 1", bold: true }] },
+  });
+  const t = table().spec;
+  assert.deepEqual(t.values, { notional: "qty", side: "UPPER(value)" });
+  assert.deepEqual(t.styles, { status: { bold: true }, qty: { color: "red" } });
+  assert.deepEqual(t.rowStyle, [{ when: "qty > 1", bold: true }], "a row styler is one thing: replaced, not merged");
+  assert.equal(t.types, undefined, "and what neither sets is not set");
+});
+
+test("an empty string on the pane (TOML's null) takes none of the table's", async () => {
+  const { table } = await makePane({
+    rows: [liveRow()],
+    srcSpec: {
+      groups: [{ label: "Execution", columns: ["qty"] }], types: { qty: "number" },
+      values: { qty: "value * 2" }, styles: { qty: { bold: true } }, rowStyle: { italic: true },
+    },
+    spec: { groups: "", types: "", values: "", styles: "", rowStyle: "" },
+  });
+  const t = table().spec;
+  for (const k of ["groups", "types", "values", "styles", "rowStyle"])
+    assert.equal(t[k], undefined, `${k} is not lent`);
+});
+
+test("mkio's columns the table's groups already file stay where the config put them", async () => {
+  const groups = [{ label: "Progress", columns: ["status", "_mkio_version"] }];
+  const { table } = await makePane({ rows: [liveRow()], srcSpec: { groups } });
+  assert.deepEqual(table().spec.groups, [
+    { label: "History", columns: ["_mkio_op", "_mkio_user", "_mkio_ref"] },
+    ...groups,
+  ]);
+});
+
+test("groups that are not a list go to the table as written, for it to report", async () => {
+  const { table } = await makePane({ rows: [liveRow()], srcSpec: { groups: { label: "x" } } });
+  assert.deepEqual(table().spec.groups, { label: "x" });
+  const bad = [null, { label: "Execution", columns: ["qty"] }];
+  const { table: t2 } = await makePane({ rows: [liveRow()], srcSpec: { groups: bad } });
+  assert.deepEqual(t2().spec.groups[0], { label: "History", columns: ["_mkio_version", "_mkio_op", "_mkio_user", "_mkio_ref"] });
+  assert.deepEqual(t2().spec.groups.slice(1), bad, "a bad entry does not stop the section being added");
+});
+
+test("the keys a history pane reads are declared, so none is reported as unknown", async () => {
+  const { getPaneTypeKeys } = await import("../mkui/static/src/core.js");
+  const keys = [...getPaneTypeKeys("mkio-history")];
+  for (const k of ["source", "history", "record", "labels", "display", "groups", "types", "values", "styles", "rowStyle"])
+    assert.ok(keys.includes(k), `${k} is a key of mkio-history`);
+});
+
+test("a table without groups gives the versions table none", async () => {
+  const { table } = await makePane({ rows: [liveRow()] });
+  assert.equal(table().spec.groups, undefined);
+});
+
 test("a display template that fails at run time shows #ERR, and warns once", async () => {
   registerExprFunction("HBOOM", () => { throw new Error("boom"); }, { params: [] });
   const warned = [];

@@ -17,9 +17,10 @@
 // range diffs its ends, and nothing selected reads the newest change.
 //
 // The pane follows a table pane (`source`): it reads that pane's `history`
-// block, its labels and display templates, and the record its selection
-// implies, re-reading whenever the selection moves. `workspace
-// .showPaneHistory` opens one, and the `table.history` action fires it.
+// block, its labels, display templates and column groups, and the record
+// its selection implies, re-reading whenever the selection moves.
+// `workspace.showPaneHistory` opens one, and the `table.history` action
+// fires it.
 
 import { registerPaneType, getPaneType } from "../core.js";
 import { ensureMkio } from "../mkio-bridge.js";
@@ -57,9 +58,13 @@ function fmtWhen(ref) {
 
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+// The picker section mkio's own columns go under when the table has groups.
+const META_GROUP = "History";
+
 // The config keys a history window reads (beside `title`/`type`), for the
 // workspace's unknown-key check.
-const HISTORY_KEYS = ["source", "history", "record", "labels", "display"];
+const HISTORY_KEYS = ["source", "history", "record", "labels", "display", "groups",
+  "types", "values", "styles", "rowStyle"];
 
 registerPaneType("mkio-history", async (spec, app, host) => {
   const wsUrl = app.config?.mkio?.url;
@@ -91,6 +96,19 @@ registerPaneType("mkio-history", async (spec, app, host) => {
   const displaySpecs = {
     [MKIO_FIELDS.ref]: `\${REF_TIME(value, fmt: '%Y-%m-%d %H:%M:%S', tz: 'local')}`,
     ...(srcSpec.display ?? {}), ...(spec.display ?? {}),
+  };
+  // The versions table reads a version as the table reads the row: the
+  // same declared types (a stamp in the same format and zone), derived
+  // values and conditional styles, the pane's own entries over the
+  // table's. An expression over a column the history leaves out sees NULL.
+  // They are the table's alone: the panel diffs what was recorded.
+  // `""` (TOML's null) on the pane takes none of the table's.
+  const lent = (key, merge = true) => {
+    const own = spec[key], src = srcSpec[key];
+    if (own === "") return undefined;
+    const map = (v) => v && typeof v === "object" && !Array.isArray(v);
+    if (merge && map(own) && map(src)) return { ...src, ...own };
+    return own ?? src;
   };
   const displayExprs = {};
   for (const [c, src] of Object.entries(displaySpecs)) {
@@ -369,6 +387,21 @@ registerPaneType("mkio-history", async (spec, app, host) => {
     return [...meta, ...src.filter((c) => !meta.includes(c) && !unversionedCols.includes(c))];
   }
 
+  // The column picker's sections follow the table too (the pane's own
+  // `groups` wins), with mkio's columns under a section of their own at the
+  // top, where they sit in the table, rather than trailing in "Other". A
+  // config that already has a "History" section, or files those columns
+  // itself, is left as written.
+  function historyGroups() {
+    const gs = lent("groups", false);
+    if (!Array.isArray(gs) || !gs.length) return gs;
+    if (gs.some((g) => g?.label === META_GROUP)) return gs;
+    const named = new Set(gs.flatMap((g) => (Array.isArray(g?.columns) ? g.columns : [])));
+    const meta = [MKIO_FIELDS.version, MKIO_FIELDS.op, MKIO_FIELDS.user, MKIO_FIELDS.ref]
+      .filter((c) => !named.has(c));
+    return meta.length ? [{ label: META_GROUP, columns: meta }, ...gs] : gs;
+  }
+
   // The feed is a query over the whole history table; `recordFilter`
   // narrows it to one record, server-side.
 
@@ -393,6 +426,11 @@ registerPaneType("mkio-history", async (spec, app, host) => {
       columns: historyColumns(h),
       labels: { ...labels },
       display: displaySpecs,
+      groups: historyGroups(),
+      types: lent("types"),
+      values: lent("values"),
+      styles: lent("styles"),
+      rowStyle: lent("rowStyle", false),   // one styler: replaced, never merged
       sort: MKIO_FIELDS.version,   // oldest first: the chain in the order it happened
       rowColumn: false,
     }, app, tableHost);
