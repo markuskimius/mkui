@@ -5736,6 +5736,11 @@ test("chips: a filter on a boolean column reads as the column's name, or not it"
   assert.deepEqual((await text({ done: { exclude: [true] } }, bools)).filter, ["not done"]);
   assert.deepEqual((await text({ done: { exclude: [false] } }, [...bools, { _mkio_row: "3", done: "maybe" }])).filter,
     ["done: not false"], "a column holding anything else is not boolean");
+  const blanks = [...bools, { _mkio_row: "3", done: null }];
+  assert.deepEqual((await text({ done: { exclude: [false] } }, blanks)).filter, ["done: not false"],
+    "a blank row passes too, so dropping false is not the same as keeping true");
+  assert.deepEqual((await text({ done: { exclude: [true] } }, blanks)).filter, ["done: not true"]);
+  assert.deepEqual((await text({ done: [true] }, blanks)).filter, ["done"], "keeping true still says so");
 });
 
 test("chips: a boolean chip follows the column: a value that is neither spells the filter out again", async () => {
@@ -5751,6 +5756,53 @@ test("chips: a boolean chip follows the column: a value that is neither spells t
   await Promise.resolve();
   assert.deepEqual(chipStrip(host).filter, ["done: not false"]);
   assert.equal(filterTitle(host, "done"), "not false");
+});
+
+test("chips: a boolean chip follows the column: a blank arriving live spells the filter out", async () => {
+  const live = async (filter, change) => {
+    const { host, io } = await createTable({ protocol: "query", filters: { done: filter } });
+    triggerVisible(io);
+    const { onSnapshot, onUpdate } = lastSubscribe().opts;
+    onSnapshot([{ _mkio_row: "1", done: true }, { _mkio_row: "2", done: false }]);
+    flushRaf();
+    await Promise.resolve();
+    const before = chipStrip(host).filter;
+    change(onUpdate);
+    flushRaf();
+    await Promise.resolve();
+    return { host, before, after: chipStrip(host).filter };
+  };
+  const ins = await live({ exclude: [false] }, (u) => u("insert", { _mkio_row: "3", done: null }, {}));
+  assert.deepEqual(ins.before, ["done"]);
+  assert.deepEqual(ins.after, ["done: not false"], "an inserted blank row shows under the filter, so the chip stops claiming true");
+  assert.equal(filterTitle(ins.host, "done"), "not false", "and the header tooltip follows");
+  const upd = await live({ exclude: [true] }, (u) => u("update", { _mkio_row: "2", done: "" }, {}));
+  assert.deepEqual(upd.before, ["not done"]);
+  assert.deepEqual(upd.after, ["done: not true"], "an empty string is a blank too, and so is one an update brings");
+  const kept = await live({ include: [true] }, (u) => u("insert", { _mkio_row: "3", done: null }, {}));
+  assert.deepEqual(kept.after, ["done"], "keeping true hides the blank, so the chip stays true to it");
+  const gone = await live({ exclude: [false] }, (u) => {
+    u("insert", { _mkio_row: "3", done: null }, {});
+    u("delete", { _mkio_row: "3" }, {});
+  });
+  assert.deepEqual(gone.after, ["done: not false"], "a blank once seen keeps the chip cautious after its row leaves");
+});
+
+test("chips: a boolean chip forgets the blanks it saw when the pane reopens", async () => {
+  const { host, io } = await createTable({ protocol: "query", filters: { done: { exclude: [false] } } });
+  const paneEl = host._paneEl;
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", done: true }, { _mkio_row: "2", done: false }, { _mkio_row: "3", done: null }]);
+  flushRaf();
+  await Promise.resolve();
+  assert.deepEqual(chipStrip(host).filter, ["done: not false"]);
+  for (const fn of paneEl._ev["mkui-pane-close"] ?? []) fn();
+  for (const fn of paneEl._ev["mkui-pane-open"] ?? []) fn();
+  triggerVisible(io);
+  lastSubscribe().opts.onSnapshot([{ _mkio_row: "1", done: true }, { _mkio_row: "2", done: false }]);
+  flushRaf();
+  await Promise.resolve();
+  assert.deepEqual(chipStrip(host).filter, ["done"]);
 });
 
 test("chips: a boolean chip uses the column's label, reads text booleans, and leaves two values alone", async () => {

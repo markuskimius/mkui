@@ -800,6 +800,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
   // temporal columns for the range filter's placeholders.
   const BOOL_TEXT = new Set(["true", "false"]);
   const colStats = new Map(); // col -> { numeric, maxFrac, maxIntW, maxTextW, temporal, timeKind, min, max }
+  const blankCols = new Set(); // columns seen holding an empty value
 
   // Canvas text measurement in the table font — lets ingestion grow column
   // widths from raw values without touching DOM layout. chW is the width of
@@ -872,7 +873,15 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     for (const k of statColumns(row)) {
       if (k.startsWith("_mkio_") && !shownMkioCols.has(k)) continue;
       const v = cellValue(row, k);
-      if (v == null || v === "") continue;
+      if (v == null || v === "") {
+        // A blank is neither true nor false: a boolean chip that drops one
+        // value can no longer speak for the other (`boolSense`).
+        if (!blankCols.has(k)) {
+          blankCols.add(k);
+          if (colFilters(k).length) queueMicrotask(updateHeaderState);
+        }
+        continue;
+      }
       let st = colStats.get(k);
       if (!st) {
         st = { numeric: true, maxFrac: 0, maxIntW: 0, maxTextW: 0, temporal: true, timeKind: null, min: null, max: null, bool: null };
@@ -1529,6 +1538,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     rows.clear();
     rowEls.clear();
     colStats.clear();
+    blankCols.clear();
     parentOf.clear(); kids.clear(); depthOf.clear(); expanded.clear();
     byParentVals.clear(); pendingKids.clear(); sortedKidsCache.clear(); rankOf.clear();
     if (tree) { rowNumDigits = 2; widthsDirty = true; } // the label-width ratchet restarts with the data
@@ -3756,13 +3766,14 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   // What a filter on one boolean value comes to: true, false, or null when
   // it is not that. Keeping `true` says so whatever the column holds;
-  // dropping `false` only does in a column of nothing but booleans.
+  // dropping `false` only does in a column of nothing but booleans: a blank
+  // row passes too, so there the filter is spelled out (`done: not false`).
   function boolSense(f) {
     if (f.kind !== "values" || f.values.size !== 1) return null;
     const v = String([...f.values][0]).toLowerCase();
     if (!BOOL_TEXT.has(v)) return null;
     if (f.mode !== "exclude") return v === "true";
-    return colStats.get(f.col)?.bool ? v !== "true" : null;
+    return colStats.get(f.col)?.bool && !blankCols.has(f.col) ? v !== "true" : null;
   }
 
   // A chip leads with the column: `Status: open, new`, and for a boolean
