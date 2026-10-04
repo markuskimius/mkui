@@ -264,13 +264,24 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     for (const btnSpec of spec.buttons) {
       const btn = document.createElement("button");
       btn.className = "mkui-btn mkui-toolbar-btn";
-      btn.textContent = btnSpec.label ?? "Button";
+      const label = btnSpec.label ?? "Button";
+      btn.textContent = label;
       btn.disabled = true;
-      btn.addEventListener("click", () => handleButtonClick(btnSpec));
       toolbar.appendChild(btn);
       // `style = <styler>` — compiled once the styler helpers exist
       // (below); applied with the gate in updateButtonStates.
-      buttonEls.push({ el: btn, spec: btnSpec, styler: undefined });
+      // `label` with a `${…}` in it is a template over the button scope,
+      // re-read with the gate, so a button can name what it would do to
+      // this selection ("Hide" / "Unhide").
+      // `recall = true`: the rows the button last acted on, kept by key —
+      // see recalledRows.
+      const b = { el: btn, spec: btnSpec, styler: undefined, label: null, recall: null };
+      if (typeof label === "string" && label.includes("${")) {
+        try { b.label = compileTemplate(label); }
+        catch (e) { console.warn(`[mkio-table] bad button label '${label}': ${e.message}`); }
+      }
+      btn.addEventListener("click", () => handleButtonClick(btnSpec, b));
+      buttonEls.push(b);
     }
   }
   // Record undo/redo: a button per configured direction, after the
@@ -1815,17 +1826,30 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (focusCell) {
       const idx = keyViewIdx(focusCell.key, focusCell.idx);
       const col = cols.includes(focusCell.col) ? focusCell.col : cols[0];
+      // Its row left the view and the cursor fell onto a neighbour: it is
+      // there to navigate from, but it selects nothing until the user
+      // puts it somewhere (every gesture makes a fresh focusCell).
+      const snapped = view[idx] !== focusCell.key || focusCell.snapped === true;
       focusCell = { key: view[idx], col, idx };
+      if (snapped) focusCell.snapped = true;
     } else {
       focusCell = { key: view[0], col: cols[0], idx: 0 };
     }
     return true;
   }
 
+  // The cursor's row as a selection of one — what stands in when nothing
+  // is selected. Not a cursor that fell here because its own row left the
+  // view: a button pressed again would act on a row nobody picked.
+  function cursorKey() {
+    if (!focusCell || !ensureFocusCell() || focusCell.snapped) return null;
+    return focusCell.key;
+  }
+
   function styleRowSelection(tr, key, viewIdx) {
     const rowSel = selectedKeys.has(key);
     tr.classList.toggle("mkui-selected", rowSel);
-    const hl = (focusCell != null && focusCell.key === key) ||
+    const hl = (focusCell != null && focusCell.key === key && !focusCell.snapped) ||
       (cellRects.length > 0 && rowInRects(viewIdx));
     tr.classList.toggle("mkui-row-hl", !rowSel && hl);
     let ci = 0;
@@ -1893,7 +1917,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     broadcastSelection();
     notifySelection();
     if (!selectStatePath) return;
-    let key = focusCell?.key ?? null;
+    let key = cursorKey();
     if (key == null && selectedKeys.size) {
       for (const k of view) {
         if (selectedKeys.has(k)) { key = k; break; }
@@ -2235,6 +2259,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
 
   function handleRowPointerDown(key, e) {
     broadcastRetracted = false; // a click speaks again
+    forgetRecall();
     if (e.button !== 0 && e.button !== undefined) return;
     scrollHost.focus?.({ preventScroll: true });
     // The hit may land on a span inside the cell (tree text, rich
@@ -2417,6 +2442,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (!columns || !view.length) return;
     const meta = e.ctrlKey || e.metaKey;
     const cols = visibleColumns();
+    if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) forgetRecall();
 
     // Find strip open: F3 steps the matches (shift reverses). Ctrl/Cmd+G
     // arrives through the workspace's edit routing instead, so it works
@@ -2879,8 +2905,8 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     }
     for (const [a, b] of selectedRowIntervals())
       for (let i = a; i <= b; i++) out.push(rows.get(view[i]));
-    if (!out.length && focusCell && ensureFocusCell()) {
-      const row = rows.get(focusCell.key);
+    if (!out.length) {
+      const row = rows.get(cursorKey());
       if (row) out.push(row);
     }
     return out;
@@ -2890,7 +2916,41 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     if (selectedKeys.size) return selectedKeys.size;
     const iv = selectedRowIntervals();
     if (iv.length) return iv.reduce((n, [a, b]) => n + (b - a + 1), 0);
-    return focusCell && rows.has(focusCell.key) ? 1 : 0;
+    return cursorKey() != null ? 1 : 0;
+  }
+
+  // `recall` on a button: the rows it last acted on that have since left
+  // the view (the action itself took them out — a Hide under a filter on
+  // the hidden mark), offered back to that button alone while nothing is
+  // selected, so the next press can undo the last. Any gesture in the
+  // table forgets them; a row that comes back is selected instead.
+  function recalledRows(b) {
+    if (!b.recall || effectiveRowCount() > 0) return [];
+    if (viewDirty) rebuildView();
+    const inView = new Set(view);
+    const out = [];
+    for (const key of b.recall) {
+      const row = rows.get(key);
+      if (row && !inView.has(key)) out.push(row);
+    }
+    return out;
+  }
+
+  function forgetRecall() {
+    let had = false;
+    for (const b of buttonEls) if (b.recall) { b.recall = null; had = true; }
+    if (had) refreshButtons();
+  }
+
+  // A recalled row came back into view (the button brought it back):
+  // select it, so the button goes on working on what the user is now
+  // looking at.
+  function reselectRecalled(key) {
+    let hit = false;
+    for (const b of buttonEls) if (b.recall?.delete(key)) hit = true;
+    if (!hit || cellRects.length) return false; // a cell rect over it has it back already
+    selectedKeys.add(key);
+    return true;
   }
 
   // Exact until `limit`, then stops — enablement only compares thresholds,
@@ -2924,7 +2984,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
             out.push({ row, column: cols[c], value: row?.[cols[c]] ?? "" });
       }
     }
-    if (!out.length && focusCell && ensureFocusCell()) {
+    if (!out.length && cursorKey() != null) {
       const row = rows.get(focusCell.key);
       if (row) out.push({ row, column: focusCell.col, value: row[focusCell.col] ?? "" });
     }
@@ -2943,11 +3003,12 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       const cellUnit = unit === "cell" || unit === "cells";
       const single = unit === "cell" || unit === "row";
       let count;
+      const recalled = !cellUnit && bs.recall ? recalledRows(b) : [];
       if (cellUnit) {
         const lim = Math.max(en.minSelected ?? 0, en.maxSelected ?? 0, 1) + 1;
         count = countCellsUpTo(lim);
       } else {
-        count = rowCount;
+        count = recalled.length || rowCount;
       }
       let ok = true;
       if (asOfRef) ok = false;   // a historical row is not one to act on
@@ -2965,14 +3026,31 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         if (scope) return scope;
         matRows ??= getSelectedRows();
         const cells = cellUnit ? getSelectedCells() : [];
+        const sel = recalled.length ? recalled : matRows;
         return scope = {
-          rows: matRows, row: matRows[0] ?? null, cells,
-          selection: { count, rowCount: matRows.length, cellCount: cellUnit ? cells.length : undefined, unit },
+          rows: sel, row: sel[0] ?? null, cells,
+          selection: { count, rowCount: sel.length, cellCount: cellUnit ? cells.length : undefined, unit },
           connected: mkioConnected, state: stateRoot(),
         };
       };
       if (ok && en.when != null) ok = expr.truthy(evalExpr(String(en.when), buttonScope()));
       el.disabled = !ok;
+      if (b.label) {
+        let text;
+        try {
+          const v = b.label.evaluate(new expr.Scope(buttonScope(), null, false));
+          text = v == null ? "" : expr.toString(v);
+        } catch (e) {
+          text = String(bs.label);
+          const tag = `buttons[${i}].label`;
+          if (!warnedExprs.has(tag)) {
+            warnedExprs.add(tag);
+            console.warn(`[mkio-table] expression error in ${tag}: ${e.message}`);
+          }
+        }
+        if (el.textContent !== text) el.textContent = text;
+      }
+      if (bs.recall) el.title = recalled.length ? `${plural(recalled.length, "row")} not shown` : "";
       if (b.styler === undefined)
         b.styler = bs.style == null || bs.style === "" ? null : styler(bs.style, `buttons[${i}].style`);
       if (b.styler) {
@@ -2983,12 +3061,17 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     });
   }
 
-  async function handleButtonClick(btnSpec) {
+  async function handleButtonClick(btnSpec, b = null) {
     const action = btnSpec.action;
     if (!action) return;
     const unit = buttonUnit(btnSpec);
     const cellUnit = unit === "cell" || unit === "cells";
-    const selected = getSelectedRows();
+    let selected = getSelectedRows();
+    if (b && btnSpec.recall && !cellUnit) {
+      if (!selected.length) selected = recalledRows(b);
+      // What this press acts on is what the next may be asked to take back.
+      b.recall = new Set(selected.map((r) => r[idKey]));
+    }
     const cells = cellUnit ? getSelectedCells() : [];
     const first = selected[0] ?? {};
     const ctx = {
@@ -4329,6 +4412,7 @@ registerPaneType("mkio-table", async (spec, app, host) => {
         if (!r || (inView ? !inView.has(key) : !matchesFilters(r))) selectedKeys.delete(key);
       }
     }
+    if (focusCell) { if (viewDirty) rebuildView(); ensureFocusCell(); }
     render();
     refreshButtons();
     // Pruning can retire the published row, or promote a different one.
@@ -6391,10 +6475,11 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       undoneAway.push(undone);
       if (gated) { clearSelection(); return; }   // clearSelection republishes
     }
-    // A selected row leaving the table changes the count the buttons see.
-    if (gated) refreshButtons();
+    // A selected row leaving the table changes the count the buttons see,
+    // and the cursor lands on a neighbour without selecting it.
+    if (gated) { ensureFocusCell(); refreshSelectionStyles(); }
     // The published row may be the one that just went away.
-    publishSelection();
+    else publishSelection();
     notifyData();
   }
 
@@ -6492,6 +6577,22 @@ registerPaneType("mkio-table", async (spec, app, host) => {
     // New text under an open find strip: the match list follows (an
     // in-place replace bumps no viewRev, so render() won't notice).
     if (findRe && changed.length) scheduleFindRescan();
+    if (wasVis !== isVis) {
+      // Its own change took it out of the view, or brought it back. Out:
+      // it leaves the selection as a filtered-out row does, and a cursor
+      // that was on it selects nothing where it lands. Back: a row some
+      // button was holding is selected again.
+      const gated = rowInSelection(key);
+      if (isVis ? reselectRecalled(key) : gated) {
+        if (!isVis) selectedKeys.delete(key);
+        ensureFocusCell();          // land the cursor now, so it is drawn where it is
+        refreshSelectionStyles();   // buttons and the published selection with it
+        cursorCache.delete(key);
+        notifyData();
+        return;
+      }
+      if (buttonEls.some((b) => b.recall)) refreshButtons();
+    }
     // A live update to a row the buttons act on can flip an `enable.when`
     // verdict (a status column crossing a gate), so re-evaluate them.
     if (rowInSelection(key)) {

@@ -9886,3 +9886,169 @@ test("tree: a deleted child fades out in its slot, its later siblings staying be
   lastSubscribe().opts.onUpdate("update", { _mkio_row: "6", name: "b1!", id: "B1", parent: "B", qty: 9 });
   assert.deepEqual(allTreeNames(host), ["a", "a2", "a21", "b", "b1!", "x1"]);
 });
+
+/* ── Buttons: template labels, a landed cursor, recall ───────────────── */
+
+// A table that leaves out rows marked hidden, as a Hide button's would.
+const HIDE = { type: "transaction", service: "svc", op: "mark",
+               data: { n: "${row.name}", hidden: "${IF(ALL(rows, r -> r.hidden), 0, 1)}" } };
+async function createHideTable(button = {}) {
+  const t = await createTable({
+    rowColumn: true, protocol: "query", columns: ["name", "hidden"],
+    filters: { hidden: { exclude: ["1"] } },
+    buttons: [{ label: "${IF(selection.rowCount > 0 and ALL(rows, r -> r.hidden), 'Unhide', 'Hide')}",
+                enable: { minSelected: 1 }, action: HIDE, ...button }],
+  });
+  triggerVisible(t.io);
+  lastSubscribe().opts.onSnapshot(makeRows(4).map((r) => ({ ...r, hidden: 0 })));
+  return t;
+}
+const hideMark = (i, hidden) =>
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: String(i), name: `row-${i}`, value: i, hidden });
+function hideSends(fn) {
+  const sent = [];
+  fakeClient.send = (service, data) => sent.push(data);
+  try { fn(sent); } finally { delete fakeClient.send; }
+  return sent;
+}
+const hideShown = (host) => dataRows(host).filter((tr) => !tr._leaving).map((tr) => tr._ch[1].textContent);
+
+test("a button label with a template follows the selection", async () => {
+  const { host } = await createSelTable({
+    buttons: [{ label: "${IF(selection.rowCount > 0 and ALL(rows, r -> r.value > 1), 'High', 'Low')} ${selection.rowCount}",
+                enable: { minSelected: 1 }, action: { type: "action", name: "x" } },
+              { label: "Plain", action: { type: "action", name: "x" } }],
+  });
+  const btn = toolbarBtn(host), plain = toolbarBtn(host, 1);
+  assert.equal(btn.textContent, "Low 0", "evaluated before anything is selected");
+  assert.equal(plain.textContent, "Plain");
+  const trs = dataRows(host);
+  pointerDown(trs[2], 0);
+  assert.equal(btn.textContent, "High 1");
+  pointerDown(trs[0], 0, { ctrlKey: true });
+  assert.equal(btn.textContent, "Low 2", "a mixed selection");
+  lastSubscribe().opts.onUpdate("update", { _mkio_row: "0", name: "row-0", value: 7 });
+  assert.equal(btn.textContent, "High 2", "a live change to a selected row re-reads it");
+});
+
+test("a button label that fails to evaluate shows as written", async () => {
+  const warn = console.warn; const said = [];
+  console.warn = (m) => said.push(String(m));
+  try {
+    const { host } = await createSelTable({
+      buttons: [{ label: "${NOPE(rows)}", action: { type: "action", name: "x" } }],
+    });
+    assert.equal(toolbarBtn(host).textContent, "${NOPE(rows)}");
+    pointerDown(dataRows(host)[1], 0);
+    assert.equal(said.filter((m) => m.includes("label")).length, 1, "warned once");
+  } finally { console.warn = warn; }
+});
+
+test("a cursor that lands on a neighbour when its row leaves the view selects nothing", async () => {
+  const { host } = await createHideTable();
+  const btn = toolbarBtn(host);
+  const scrollHost = host._ch.find(c => String(c.className).includes("mkui-table-scroll"));
+  pointerDown(dataRows(host)[1], 1);            // the cursor on row-1, nothing row-selected
+  assert.equal(btn.disabled, false);
+  assert.equal(btn.textContent, "Hide");
+  hideMark(1, 1);                                // its own update takes it out of the filter
+  assert.deepEqual(hideShown(host), ["row-0", "row-2", "row-3"]);
+  assert.equal(btn.disabled, true, "the row that moved up was never picked");
+  const sent = hideSends(() => btn._ev.click[0]());
+  assert.deepEqual(sent, []);
+  const landed = dataRows(host).find((tr) => tr._ch[1].textContent === "row-2");
+  assert.ok(!String(landed.className).includes("mkui-row-hl"), "nor does it look picked");
+  keyDown(scrollHost, "ArrowDown");             // a key puts the cursor somewhere: it selects again
+  assert.equal(btn.disabled, false);
+  assert.deepEqual(hideSends(() => btn._ev.click[0]()), [{ n: "row-3", hidden: 1 }]);
+});
+
+test("a row-selected row that leaves the view leaves the selection", async () => {
+  const { host } = await createHideTable();
+  const btn = toolbarBtn(host);
+  const trs = dataRows(host);
+  pointerDown(trs[1], 0);
+  pointerDown(trs[2], 0, { ctrlKey: true });
+  hideMark(1, 1);
+  assert.equal(btn.disabled, false, "row-2 is still selected");
+  assert.deepEqual(hideSends(() => btn._ev.click[0]()), [{ n: "row-2", hidden: 1 }]);
+  hideMark(2, 1);
+  assert.equal(btn.disabled, true);
+});
+
+test("a deleted cursor row leaves a cursor that selects nothing", async () => {
+  const { host } = await createSelTable({
+    buttons: [{ label: "Act", enable: { minSelected: 1 },
+                action: { type: "transaction", service: "svc", data: { n: "${row.name}" } } }],
+  });
+  const btn = toolbarBtn(host);
+  pointerDown(dataRows(host)[1], 1);
+  assert.equal(btn.disabled, false);
+  lastSubscribe().opts.onUpdate("delete", { _mkio_row: "1" });
+  assert.equal(btn.disabled, true);
+});
+
+test("recall: a button takes back the rows its own action took out of view", async () => {
+  const { host } = await createHideTable({ recall: true });
+  const btn = toolbarBtn(host);
+  const trs = dataRows(host);
+  pointerDown(trs[1], 0);
+  pointerDown(trs[2], 0, { ctrlKey: true });
+  assert.equal(btn.textContent, "Hide");
+  assert.deepEqual(hideSends(() => btn._ev.click[0]()),
+    [{ n: "row-1", hidden: 1 }, { n: "row-2", hidden: 1 }]);
+  hideMark(1, 1); hideMark(2, 1);
+  assert.deepEqual(hideShown(host), ["row-0", "row-3"]);
+  assert.equal(btn.disabled, false, "the rows it hid are its to bring back");
+  assert.equal(btn.textContent, "Unhide");
+  assert.equal(btn.title, "2 rows not shown");
+  assert.deepEqual(hideSends(() => btn._ev.click[0]()),
+    [{ n: "row-1", hidden: 0 }, { n: "row-2", hidden: 0 }]);
+  hideMark(1, 0); hideMark(2, 0);
+  assert.deepEqual(hideShown(host).sort(), ["row-0", "row-1", "row-2", "row-3"]);
+  assert.equal(btn.textContent, "Hide", "back in view, they are selected again");
+  assert.equal(btn.title, "");
+  assert.deepEqual(hideSends(() => btn._ev.click[0]()),
+    [{ n: "row-1", hidden: 1 }, { n: "row-2", hidden: 1 }]);
+});
+
+test("recall: a single row picked with the cursor comes back the same way", async () => {
+  const { host } = await createHideTable({ recall: true });
+  const btn = toolbarBtn(host);
+  pointerDown(dataRows(host)[1], 1);
+  hideSends(() => btn._ev.click[0]());
+  hideMark(1, 1);
+  assert.equal(btn.textContent, "Unhide");
+  assert.deepEqual(hideSends(() => btn._ev.click[0]()), [{ n: "row-1", hidden: 0 }]);
+  hideMark(1, 0);
+  assert.equal(btn.textContent, "Hide");
+  assert.deepEqual(hideSends(() => btn._ev.click[0]()), [{ n: "row-1", hidden: 1 }]);
+});
+
+test("recall: any click or key in the table forgets the rows", async () => {
+  for (const gesture of ["click", "key"]) {
+    const { host } = await createHideTable({ recall: true });
+    const btn = toolbarBtn(host);
+    const scrollHost = host._ch.find(c => String(c.className).includes("mkui-table-scroll"));
+    pointerDown(dataRows(host)[1], 0);
+    hideSends(() => btn._ev.click[0]());
+    hideMark(1, 1);
+    assert.equal(btn.textContent, "Unhide", gesture);
+    if (gesture === "click") pointerDown(dataRows(host)[0], 0);
+    else keyDown(scrollHost, "ArrowDown");
+    assert.equal(btn.textContent, "Hide", gesture);
+    assert.equal(btn.title, "", gesture);
+    const sent = hideSends(() => btn._ev.click[0]());
+    assert.ok(sent.every((d) => d.n !== "row-1" && d.hidden === 1), `${gesture}: acts on what is selected now`);
+  }
+});
+
+test("recall: only the button that asks for it remembers", async () => {
+  const { host } = await createHideTable();   // no recall
+  const btn = toolbarBtn(host);
+  pointerDown(dataRows(host)[1], 0);
+  hideSends(() => btn._ev.click[0]());
+  hideMark(1, 1);
+  assert.equal(btn.disabled, true);
+  assert.equal(btn.textContent, "Hide");
+});
