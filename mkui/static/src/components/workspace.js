@@ -1357,7 +1357,7 @@ class MkuiWorkspace extends HTMLElement {
   }
 
   // Back to the startup layout: the config's frames, every pane at its
-  // configured filters, sort, and columns, no closed window remembered —
+  // configured filters, sort, columns, and links, no closed window remembered —
   // as if the app had just loaded without a saved layout.
   resetLayout() {
     const frames = this._configFrameSpecs(this._app?.config?.frames);

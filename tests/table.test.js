@@ -8593,6 +8593,38 @@ test("links: a listener opened after the selection catches up from the hub; reop
   assert.deepEqual(ids(dst.host), ["D"], "reopened on the current broadcast");
 });
 
+test("links: reopening a pane puts back its configured links, as it does its filters", async () => {
+  const hub = new LinkHub();
+  const src = await createTable({ columns: LINK_COLS, rowColumn: true, link: { broadcast: { order: "id" } } }, { hub, id: "orders" });
+  triggerVisible(src.io);
+  lastSubscribe().opts.onSnapshot(linkRows());
+  const dst = await createTable({ columns: LINK_COLS, link: { listen: { order: "parent" } } }, { hub, id: "execs" });
+  triggerVisible(dst.io);
+  lastSubscribe().opts.onSnapshot(linkRows());
+  // What a saved layout from before the links were configured does.
+  const empty = { broadcast: {}, listen: {}, broadcasting: true, listening: true };
+  src.host._paneEl._link.set(empty);
+  dst.host._paneEl._link.set(empty);
+  pointerDown(dataRows(src.host)[0], 0);
+  assert.deepEqual(chipStrip(dst.host).filter, [], "nothing linked");
+  for (const { host } of [src, dst]) {
+    for (const fn of host._paneEl._ev["mkui-pane-close"]) fn();
+    for (const fn of host._paneEl._ev["mkui-pane-open"]) fn();
+  }
+  assert.deepEqual(src.host._paneEl._link.get(), { ...empty, broadcast: { order: "id" } });
+  assert.deepEqual(dst.host._paneEl._link.get(), { ...empty, listen: { order: "parent" } });
+  triggerVisible(src.io);
+  lastSubscribe().opts.onSnapshot(linkRows());
+  pointerDown(dataRows(src.host)[0], 0);
+  assert.deepEqual(chipStrip(dst.host).filter, ["parent: A (linked: order)"]);
+  // A link added by hand to a table that configures none goes the same way.
+  const bare = await createTable({ columns: LINK_COLS }, { hub, id: "bare" });
+  bare.host._paneEl._link.set({ listen: { order: "parent" } });
+  for (const fn of bare.host._paneEl._ev["mkui-pane-close"]) fn();
+  for (const fn of bare.host._paneEl._ev["mkui-pane-open"]) fn();
+  assert.deepEqual(bare.host._paneEl._link.get(), empty);
+});
+
 test("links: closing the broadcasting pane retracts", async () => {
   const hub = new LinkHub();
   const { src, dst } = await linkedPair(hub);

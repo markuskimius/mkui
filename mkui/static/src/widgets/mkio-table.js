@@ -7192,10 +7192,16 @@ registerPaneType("mkio-table", async (spec, app, host) => {
       loadVisibleSpec(spec.visible);
       loadSortSpec(spec.sort);
       loadFilterSpecs(spec.filters);
-      // Links keep their configuration (a layout sets its own after this);
-      // their filters come back from what the hub holds.
-      subscribeLinks();
-      refreshLinkFilters();
+      // Links go back to the configured ones, like the filters above (a
+      // layout sets its own after this); their filters come back from
+      // what the hub holds.
+      {
+        let parsed = null;
+        try { parsed = linkFromSpec(spec.link); }
+        catch (e) { console.warn(`[mkio-table] bad link: ${e.message}`); }
+        if (parsed) applyLinkConfig(parsed);
+        else { subscribeLinks(); refreshLinkFilters(); }
+      }
       resetColWidths();
       loadWidthsSpec(spec.widths);
       // A configured header re-renders for the configured column set (an

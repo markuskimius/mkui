@@ -835,8 +835,8 @@ expands into one `layout.restore` entry per save — the list refreshes
 whenever the menu opens, so saves from another tab appear.
 `layout.reset` returns to how the app looks at startup without a saved
 layout: the config's `frames` (one declared `open = false` closed), every
-pane at its configured filters, sort, and columns, no closed window
-remembered. With `autoload` (the default), the user's newest save
+pane at its configured filters, sort, columns, and links, no closed
+window remembered. With `autoload` (the default), the user's newest save
 is applied when the app starts, after login where there is one; the
 config frames load when there is none, or when the store doesn't answer
 within `timeout`.
@@ -934,7 +934,9 @@ link.chips = false              # no toolbar chips: pause from the advanced drop
   Python](#driving-the-app-from-python).
 - **Layouts.** A saved layout carries every pane's link configuration —
   the maps and the paused flags — and restores it; the filters a link
-  produces are not saved, they come back from the live selection.
+  produces are not saved, they come back from the live selection. A
+  pane that reopens without saved state — `layout.reset` — is back at
+  the links its config gives it, as it is at its configured filters.
 - **Whole windows.** A set of linked panes can be one window the config
   defines and a menu item opens whole — a `frames` entry with `open =
   false`, see [Configs](#configs).
