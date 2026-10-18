@@ -1111,7 +1111,7 @@ export function openDialog(spec, context, app, extra = {}) {
     // on a link it follows the link. With `buttons` both press the default
     // one. An editable region, or a registered field that `keepsEnter`, keeps
     // a plain Enter as a textarea does. Left/right walk the footer's buttons,
-    // and Tab stays in the dialog.
+    // and Tab stays in the dialog, unless a field claimed it.
     const onKey = (e) => {
       callOffTimeout();
       if (e.key === "Escape") { if (cancel()) e.preventDefault(); return; }
@@ -1129,6 +1129,9 @@ export function openDialog(spec, context, app, extra = {}) {
       if (!keepsEnter(e.target)) pressDefault();
     };
     function trapTab(e) {
+      // A field that used the Tab itself (an editor indenting a list item)
+      // has claimed it; the focus stays where it is.
+      if (e.defaultPrevented) return;
       const els = [...(host.querySelectorAll?.(TAB_STOPS) ?? [])]
         .filter((el) => !el.disabled && el.offsetParent !== null);
       if (els.length === 0) return;
@@ -1152,6 +1155,9 @@ export function openDialog(spec, context, app, extra = {}) {
       }
     });
 
+    // Declared before anything can call fitFrame: a registered field may
+    // report a resize while the dialog is still opening.
+    let seen = false; // the open-time fit may re-center; after it, the title bar is the anchor
     built = true;
     onFieldChange(null, recallAll());
     // Follow the app state the spec reads (`subscribe` answers at once:
@@ -1164,7 +1170,6 @@ export function openDialog(spec, context, app, extra = {}) {
     }
     snapshotInitial();
     for (const sec of sections) if (sec.item.collapsible) setSectionOpen(sec, initialFold(sec));
-    let seen = false; // the open-time fit may re-center; after it, the title bar is the anchor
     fitFrame();
     seen = true;
 
