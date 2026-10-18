@@ -212,7 +212,7 @@ Pin button: `icon("pin")` via `frameEl._extraControls`; pinned, a *confirmed* su
 
 - Pointer guards: every mousedown/pointerdown that opens a menu or starts an action/drag checks `ev.button === 0` (except the frame-raise mousedown). Modified clicks are inert where the modifier means nothing: sort headers ignore ctrl/cmd/alt (shift keeps multi-sort), the select-all corner ignores all. `tests/pointer-guards.test.js`
 - Icons are inline SVGs (`icon(name)`), never text glyphs: `currentColor`, sized by `.mkui-icon`, whose `pointer-events: none` lands hits on the hosting button
-- `registerPaneType(name, factory, keys)`: custom content, `keys` = the config keys it reads (`getPaneTypeKeys`); `registerWidget`: inline widgets
+- `registerPaneType(name, factory, keys)`: custom content, `keys` = the config keys it reads (`getPaneTypeKeys`); `registerWidget`: inline widgets; `registerFieldType(name, factory)`: dialog fields (`widgets/CLAUDE.md`)
 - Layout tree invariant: every leaf sits inside a `{ type: "tabs", children: [...] }`; no bare strings after normalize
 - CSS invariant: `mkui-menubar`/`mkui-statusbar` are `box-sizing: border-box` so their height equals `--mkui-menubar-h`/`--mkui-statusbar-h` exactly; the workspace is positioned by those (`tests/styles.test.js`)
 - Stability: semver over README "Versioning"'s surface; `tests/surface.test.js` fails a removal until the major bumps, an addition until `tests/surface.json` lists it.

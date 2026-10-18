@@ -3,10 +3,44 @@ import { icon } from "../lib/icons.js";
 import { formatShortcut } from "../lib/shortcut.js";
 import { isRich, richText, renderRich } from "../lib/rich.js";
 import { statePaths, compileExpr, compileTemplate } from "../lib/expressions.js";
-import { suppressSpec, suppressedAnswer, storeSuppressed, readSuppressed } from "../lib/dialogs.js";
+import { suppressSpec, suppressedAnswer, storeSuppressed, readSuppressed, FIELD_TYPES } from "../lib/dialogs.js";
+import { getFieldType } from "../core.js";
 import { strptime, parseTime, inputToBound, boundToInput, inputTypeForKind, kindForFormat, detectTimeKind } from "../lib/timeparse.js";
 
 let dialogSeq = 0;
+
+// Enter is the target's own — not the dialog's submit — in a textarea (a
+// newline), on a button (its click: Enter on Cancel cancels), on a link,
+// in anything editable (an application's editor), and inside a field type
+// that says `keepsEnter` (its wrapper carries the class). DOM-light: it
+// reads `tagName`, `isContentEditable` and `closest`, so node can test it.
+const OWN_ENTER_TAGS = new Set(["TEXTAREA", "BUTTON", "A"]);
+export function keepsEnter(target) {
+  if (!target) return false;
+  if (OWN_ENTER_TAGS.has(target.tagName)) return true;
+  if (target.isContentEditable) return true;
+  return !!target.closest?.(".mkui-dialog-keeps-enter");
+}
+
+// What the focus lands on first, and what Tab walks: the form controls,
+// editable regions, and a registered field's wrapper (its handle's
+// `focus()` decides where inside).
+const FIRST_FOCUS = "input:not([type=hidden]):not([type=checkbox]), select, textarea, "
+  + "[contenteditable=\"\"], [contenteditable=\"true\"], .mkui-dialog-custom";
+const TAB_STOPS = "input:not([type=hidden]), select, textarea, button, a[href], "
+  + "[contenteditable=\"\"], [contenteditable=\"true\"], [tabindex]:not([tabindex='-1'])";
+
+// A `type` neither built in nor registered is a text box, said once.
+const unknownWarned = new Set();
+export function fieldTypeOf(type) {
+  if (type == null || FIELD_TYPES.includes(type)) return null;
+  const factory = getFieldType(type);
+  if (!factory && !unknownWarned.has(type)) {
+    unknownWarned.add(type);
+    console.warn(`[mkui-dialog] unknown field type "${type}": shown as a text box. Register it with registerFieldType first.`);
+  }
+  return factory ?? null;
+}
 
 // Dialogs open under a spec `id`: firing one again replaces the open one
 // where it stands instead of stacking a second (a server pushing the same
@@ -247,6 +281,8 @@ export function openDialog(spec, context, app, extra = {}) {
     const fieldEls = {};     // key → wrapper div
     const fieldInputs = {};  // key → input / select / textarea
     const fieldParts = {};   // key → { label, ro } extra DOM refs
+    const customFields = {}; // key → a registered field type's handle
+    const customByEl = new Map(); // its wrapper → the handle, for the focus
     const resolvedAttrs = {}; // key → { required, disabled, readonly, min, max, step, pattern }
     const optionsKey = {};   // key → key of the option list last built
     const optionRows = {};   // key → the rows an optionsFrom select was built from
@@ -354,7 +390,11 @@ export function openDialog(spec, context, app, extra = {}) {
       const key = keyOf(field);
       const input = fieldInputs[key];
       let next;
-      if (field.type === "hidden") {
+      const handle = customFields[key];
+      if (handle) {
+        handle.set(v == null ? "" : String(v));
+        next = handle.get();
+      } else if (field.type === "hidden") {
         next = v;
       } else if (field.type === "readonly") {
         next = v;
@@ -522,7 +562,29 @@ export function openDialog(spec, context, app, extra = {}) {
       };
 
       let input;
-      if (field.type === "readonly") {
+      const factory = fieldTypeOf(field.type);
+      if (factory) {
+        // A registered type: the application's element, our label, value
+        // flow, validation and submit. It reports edits through `changed`
+        // and growth through `resized`.
+        const handle = factory(field, {
+          changed: () => {
+            dirty.add(keyOf(field));
+            if (field.name) fieldState[field.name] = handle.get();
+            onFieldChange(field.name ?? null, applyFill(field));
+          },
+          resized: () => { if (built) fitFrame(); },
+          placeholder: field.placeholder == null ? "" : String(resolveExpr(field.placeholder, formScope()) ?? ""),
+        });
+        if (!handle?.el || typeof handle.get !== "function" || typeof handle.set !== "function") {
+          throw new Error(`[mkui-dialog] field type "${field.type}": the factory must return { el, get, set }`);
+        }
+        wrapper.classList.add("mkui-dialog-custom");
+        if (handle.keepsEnter) wrapper.classList.add("mkui-dialog-keeps-enter");
+        wrapper.appendChild(handle.el);
+        customFields[keyOf(field)] = handle;
+        customByEl.set(wrapper, handle);
+      } else if (field.type === "readonly") {
         const ro = document.createElement("div");
         ro.className = "mkui-dialog-readonly";
         wrapper.appendChild(ro);
@@ -1017,8 +1079,7 @@ export function openDialog(spec, context, app, extra = {}) {
     // The focus goes to the first input, else the default button, and back
     // to whatever held it once the dialog is gone.
     const opener = document.activeElement;
-    const firstInput = host.querySelector("input:not([type=hidden]):not([type=checkbox]), select, textarea");
-    (firstInput ?? defaultBtn ?? footerBtns[0])?.focus();
+    if (!focusFirst()) (defaultBtn ?? footerBtns[0])?.focus();
 
     // Escape cancels — unless pinned: the pin says stay open, whatever the
     // key, and × is still there. From a field the keydown lands here; with
@@ -1048,7 +1109,9 @@ export function openDialog(spec, context, app, extra = {}) {
     // Enter is the browser's own click — Enter on Cancel must cancel — and
     // the modified one is ours alone, so its default (that click) is stopped;
     // on a link it follows the link. With `buttons` both press the default
-    // one. Left/right walk the footer's buttons, and Tab stays in the dialog.
+    // one. An editable region, or a registered field that `keepsEnter`, keeps
+    // a plain Enter as a textarea does. Left/right walk the footer's buttons,
+    // and Tab stays in the dialog.
     const onKey = (e) => {
       callOffTimeout();
       if (e.key === "Escape") { if (cancel()) e.preventDefault(); return; }
@@ -1063,11 +1126,10 @@ export function openDialog(spec, context, app, extra = {}) {
       }
       if (e.key !== "Enter") return;
       if (e.ctrlKey || e.metaKey) { e.preventDefault(); pressDefault(); return; }
-      const tag = e.target?.tagName;
-      if (tag !== "TEXTAREA" && tag !== "BUTTON" && tag !== "A") pressDefault();
+      if (!keepsEnter(e.target)) pressDefault();
     };
     function trapTab(e) {
-      const els = [...(host.querySelectorAll?.("input:not([type=hidden]), select, textarea, button, a[href], [tabindex]:not([tabindex='-1'])") ?? [])]
+      const els = [...(host.querySelectorAll?.(TAB_STOPS) ?? [])]
         .filter((el) => !el.disabled && el.offsetParent !== null);
       if (els.length === 0) return;
       const first = els[0], last = els[els.length - 1];
@@ -1293,6 +1355,12 @@ export function openDialog(spec, context, app, extra = {}) {
         const t = resolveExpr(f.label, scope);
         if (parts.label.textContent !== t) parts.label.textContent = t;
       }
+      const handle = customFields[keyOf(f)];
+      if (handle) {
+        handle.setDisabled?.(a.disabled);
+        handle.setReadOnly?.(a.readonly);
+        return;
+      }
       const input = fieldInputs[keyOf(f)];
       if (!input) return;
       const holdsLoad = input._mkuiLoading === true;
@@ -1331,6 +1399,9 @@ export function openDialog(spec, context, app, extra = {}) {
 
     function teardown() {
       stopTicker();
+      for (const handle of Object.values(customFields)) {
+        try { handle.destroy?.(); } catch (e) { console.error("[mkui-dialog] a field's destroy() failed", e); }
+      }
       for (const off of unsubs.splice(0)) off?.();
       if (openId != null && openIds.get(openId) === me) openIds.delete(openId);
     }
@@ -1451,8 +1522,20 @@ export function openDialog(spec, context, app, extra = {}) {
       for (const f of reset) filled.push(...recallField(f));
       onFieldChange(null, filled);
       snapshotInitial();
-      const firstInput = host.querySelector("input:not([type=hidden]):not([type=checkbox]), select, textarea");
-      firstInput?.focus();
+      focusFirst();
+    }
+
+    // The first field takes the focus: a registered one through its own
+    // `focus()`, else the first focusable thing inside it. False when the
+    // form has nothing to focus.
+    function focusFirst() {
+      const first = host.querySelector(FIRST_FOCUS);
+      if (!first) return false;
+      const handle = customByEl.get(first);
+      if (!handle) { first.focus(); return true; }
+      if (typeof handle.focus === "function") handle.focus();
+      else first.querySelector(TAB_STOPS)?.focus();
+      return true;
     }
 
     function collectData() {

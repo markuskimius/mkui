@@ -9,9 +9,10 @@ export function version() { return VERSION; }
 
 import { registerExprFunction, registerExprLibrary, registerExprType, expr } from "./lib/expressions.js";
 import { LinkHub } from "./lib/links.js";
-import { alertSpec, confirmSpec, needsClient } from "./lib/dialogs.js";
+import { alertSpec, confirmSpec, needsClient, FIELD_TYPES } from "./lib/dialogs.js";
 
 const widgetTypes = new Map();
+const fieldTypes = new Map();
 const paneTypes = new Map();
 const paneTypeKeys = new Map();
 
@@ -34,6 +35,42 @@ export function registerPaneType(name, factory, keys = null) {
   paneTypes.set(name, factory);
   paneTypeKeys.set(name, keys ? new Set(keys) : null);
 }
+// A field type is a dialog field an application supplies: an editor, a tag
+// box, a picker mkui does not have. Reference it from a dialog spec with
+// `type = "<name>"`. The factory is called once per field per dialog as
+// `factory(field, ctx)`, with `ctx = { changed, resized, placeholder }`,
+// and returns the field's handle:
+//
+//   el            the element the dialog shows under the label (required)
+//   get()         the value, a string: what the form reads and submits
+//   set(value)    put a value in: a default, a compute, a reset
+//   focus()       take the focus (first field, a reset); else the first
+//                 focusable thing inside `el` does
+//   setDisabled(b) / setReadOnly(b)   the field's `disabled` / `readonly`
+//   destroy()     the dialog is gone: let go of what the field holds
+//   keepsEnter    true: Enter inside the field is its own (a newline, a
+//                 tag), not the dialog's submit; ctrl/cmd+Enter still is
+//
+// The field calls `ctx.changed()` when the user edits it — the dialog then
+// reads `get()`, marks the field typed-into (a `compute` stops overwriting
+// it) and re-runs the form — and `ctx.resized()` when its height changes,
+// so the dialog can grow to fit. Everything else — `label`, `required`
+// (an empty string is missing), `showWhen`, `value`, `compute`, `remember`,
+// the submit — is the dialog's, as for any field. Built-in type names are
+// refused; registering a name again replaces the factory, with a warning.
+export function registerFieldType(name, factory) {
+  if (FIELD_TYPES.includes(name)) {
+    console.warn(`[mkui] registerFieldType: "${name}" is a built-in field type; not registered`);
+    return;
+  }
+  if (typeof factory !== "function") {
+    console.warn(`[mkui] registerFieldType: "${name}" needs a factory function; not registered`);
+    return;
+  }
+  if (fieldTypes.has(name)) console.warn(`[mkui] registerFieldType: "${name}" registered again; the new factory replaces the old`);
+  fieldTypes.set(name, factory);
+}
+export function getFieldType(name) { return fieldTypes.get(name); }
 export function getWidget(name) { return widgetTypes.get(name); }
 export function getPaneType(name) { return paneTypes.get(name); }
 // The keys a pane type declared, as a Set, or null for one that declared none.

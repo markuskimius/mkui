@@ -6,6 +6,14 @@
 
 const isObj = (v) => v != null && typeof v === "object" && !Array.isArray(v);
 
+// The field types the dialog builds itself. `registerFieldType` refuses
+// these names; any other `type` is an application's, looked up in the
+// registry (core.js), and one nobody registered is a text box.
+export const FIELD_TYPES = Object.freeze([
+  "text", "number", "select", "checklist", "grid", "checkbox", "textarea",
+  "date", "time", "datetime", "readonly", "hidden",
+]);
+
 // `args` of the message actions: a bare string (or a list of paragraphs)
 // is the message.
 export function messageArgs(args) {

@@ -12,9 +12,9 @@ import "./widgets/mkio-record.js";
 export {
   VERSION, version,
   App, State, LinkHub,
-  registerWidget, registerPaneType,
+  registerWidget, registerPaneType, registerFieldType,
   registerExprFunction, registerExprLibrary, registerExprType, expr,
-  getWidget, getPaneType, getPaneTypeKeys,
+  getWidget, getPaneType, getPaneTypeKeys, getFieldType,
 } from "./core.js";
 export { ensureMkio } from "./mkio-bridge.js";
 // The record subject: what a custom detail pane needs to follow the link

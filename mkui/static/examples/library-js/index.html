@@ -4,12 +4,142 @@
   <meta charset="utf-8" />
   <title>mkui — library mode</title>
   <link rel="stylesheet" href="../../styles/mkui.css" />
+  <style>
+    /* The two demo field types (App → Custom Fields…). A registered type
+       styles its own element; the dialog supplies the label, the spacing
+       and the error line. */
+    .demo-tags {
+      display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+      padding: 3px; border: 1px solid var(--mkui-border); border-radius: 3px;
+      background: var(--mkui-bg);
+    }
+    .demo-tags[aria-disabled="true"] { opacity: 0.5; }
+    .demo-tag {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 0 6px; border-radius: 10px;
+      background: var(--mkui-accent); color: var(--mkui-accent-fg);
+    }
+    .demo-tag button { border: none; background: none; color: inherit; cursor: pointer; padding: 0; }
+    .mkui-dialog-field .demo-tags input { flex: 1; min-width: 6em; width: auto; border: none; background: none; }
+    .demo-note { border: 1px solid var(--mkui-border); border-radius: 3px; background: var(--mkui-bg); }
+    .demo-note-bar { display: flex; gap: 2px; padding: 2px; border-bottom: 1px solid var(--mkui-border); }
+    .demo-note-bar button { min-width: 26px; }
+    .demo-note-bar button[aria-pressed="true"] { background: var(--mkui-bg-hover); }
+    .demo-note-text { min-height: 6em; max-height: 40vh; overflow: auto; padding: 4px 8px; outline: none; }
+    .demo-note-text:empty::before { content: attr(data-placeholder); color: var(--mkui-fg-mute); }
+  </style>
 </head>
 <body>
   <mkui-app id="app"></mkui-app>
   <script type="module">
-    import { registerPaneType } from "../../src/core.js";
+    import { registerPaneType, registerFieldType } from "../../src/core.js";
     import "../../src/index.js";
+
+    // Two dialog field types mkui does not have, registered before the
+    // config is handed over (App → Custom Fields… opens a dialog using
+    // them). A factory gets the field spec and `ctx`, and returns the
+    // handle: `el`, `get`, `set`, and optionally `focus`, `setDisabled`,
+    // `setReadOnly`, `destroy` and `keepsEnter`. It calls `ctx.changed()`
+    // on every edit and `ctx.resized()` when it grows.
+
+    // "tags": a tag box. Enter adds the typed tag — `keepsEnter`, so the
+    // dialog does not submit — and Backspace in an empty box takes the last
+    // one off. Its value is the tags joined by commas.
+    registerFieldType("tags", (field, ctx) => {
+      const el = document.createElement("div");
+      el.className = "demo-tags";
+      const input = document.createElement("input");
+      input.placeholder = ctx.placeholder;
+      let tags = [];
+      const draw = () => {
+        el.replaceChildren(...tags.map((t, i) => {
+          const chip = document.createElement("span");
+          chip.className = "demo-tag";
+          chip.textContent = t;
+          const x = document.createElement("button");
+          x.type = "button";
+          x.textContent = "×";
+          x.title = `Remove ${t}`;
+          x.addEventListener("click", () => { tags.splice(i, 1); draw(); ctx.changed(); input.focus(); });
+          chip.appendChild(x);
+          return chip;
+        }), input);
+      };
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) {
+          const t = input.value.trim().replace(/,/g, "");
+          if (t && !tags.includes(t)) { tags.push(t); draw(); ctx.changed(); }
+          input.value = "";
+          input.focus();
+        } else if (e.key === "Backspace" && input.value === "" && tags.length) {
+          tags.pop(); draw(); ctx.changed(); input.focus();
+        }
+      });
+      draw();
+      return {
+        el,
+        keepsEnter: true,
+        get: () => tags.join(","),
+        set: (v) => { tags = v ? String(v).split(",").filter(Boolean) : []; draw(); },
+        focus: () => input.focus(),
+        setDisabled: (off) => {
+          input.disabled = off;
+          el.setAttribute("aria-disabled", String(off));
+          for (const b of el.querySelectorAll("button")) b.disabled = off;
+        },
+      };
+    });
+
+    // "note": a small formatted-text box — bold, italic, lists — on the
+    // browser's own editing commands. Enter is a new line because the text
+    // is editable; the dialog sees that without being told. Its value is
+    // the HTML. A stand-in for a real editor library, which an app would
+    // wrap the same way.
+    registerFieldType("note", (field, ctx) => {
+      const el = document.createElement("div");
+      el.className = "demo-note";
+      const bar = document.createElement("div");
+      bar.className = "demo-note-bar";
+      const text = document.createElement("div");
+      text.className = "demo-note-text";
+      text.contentEditable = "true";
+      text.dataset.placeholder = ctx.placeholder;
+      const buttons = [["bold", "B", "Bold"], ["italic", "I", "Italic"],
+        ["insertUnorderedList", "•", "Bulleted list"], ["insertOrderedList", "1.", "Numbered list"]]
+        .map(([cmd, label, title]) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "mkui-btn";
+          b.textContent = label;
+          b.title = title;
+          b.tabIndex = -1;   // Tab goes to the text, not through the toolbar
+          b.addEventListener("mousedown", (e) => e.preventDefault());   // keep the selection
+          b.addEventListener("click", () => { document.execCommand(cmd); text.focus(); changed(); });
+          bar.appendChild(b);
+          return [cmd, b];
+        });
+      const sync = () => {
+        for (const [cmd, b] of buttons) b.setAttribute("aria-pressed", String(document.queryCommandState(cmd)));
+      };
+      let height = 0;
+      const changed = () => {
+        if (text.innerHTML === "<br>") text.innerHTML = "";   // emptied: show the placeholder again
+        ctx.changed();
+        sync();
+        if (text.offsetHeight !== height) { height = text.offsetHeight; ctx.resized(); }
+      };
+      text.addEventListener("input", changed);
+      document.addEventListener("selectionchange", sync);
+      el.append(bar, text);
+      return {
+        el,
+        get: () => (text.textContent.trim() === "" ? "" : text.innerHTML),
+        set: (v) => { text.innerHTML = v ?? ""; },
+        focus: () => text.focus(),
+        setReadOnly: (ro) => { text.contentEditable = String(!ro); },
+        destroy: () => document.removeEventListener("selectionchange", sync),
+      };
+    });
 
     // A custom pane type — the kind of thing a JS app would register
     // before handing a config to mkui.
@@ -28,7 +158,7 @@
 
     const config = {
       app: { title: "Library mode demo", theme: "dark", version: "1.0",
-             description: "An mkui app assembled from JavaScript: custom pane types, custom actions, message boxes." },
+             description: "An mkui app assembled from JavaScript: custom pane types, custom field types, custom actions, message boxes." },
       state: { status: { message: "Built from JS" } },
       menubar: [
         { label: "App", items: [
@@ -36,6 +166,7 @@
           { label: "New Notes", action: "demo.newNotes" },
           { label: "Close Scratch Pads…", action: "demo.closeNotes" },
           { label: "Save Changes…", action: "demo.save" },
+          { label: "Custom Fields…", action: "demo.fields" },
           { label: "Simulate an Error", action: "demo.fail" },
           { sep: true },
           { label: "Quit", action: "app.quit", confirm: "Quit the demo?" },
@@ -149,6 +280,34 @@
         });
         app.state.set("status.message",
           res == null ? "Cancelled" : res.button === "save" ? `Saved as ${res.data.name}` : "Discarded");
+      });
+
+      // Registered field types in an ordinary dialog: the label, `required`,
+      // `disabled` (an expression), a `compute` reading one, and the submit
+      // are all the dialog's. Enter in the tag box adds a tag and in the
+      // note starts a new line; ctrl/cmd+Enter submits from either.
+      app.registerAction("demo.fields", async () => {
+        const data = await app.dialog({
+          title: "Custom field types",
+          width: 480,
+          fields: [
+            { name: "title", label: "Title", value: "Weekly review", required: true },
+            { name: "tags", label: "Tags", type: "tags", value: "work,review", placeholder: "Type a tag, press Enter",
+              disabled: "lock" },
+            { name: "lock", label: "Lock the tags", type: "checkbox" },
+            { label: "Tag count", type: "readonly", compute: "LEN(FILTER(SPLIT(tags ?? '', ','), t -> t != ''))" },
+            { name: "note", label: "Note", type: "note", required: true,
+              placeholder: "Select text and press B or I; try a numbered list" },
+          ],
+          submit: { label: "Save" },
+        });
+        if (data == null) { app.state.set("status.message", "Custom fields: cancelled"); return; }
+        app.state.set("status.message", `Saved "${data.title}" with ${data.tags ? data.tags.split(",").length : 0} tag(s)`);
+        await app.alert("This is what the dialog submitted.", {
+          title: "Custom field types",
+          facts: [{ label: "Title", value: data.title }, { label: "Tags", value: data.tags || "(none)" }],
+          details: { label: "The note's value (HTML)", text: data.note, open: true },
+        });
       });
     });
   </script>
