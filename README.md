@@ -1136,7 +1136,9 @@ grows to fit. Everything else is the dialog's, as for any field: the label,
 region (`contenteditable`) is a newline without being asked; a field built
 from ordinary inputs that wants Enter for itself says `keepsEnter: true`.
 Ctrl/cmd+Enter still submits. The first focus and Tab reach the field;
-`focus()` decides where inside it.
+`focus()` decides where inside it. A field that takes Tab for itself (an
+editor indenting a list item) calls `preventDefault()` on the key, and the
+dialog then leaves it alone.
 
 The built-in names cannot be registered over, and a `type` nobody
 registered is a text box, with one console warning. The library-js example
